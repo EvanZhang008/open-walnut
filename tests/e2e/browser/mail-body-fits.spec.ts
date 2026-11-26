@@ -7,6 +7,11 @@
  * paper; before the frame reset wrapped cells, both engines laid the first one out at 996px and cut its
  * button and title at the paper's edge (review 2026-11-08, a CI result mail; on 400 real bodies 337 of
  * 800 layouts overflowed, 34 after). A new shape that overflows belongs in SHAPES with its fix.
+ *
+ * Fitting never cuts a short word: every word under 24 characters of every shape draws on one line.
+ * 2026-11-26: `overflow-wrap: anywhere` let a hotel footer's 32px icon cells, holding the alt text of
+ * images not loaded, cut "Faceb / ook" and "Insta / gram" at 1512. A shape whose words break belongs
+ * in SHAPES too.
  */
 import { expect, test } from '@playwright/test'
 import { buildMailSrcdoc, hardenMailHtml } from '../../../web/src/apps/mail/mail-html'
@@ -40,6 +45,16 @@ const SHAPES: Record<string, string> = {
   // inside inline spans takes 16px side padding from a class rule; WebKit scrolled 32px past it.
   'padded collapsing table': `<style>body { margin: 0; padding: 0; } .body-container { padding-left: 16px; padding-right: 16px; }</style>
     <span><span><table class="body-container" style="width: 100%"><tr><td>${'Your event starts tomorrow at nine at the north pier. '.repeat(4)}</td></tr></table></span></span>`,
+  // Social icons not loaded: their alt text in cells sized for a 32px icon (a hotel footer).
+  'icon cells holding alt text': `<table width="100%"><tr><td style="text-align: center"><table class="social-table" width="260px" style="display: inline-block"><tr>
+    ${['Facebook', 'Instagram', 'X', 'LinkedIn', 'YouTube'].map((n) => `<td style="padding: 0 10px"><a href="https://example.invalid/${n}"><span class="walnut-held-image">${n}</span></a></td>`).join('')}
+    </tr></table></td></tr></table>`,
+  // The same with no padding: cells of 40px, the icon centred (an EV charging notice).
+  'bare icon cells holding alt text': `<table align="center"><tr>${['X', 'Facebook', 'Instagram', 'Linkedin', 'YouTube'].map((n) => `<td align="center" width="40"><a href="https://example.invalid/${n}"><span class="walnut-held-image">${n}</span></a></td>`).join('\n')}</tr></table>`,
+  // A width in viewport units, which counts the paper's own padding (a newsletter template's mobile rule).
+  'viewport-unit width': `<style>.body { min-width: 100vw; }</style><div class="body"><p>${'The ferry timetable for the winter season is out. '.repeat(3)}</p></div>`,
+  // The sender's own rule for the body, which lands on the frame's padded body.
+  'a full-width body rule': `<style>body { width: 100% !important; min-width: 100% !important; margin: 0 auto !important; }</style><p>${'The ferry timetable for the winter season is out. '.repeat(3)}</p>`,
   // The `nowrap` attribute rather than a style.
   'nowrap attribute': `<table><tr><td nowrap>${'Ferry departures from the north pier every hour '.repeat(4)}</td></tr></table>`,
 }
@@ -47,16 +62,70 @@ const SHAPES: Record<string, string> = {
 for (const [name, html] of Object.entries(SHAPES)) {
   test(`a mail body with ${name} fits the paper`, async ({ page }) => {
     const doc = buildMailSrcdoc(hardenMailHtml(html), { allowRemoteImages: false })
-    for (const width of [360, 520, 560]) {
+    for (const width of [360, 520, 560, 900]) {
       await page.setViewportSize({ width, height: 700 })
       await page.setContent(doc)
       const box = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
       expect(box.scroll, `${name} at ${width}px`).toBeLessThanOrEqual(box.client + 1)
+      expect(await cutWords(page), `${name} at ${width}px`).toEqual([])
+      expect(await touchingLabels(page), `${name} at ${width}px`).toEqual([])
     }
+  })
+}
+
+/** Each pair of drawn image labels on one line with no gap between them ("XFacebook"). */
+async function touchingLabels(page: import('@playwright/test').Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const boxes = [...document.querySelectorAll('.walnut-held-image, .walnut-cid-image')].map((el) => ({ t: el.textContent, r: el.getBoundingClientRect() }))
+      .filter((b) => b.r.width > 0)
+    const out: string[] = []
+    for (let i = 1; i < boxes.length; i++) {
+      const [a, b] = [boxes[i - 1], boxes[i]]
+      if (Math.abs(a.r.top - b.r.top) < 2 && b.r.left - a.r.right < 3) out.push(`${a.t}|${b.t}`)
+    }
+    return out
+  })
+}
+
+/** Each word under 24 characters that draws on more than one line (a hyphen's parts count alone). */
+async function cutWords(page: import('@playwright/test').Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const out: string[] = []
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+      if (node.parentElement?.closest('pre, style')) continue
+      const text = node.textContent ?? ''
+      // A break after a hyphen, a dash or a slash is ordinary typography: each part counts alone.
+      for (const m of text.matchAll(/[^\s\-\u2013\u2014/]+/g)) {
+        if (m[0].length >= 24) continue
+        const range = document.createRange()
+        range.setStart(node, m.index!)
+        range.setEnd(node, m.index! + m[0].length)
+        const tops = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)))
+        if (tops.size > 1) out.push(m[0])
+      }
+    }
+    return out
   })
 }
 
 test('a preformatted block in a cell keeps its own lines', async ({ page }) => {
   await page.setContent(buildMailSrcdoc(hardenMailHtml('<table><tr><td><pre>line one\n  indented two</pre></td></tr></table>'), { allowRemoteImages: false }))
   expect(await page.locator('pre').evaluate((el) => getComputedStyle(el).whiteSpace)).toBe('pre-wrap')
+})
+
+test("a label box keeps its row's layout: a header band's only cell stays centred, a cell with words keeps its width", async ({ page }) => {
+  const label = (t: string) => `<a href="https://example.invalid/"><span class="walnut-held-image">${t}</span></a>`
+  const html = `<table width="100%"><tr><td bgcolor="#0a2240" align="center" height="80" id="band">${label('Brand')}</td></tr></table>
+    <table width="100%"><tr><td width="300" id="rated">Rated 4.5 stars ${label('star')}</td><td>Thank you for your stay.</td></tr></table>`
+  await page.setViewportSize({ width: 560, height: 700 })
+  await page.setContent(buildMailSrcdoc(hardenMailHtml(html), { allowRemoteImages: false }))
+  const at = await page.evaluate(() => {
+    const band = document.getElementById('band')!.getBoundingClientRect()
+    const brand = document.querySelector('#band .walnut-held-image')!.getBoundingClientRect()
+    return { bandWidth: band.width, paper: document.body.clientWidth - 48, off: Math.abs((brand.left + brand.right) / 2 - (band.left + band.right) / 2), rated: getComputedStyle(document.getElementById('rated')!).display }
+  })
+  expect(at.bandWidth).toBeGreaterThan(at.paper - 2)
+  expect(at.off).toBeLessThan(2)
+  expect(at.rated).toBe('table-cell')
 })

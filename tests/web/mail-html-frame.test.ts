@@ -26,6 +26,8 @@ import {
   holdRemoteImages,
   replaceCidImages,
 } from '../../web/src/apps/mail/mail-html';
+import { breakLongWords, fitViewportWidths } from '../../web/src/apps/mail/mail-width-fit';
+import { markLabelBoxes } from '../../web/src/apps/mail/mail-html';
 
 /** The CSP directive list out of a built document. */
 function csp(document: string): string {
@@ -145,7 +147,9 @@ describe('buildMailSrcdoc', () => {
   it('carries no table width rule and no table margin of its own', () => {
     const document = buildMailSrcdoc('<table width="720"><tr><td>x</td></tr></table>', { allowRemoteImages: false });
     expect(document).not.toContain('table[width]');
-    expect(document).not.toContain('width: auto');
+    // The one `width: auto` rule is the label box's (a box that held only an image), never a table's or a cell's.
+    const autoRules = (document.match(/[^{}]+\{[^}]*width:\s*auto[^}]*\}/g) ?? []).map((r) => r.split('{')[0].trim());
+    expect(autoRules).toEqual(['[data-walnut-label]']);
     // A bottom margin on `table` opened a gap between every two rows of a card.
     expect(document).not.toMatch(/,\s*table\s*\{[^}]*margin/);
     expect(document).not.toMatch(/\btable\s*\{[^}]*margin/);
@@ -458,5 +462,78 @@ describe('a blocked remote image is its alt text, not a broken frame', () => {
     // A Chinese newsletter's banner alt ("account funded"), escaped so this file stays ASCII.
     const alt = '\u8d44\u91d1\u5df2\u5230\u8d26';
     expect(holdRemoteImages(`<img src="https://cdn.example.invalid/b.png" alt="${alt}">`)).toContain(alt);
+  });
+});
+
+describe('breakLongWords: a word breaks only when it is too long for any line', () => {
+  it('the frame wraps with break-word, never anywhere (anywhere cut short words in narrow cells)', () => {
+    const document = buildMailSrcdoc('<p>hi</p>', { allowRemoteImages: false });
+    expect(document).toContain('overflow-wrap: break-word');
+    expect(document).not.toContain('anywhere');
+  });
+
+  it('gives a long link break points after its punctuation and every 16 characters', () => {
+    const link = 'https://tracking.example.invalid/c/eJyNkMFuwyAQRL_GdzBgEsXHqrfeKvXSa4XNGqMaEwFp1L8vjtM2laqqnFaa2Z3dNz3RMG2ECWi5ZrUSWsNqS6oN6qjZZCEjTbaYnThHK3Q2jZYL6t9X91';
+    const out = breakLongWords(`<td>${link} to read it</td>`);
+    expect(out.replace(/<wbr>/g, '')).toBe(`<td>${link} to read it</td>`);
+    expect(out).toContain('https:<wbr>/<wbr>/<wbr>tracking.<wbr>');
+    for (const piece of out.replace(/^<td>|<\/td>$/g, '').split(/<wbr>|\s/)) expect(piece.length).toBeLessThanOrEqual(16);
+  });
+
+  it('leaves words under 24 characters, tags, attributes, style blocks and comments alone', () => {
+    const long = 'x'.repeat(40);
+    const body = `<style>.a{background:${long}}</style><!-- ${long} --><a href="https://example.invalid/${long}" title="${long}">Facebook Instagram internationalization</a>`;
+    expect(breakLongWords(body)).toBe(body);
+  });
+
+  it('never splits an entity and counts it as one character', () => {
+    const out = breakLongWords(`a=1&amp;b=2&amp;c=3&amp;d=4&amp;e=5&amp;f=6&amp;g=7&nbsp;`);
+    expect(out.replace(/<wbr>/g, '')).toBe('a=1&amp;b=2&amp;c=3&amp;d=4&amp;e=5&amp;f=6&amp;g=7&nbsp;');
+    expect(out).not.toMatch(/&[a-z]*<wbr>[a-z]*;/);
+    expect(out).toContain('&amp;<wbr>');
+  });
+
+  it('runs as part of hardening', () => {
+    expect(hardenMailHtml(`<p>${'y'.repeat(30)}</p>`)).toBe(`<p>${'y'.repeat(16)}<wbr>${'y'.repeat(14)}</p>`);
+  });
+});
+
+describe('fitViewportWidths: a viewport-unit width is a share of the paper', () => {
+  it('turns vw widths into percentages, in a style block and inline, and leaves other vw alone', () => {
+    expect(fitViewportWidths('.body { min-width: 100vw; font-size: 5vw } u + .body .x{width:100vw !important;max-width: 50.5vw}'))
+      .toBe('.body { min-width: 100%; font-size: 5vw } u + .body .x{width:100% !important;max-width: 50.5%}');
+    expect(hardenMailHtml('<style>.b{min-width:100vw}</style><div class="b" style="width: 100vw">x</div>'))
+      .toBe('<style>.b{min-width:100%}</style><div class="b" style="width: 100%">x</div>');
+  });
+});
+
+describe('the review cases (2026-11-26)', () => {
+  it('never splits an emoji, a joined emoji or a combining mark', () => {
+    const run = `${'a'.repeat(15)}\u{1F600}${'b'.repeat(15)}\u{1F469}\u200d\u{1F4BB}${'c'.repeat(14)}e\u0301${'d'.repeat(10)}`;
+    const out = breakLongWords(run);
+    expect(out.replace(/<wbr>/g, '')).toBe(run);
+    for (const bad of [/\ud83d<wbr>/, /<wbr>\u200d/, /\u200d<wbr>/, /<wbr>\u0301/]) expect(out).not.toMatch(bad);
+  });
+
+  it('leaves an unclosed comment, a bogus comment and a tag with an unbalanced quote whole', () => {
+    const long = 'x'.repeat(40);
+    for (const body of [`<!--${long} <p>hidden</p>`, `<!${long}>`, `<?${long}>`, `</ ${long}>`, `<img src=x"${long}>`]) {
+      expect(breakLongWords(body)).toBe(body);
+    }
+  });
+
+  it('leaves a media feature in viewport units alone', () => {
+    const css = '@media ( max-width: 100vw) { .a { width: 100vw } }';
+    expect(fitViewportWidths(css)).toBe('@media ( max-width: 100vw) { .a { width: 100% } }');
+  });
+
+  it('marks a box only when the label is all it holds', () => {
+    const label = '<span class="walnut-held-image">Facebook</span>';
+    expect(markLabelBoxes(`<td width="40"><a href="https://example.invalid/">${label}</a></td>`))
+      .toBe(`<td width="40" data-walnut-label><a href="https://example.invalid/">${label}</a></td>`);
+    expect(markLabelBoxes(`<div style="max-width:40px">\n  ${label}\n</div>`)).toBe(`<div style="max-width:40px" data-walnut-label>\n  ${label}\n</div>`);
+    // Words of its own beside the label: the cell keeps its width.
+    const rated = `<td width="300">Rated 4.5 stars ${label}</td>`;
+    expect(markLabelBoxes(rated)).toBe(rated);
   });
 });

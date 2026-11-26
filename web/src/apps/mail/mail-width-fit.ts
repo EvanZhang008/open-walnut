@@ -11,7 +11,8 @@
  *     said `width:600px; min-width:600px`, the fitted width yielded and the minimum did not, and at
  *     a 520px paper the text was laid out at 624px);
  *   - a box's own `width`: a 400px block in a sign-in notice, and its 280px inline-block button
- *     with 60px of padding on each side, which kept its table cell 34px past a 520px paper.
+ *     with 60px of padding on each side, which kept its table cell 34px past a 520px paper;
+ *   - a width in viewport units, inline or in a `<style>` block (`fitViewportWidths`).
  *
  * Where the paper is wider than the sender's width nothing changes: on fifteen real bodies at a
  * 900px paper every one drew pixel-identical before and after (`tests/e2e/browser/mail-body-fits.spec.ts`
@@ -51,6 +52,18 @@ function borderWidth(value: string): number {
 }
 
 /**
+ * A width in viewport units (`100vw`) means the frame's whole width, which includes the paper's own
+ * side padding, so it held the body 48px wider than the paper (2026-11-26, a newsletter
+ * template's `min-width: 100vw`). In a width property it becomes the same share of the paper.
+ */
+// Not a media feature: `( max-width: 100vw)` stays, or a block that always applied would stop.
+const VW_WIDTH = /(?<!\(\s*)((?:^|[\s;{])(?:min-|max-)?width\s*:\s*)(\d+(?:\.\d+)?)vw\b/gi;
+
+export function fitViewportWidths(css: string): string {
+  return css.replace(VW_WIDTH, (_m, head: string, n: string) => `${head}${n}%`);
+}
+
+/**
  * The inline style with every pixel `min-width` fitted, and, outside table internals and media,
  * the box's own pixel `width` turned into a width that yields.
  *
@@ -61,7 +74,8 @@ function borderWidth(value: string): number {
  * percentage in `width` still counts its pixels toward the cell's width, while a percentage in
  * `min-width` counts as zero, so the cell can narrow.
  */
-export function fitInlineWidths(tag: string, style: string): string {
+export function fitInlineWidths(tag: string, styleIn: string): string {
+  const style = fitViewportWidths(styleIn);
   const decls = style.split(';');
   let width: number | null = null;
   let cap: number | null = null;
@@ -123,4 +137,47 @@ function leading(decl: string): string {
 
 function round(n: number): string {
   return String(Math.round(n * 100) / 100);
+}
+
+/**
+ * Break points in the long unbroken runs of a body's text, so a word breaks only when it is too long
+ * for any line.
+ *
+ * The frame's text wraps with `overflow-wrap: break-word`, which breaks a word only when it would
+ * overflow its line but never lets a table shrink below its longest word. `anywhere`, which it
+ * replaced, did shrink tables, and so cut every short word in a narrow cell: a sender's 32px icon
+ * cells, holding the alt text of images not loaded, read "Faceb / ook", "Insta / gram" (2026-11-26,
+ * a hotel's footer at 1512). The runs that must still let their table narrow are long ones (a
+ * tracking link, a token in a CI notice): each run of LONG_RUN or more visible characters gets a
+ * `<wbr>` after its URL punctuation and after every BREAK_EVERY characters with none.
+ *
+ * Text only: tags, comments and `<style>` blocks pass untouched, and an entity (`&amp;`) counts as
+ * one character and is never split.
+ */
+const LONG_RUN = 24;
+const BREAK_EVERY = 16;
+// Comments (an unclosed one to the end), bogus comments (`<!x`, `<?x`, `</ x`), style blocks, and
+// tags, a tag with an unbalanced quote too: a `<wbr>` inside any of them would end it early.
+const TEXT_SKIP = /(<!--[\s\S]*?-->|<!--[\s\S]*$|<[!?][^>]*>|<\/[^a-zA-Z>][^>]*>|<style\b[\s\S]*?<\/style\s*>|<\/?[a-zA-Z](?:"[^"]*"|'[^']*'|[^>"'])*>|<\/?[a-zA-Z][^>]*>)/gi;
+const RUN = /[^\s<]+/g;
+// One code point, so an emoji's two halves stay together; no break before a combining mark, a
+// joiner or a variation selector, or after a joiner.
+const UNIT = /&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);|[\s\S]/giu;
+const JOINS = /^[\p{M}\u200d\ufe00-\ufe0f]$/u;
+const BREAK_AFTER = /^(?:[/?&=.\-_~:#,;+@]|&amp;)$/i;
+
+export function breakLongWords(html: string): string {
+  return html.split(TEXT_SKIP).map((part, i) => (i % 2 === 1 ? part : part.replace(RUN, (run) => {
+    const units = run.match(UNIT) ?? [];
+    if (units.length < LONG_RUN) return run;
+    let out = '';
+    let since = 0;
+    units.forEach((u, k) => {
+      out += u;
+      since += 1;
+      if (k === units.length - 1 || u === '\u200d' || JOINS.test(units[k + 1])) return;
+      if (BREAK_AFTER.test(u) || since >= BREAK_EVERY) { out += '<wbr>'; since = 0; }
+    });
+    return out;
+  }))).join('');
 }

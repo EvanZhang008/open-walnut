@@ -24,7 +24,7 @@
  * once the human asks for this one message.
  */
 
-import { fitInlineWidths, PX_WIDTH } from './mail-width-fit';
+import { breakLongWords, fitInlineWidths, fitViewportWidths, PX_WIDTH } from './mail-width-fit';
 
 /** Popups only: no scripts, no same-origin, no top-level navigation. */
 export const MAIL_IFRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox';
@@ -79,16 +79,31 @@ export function mailFrameCsp(allowRemoteImages: boolean): string {
  * notice, 143 nested tables). Fixed pixel widths on those tables are handled by `fitFixedTables`,
  * in the string pass, not here: see that function for the WebKit reason.
  *
+ * The body is a border box: a sender's own `body { width: 100%; min-width: 100% }` (a mobile rule
+ * many templates carry) otherwise lands on the frame's body and adds its 24px side padding on top,
+ * 48px past the paper at every width (2026-11-26, a newsletter template).
+ *
+ * An image not shown leaves its label (`holdRemoteImages`, `replaceCidImages`) in a box the sender
+ * sized for the picture: a 35px cell, a 40px div, a 260px row of five 32px social icons. A box that
+ * holds nothing but the label is marked `data-walnut-label` (`markLabelBoxes`) and takes the label's
+ * size instead; a row of two or more cells that are all such boxes becomes inline content that
+ * wraps between them (cells that are inline blocks share one anonymous cell), with a gap, since the
+ * sender's 40px cells had no padding and their labels ran together ("XFacebookInstagram"). So
+ * "Facebook" never stands in a 32px cell (2026-11-26, a hotel footer, an EV charging notice). A
+ * cell with words of its own beside the label, or a row's only cell, keeps its layout.
+ *
  * A table also grows to its widest unbreakable line, and both engines then cut it at the paper's
  * edge behind an overlay scrollbar nobody sees (2026-11-08: a CI mail whose result cells say
  * `white-space: nowrap` laid its 544px card out at 996px, its button and title cut in half). So a
- * cell's text always wraps (`pre` keeps its lines), and `overflow-wrap: anywhere` lets a long word
- * or link break where nothing else can, which, unlike `break-word`, also narrows the table.
+ * cell's text always wraps (`pre` keeps its lines). A word breaks only when it is too long for its
+ * line (`overflow-wrap: break-word`); the long runs that must still let a table narrow (a tracking
+ * link, a token) carry break points from `breakLongWords`. `anywhere` did both at once but also
+ * let a narrow cell cut every short word in it (2026-11-26: "Faceb / ook" in a footer's icon cells).
  */
 const FRAME_RESET = `<style>
   :root { color-scheme: light; }
   html { background: #fff; }
-  body { margin: 0; padding: 20px 24px; font: 15px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; color: #1d1d1f; background: #fff; overflow-wrap: anywhere; }
+  body { margin: 0; padding: 20px 24px; font: 15px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; color: #1d1d1f; background: #fff; overflow-wrap: break-word; box-sizing: border-box !important; }
   td, th, :is(td, th) :not(pre, pre *) { white-space: normal !important; }
   img, table, pre { max-width: 100%; }
   img { height: auto; }
@@ -102,6 +117,9 @@ const FRAME_RESET = `<style>
   a:not([href]) { color: inherit; text-decoration: none; cursor: default; }
   span.walnut-held-image { color: #6e6e73; }
   a span.walnut-held-image { color: inherit; }
+  [data-walnut-label] { width: auto !important; max-width: 100% !important; min-width: 0 !important; }
+  tr:has(> [data-walnut-label] + [data-walnut-label]):not(:has(> :is(td, th):not([data-walnut-label]))) > [data-walnut-label] { display: inline-block; }
+  tr:has(> [data-walnut-label] + [data-walnut-label]):not(:has(> :is(td, th):not([data-walnut-label]))) > [data-walnut-label] + [data-walnut-label] { margin-left: 0.6em; }
   span.walnut-cid-image { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 10px; border: 1px solid rgba(60,60,67,0.22); border-radius: 999px; background: #f2f2f5; color: #6e6e73; font-size: 12px; line-height: 1.5; vertical-align: middle; }
 </style>`;
 
@@ -118,7 +136,23 @@ export function buildMailSrcdoc(html: string, options: { allowRemoteImages: bool
     + '<meta name="referrer" content="no-referrer">'
     + '<base target="_blank">'
     + FRAME_RESET;
-  return `<!doctype html><html><head>${head}</head><body>${html}</body></html>`;
+  return `<!doctype html><html><head>${head}</head><body>${markLabelBoxes(html)}</body></html>`;
+}
+
+/** The label an image not shown leaves (`holdRemoteImages`, `replaceCidImages`). */
+const LABEL = '<span class="walnut-(?:held|cid)-image">[^<]*</span>';
+const OPEN_ATTRS = `(?:"[^"]*"|'[^']*'|[^>"'])*`;
+/** An element whose whole content is one label, alone or inside one link, with only spaces around. */
+const LABEL_BOX = new RegExp(
+  `<([a-zA-Z][a-zA-Z0-9]*)(${OPEN_ATTRS})>(\\s*(?:<a\\b${OPEN_ATTRS}>\\s*${LABEL}\\s*</a\\s*>|${LABEL})\\s*)</\\1\\s*>`,
+  'gi',
+);
+
+/** Mark each box that holds nothing but an image's label, for the frame reset's label rules. */
+export function markLabelBoxes(html: string): string {
+  return html.replace(LABEL_BOX, (_m, tag: string, attrs: string, inner: string) => (
+    `<${tag}${attrs} data-walnut-label>${inner}</${tag}>`
+  ));
 }
 
 /** Elements removed with everything inside them. */
@@ -258,20 +292,21 @@ function fitFixedTable(attrs: string, kept: string): string | null {
  *
  * Two passes are not about safety at all: an image that points at an attachment part is turned
  * into a chip, because nothing can serve those bytes (see `replaceCidImages`), and a table with a
- * fixed pixel width is told to fit the paper (see `fitFixedTable`).
+ * fixed pixel width is told to fit the paper (see `fitFixedTable`), and a long unbroken run of
+ * text gets break points (see `breakLongWords`).
  *
- * A body that carries nothing hostile and no fixed-width table comes back byte-identical.
+ * A body that carries nothing hostile, no fixed-width table and no long run comes back byte-identical.
  */
 export function hardenMailHtml(raw: string): string {
   if (!raw) return '';
-  return replaceCidImages(raw
+  return breakLongWords(replaceCidImages(raw
     // Comments first: a conditional comment can hide markup from a later pass.
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<!doctype[^>]*>/gi, '')
     .replace(DROP_WITH_CONTENT, '')
     // A `<style>` block's CSS is not markup, so the attribute pass below never sees it.
     .replace(STYLE_BLOCK, (_whole, open: string, css: string, close: string) => (
-      `${open}${stripRemoteCssUrls(css)}${close}`
+      `${open}${fitViewportWidths(stripRemoteCssUrls(css))}${close}`
     ))
     .replace(TAG, (whole, name: string, attrs: string) => {
       const tag = name.toLowerCase();
@@ -310,7 +345,7 @@ export function hardenMailHtml(raw: string): string {
       const tidy = kept.trim();
       const closing = whole.startsWith('</') ? '</' : '<';
       return `${closing}${name}${tidy ? ` ${tidy}` : ''}>`;
-    }));
+    })));
 }
 
 /** One `<img>` element, whatever its attributes hold (a quoted value may contain `>`). */
