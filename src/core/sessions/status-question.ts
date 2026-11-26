@@ -137,7 +137,7 @@ async function saveStatusAnswer(
   report = settled;
   // The ask the session wrote itself this turn (task_report_set) stays its ask (own-ask-write.ts).
   const { keepOwnAskWrite } = await import('./own-ask-write.js');
-  report = keepOwnAskWrite(report, prev, sessionId);
+  report = keepOwnAskWrite(report, prev, sessionId, rec?.humanInputAt);
   // A decision one of its threads already carries in needs (its card line put it up) is that
   // thread's: said again here, it is no second ask (org/thread-report-ask.ts askOnNeedsThread).
   if (taskLike) report = await (await import('../org/thread-report-ask.js')).askOnNeedsThread(taskId, report);

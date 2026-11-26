@@ -363,7 +363,10 @@ export function readDeclared(idWord: string | undefined, newWord: string | undef
  * its id (stampAskDecision, ASK_MEMORY_MS).
  */
 export function askDecisionQuestion(prev: StatusReport | null | undefined): string {
-  if (prev?.state !== 'needs') return '';
+  // A needs report with no ask is his reply to read, not a decision: the one it asked before (last_ask,
+  // kept so a rewording keeps its id) is never named as "your ask" (2026-11-26: an answered ask, dropped
+  // at the turn end, was named again in the next turn's question).
+  if (prev?.state !== 'needs' || !prev.ask?.trim()) return '';
   const memory = memoryOf(prev);
   if (!memory) return '';
   const words = memory.ask.replace(/\s+/g, ' ').slice(0, 200);

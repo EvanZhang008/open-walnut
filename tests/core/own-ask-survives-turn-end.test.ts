@@ -23,6 +23,7 @@ import { keepOwnAskWrite } from '../../src/core/sessions/own-ask-write.js'
 import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import type { StatusReport } from '../../src/core/user-status.js'
+import { askDecisionQuestion } from '../../src/core/ask-decision.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -97,6 +98,69 @@ describe('an ask the session wrote itself survives its turn end', () => {
     expect(r.ask_by_self).toBeUndefined()
   })
 
+  // 2026-11-26: he answered the ask; the session replied and ended "needs you" for him to read the
+  // reply, asking nothing. The answered question came back on his card with its options.
+  it('he answered it, and the turn that replies asks nothing: the ask is over, its options and mark gone', async () => {
+    const end = Date.now() - 30_000
+    await ownWriteInTurn(end)
+    await applyStatusAnswer(id, SID, summary(end), end)
+    const shown = Date.parse((await asked()).at)
+    const later = Math.max(end, shown) + 20_000
+    await updateSessionRecord(SID, { humanInputAt: iso(later - 10_000) })
+    const read: StatusReport = { state: 'needs', now: 'Noted his answer; nothing for him to do', at: iso(later + 1_000) }
+    expect(await applyStatusAnswer(id, SID, read, later)).toBe(true)
+    const r = await asked()
+    expect(r.ask).toBeUndefined()
+    expect(r.ask_options).toBeUndefined()
+    expect(r.ask_more).toBeUndefined()
+    expect(r.ask_by_self).toBeUndefined()
+    expect(r.answered_person).toBe(true)
+    await updateSessionRecord(SID, { humanInputAt: undefined })
+  })
+
+  it('he wrote since (a follow-up), and the turn end still asks in its own words: still its ask, as written', async () => {
+    const end = Date.now() - 25_000
+    await ownWriteInTurn(end)
+    await applyStatusAnswer(id, SID, summary(end), end)
+    const later = Math.max(end, Date.parse((await asked()).at)) + 20_000
+    await updateSessionRecord(SID, { humanInputAt: iso(later - 10_000) })
+    expect(await applyStatusAnswer(id, SID, summary(later, { now: 'Answered his question about the paper' }), later)).toBe(true)
+    expect(await asked()).toMatchObject({ ask: OWN.ask, ask_more: MESSAGE, ask_by_self: true })
+    await updateSessionRecord(SID, { humanInputAt: undefined })
+  })
+
+  // Review 2026-11-26: the stored report's time moves to each answer, so these two read his answer as older than the ask.
+  it('he answered before the writing turn\'s status answer was stored: the reply turn that asks nothing ends the ask', async () => {
+    const end = Date.now() - 200_000
+    await ownWriteInTurn(end)
+    await updateSessionRecord(SID, { humanInputAt: iso(end + 3_000) })
+    expect(await applyStatusAnswer(id, SID, summary(end + 15_000), end)).toBe(true)
+    expect((await asked()).ask).toBe(OWN.ask)
+    const later = end + 60_000
+    expect(await applyStatusAnswer(id, SID, { state: 'needs', now: 'Noted his answer', at: iso(later + 1_000) }, later)).toBe(true)
+    const r = await asked()
+    expect(r.ask).toBeUndefined()
+    expect(r.ask_by_self).toBeUndefined()
+    await updateSessionRecord(SID, { humanInputAt: undefined })
+  })
+
+  it('a watch\'s mid-turn answer stored after his answer does not hide it: the reply turn that asks nothing ends the ask', async () => {
+    const end = Date.now() - 150_000
+    await ownWriteInTurn(end)
+    await applyStatusAnswer(id, SID, summary(end), end)
+    const said = Math.max(end, Date.parse((await asked()).at)) + 5_000
+    await updateSessionRecord(SID, { humanInputAt: iso(said) })
+    expect(await applyStatusAnswer(id, SID, summary(said + 10_000), end, { midTurn: true, askedAtMs: said + 9_000 })).toBe(true)
+    expect((await asked()).ask).toBe(OWN.ask)
+    const later = said + 30_000
+    expect(await applyStatusAnswer(id, SID, { state: 'needs', now: 'Noted his answer', at: iso(later + 1_000) }, later)).toBe(true)
+    const r = await asked()
+    expect(r.ask).toBeUndefined()
+    // The decision it asked is over: the next turn's question does not name it as its ask.
+    expect(askDecisionQuestion(r)).toBe('')
+    await updateSessionRecord(SID, { humanInputAt: undefined })
+  })
+
   it('a turn that ends no longer asking says so: its answer wins', async () => {
     const end = Date.now() - 20_000
     await ownWriteInTurn(end)
@@ -127,6 +191,23 @@ describe('keepOwnAskWrite', () => {
     expect(keepOwnAskWrite(other, prev, SID)).toBe(other)
     expect(keepOwnAskWrite({ ...answer, ask_id: 'ask-1a2b' }, prev, SID).ask_more).toBe(MESSAGE)
   })
+  it('after he wrote since the ask was shown, only an answer that asks, or names the decision, keeps it', () => {
+    const wrote = iso(5)
+    const nothing: StatusReport = { state: 'needs', now: 'Replied to him', at: iso(9) }
+    // The bug: needs with no ask after his answer copied the answered question back.
+    expect(keepOwnAskWrite(nothing, prev, SID, wrote)).toBe(nothing)
+    // Still its ask: words of an ask, or a kindless line.
+    expect(keepOwnAskWrite({ ...nothing, ask: 'Approve?' }, prev, SID, wrote).ask_more).toBe(MESSAGE)
+    expect(keepOwnAskWrite({ state: 'waiting', waiting_kind: 'lead', waiting_on: 'Send it?', kindless_ask: true, at: iso(9) }, prev, SID, wrote).ask_more).toBe(MESSAGE)
+    // He wrote before the ask was written (the turn that wrote it), or never: the write stands, as before.
+    expect(keepOwnAskWrite(nothing, prev, SID, iso(0)).ask_more).toBe(MESSAGE)
+    expect(keepOwnAskWrite(nothing, prev, SID).ask_more).toBe(MESSAGE)
+    expect(keepOwnAskWrite(nothing, prev, SID, 'not a time').ask_more).toBe(MESSAGE)
+    // The anchor is when the decision began being asked, not the stored report's own (later) time.
+    const later = { ...prev, ask_since: iso(1), at: iso(8) }
+    expect(keepOwnAskWrite(nothing, later, SID, wrote)).toBe(nothing)
+    expect(keepOwnAskWrite(nothing, { ...later, ask_since: iso(6) }, SID, wrote).ask_more).toBe(MESSAGE)
+  })
 })
 
 describe('every stored status_report goes through the turn-end gate or is the explicit write', () => {
@@ -145,6 +226,6 @@ describe('every stored status_report goes through the turn-end gate or is the ex
     // task's own needs thread asks that decision (the ask lives on as the thread), through withoutOwnAsk.
     expect(files.sort()).toEqual(['src/core/org/thread-report-ask.ts', 'src/core/sessions/report-set.ts', 'src/core/sessions/status-question.ts'])
     expect(fss.readFileSync(path.join(ROOT, 'src/core/org/thread-report-ask.ts'), 'utf-8')).toMatch(/status_report:\s*stampSaidDecision\(withoutOwnAsk\(/)
-    expect(fss.readFileSync(path.join(ROOT, 'src/core/sessions/status-question.ts'), 'utf-8')).toMatch(/keepOwnAskWrite\(report, prev, sessionId\)/)
+    expect(fss.readFileSync(path.join(ROOT, 'src/core/sessions/status-question.ts'), 'utf-8')).toMatch(/keepOwnAskWrite\(report, prev, sessionId, rec\?\.humanInputAt\)/)
   })
 })
