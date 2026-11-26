@@ -27,6 +27,7 @@ import fs from 'node:fs'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { serverFlags } from './server-flags'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -36,7 +37,8 @@ const FLAG = 'topics'
 const made: string[] = []
 const topicsMade: string[] = []
 const ids = { alpha: '', beta: '', lead: '', topic: '' }
-let flagsBefore: Record<string, boolean> | null = null
+// Every flag it sets is put back exactly as it was, unset included (server-flags.ts).
+const flagLedger = serverFlags()
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(180_000)
@@ -54,11 +56,7 @@ async function createTask(request: APIRequestContext, title: string): Promise<st
 }
 
 async function setFlag(request: APIRequestContext, on: boolean): Promise<void> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  const now = { ...(cfg.config?.experimental ?? {}) }
-  if (flagsBefore === null) flagsBefore = { ...now }
-  const res = await request.put('/api/config', { data: { experimental: { ...now, [FLAG]: on } } })
-  expect(res.ok(), await res.text()).toBe(true)
+  await flagLedger.set(request, { [FLAG]: on })
 }
 
 interface MailAccount { accountId: string; address: string; canSend: boolean }
@@ -112,7 +110,7 @@ test.beforeAll(async ({ request }) => {
 
 test.afterAll(async ({ request }) => {
   for (const id of topicsMade) await request.post(`/api/topics/${id}/close`, { data: {} }).catch(() => undefined)
-  if (flagsBefore) await request.put('/api/config', { data: { experimental: flagsBefore } })
+  await flagLedger.restore(request)
   for (const id of [...made].reverse()) {
     for (let i = 0; i < 10; i++) {
       const res = await request.delete(`/api/tasks/${id}?force=true`)

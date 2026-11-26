@@ -18,14 +18,14 @@ import { expect, test } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { restoreOneCard, setOneCard } from './one-card-helpers'
+import { restoreOneCard, setOneCard, type OneCardWas } from './one-card-helpers'
 import { card, openLead, popUpFlag, removeTask, send, shot, startSession } from './lead-threads-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Fold ${STAMP}`
 const made: string[] = []
-let oneCardWas: boolean | null = null
+let oneCardWas: OneCardWas | null = null
 const ids = { lead: '', leadSid: '', owner: '', ownerSid: '', his: '', ask: '' }
 const HIS_REQUEST = `\u65b0\u4efb\u52a1\u9762\u677f\u592a\u5c0f\uff0c\u8981 10 \u4e2a\u8bbe\u8ba1\u9009 ${STAMP}`
 const TASK_ASKS = `\u65b0\u5efa\u4efb\u52a1\u9762\u677f\uff1a10 \u4e2a\u65b9\u6848\uff0c\u8bf7\u6311\u4e00\u4e2a ${STAMP}`

@@ -29,6 +29,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { serverFlags } from './server-flags'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -37,7 +38,8 @@ const made: string[] = []
 const ids = { lead: '', leadSid: '', needs: [] as string[], read: [] as string[], task: '', taskSid: '', taskThread: '' }
 const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots`
 const REPLY = `Ship it on Monday ${STAMP}`
-let flagsBefore: Record<string, boolean> | null = null
+// Every flag it sets is put back exactly as it was, unset included (server-flags.ts).
+const flagLedger = serverFlags()
 let cwd = ''
 
 test.describe.configure({ mode: 'serial' })
@@ -58,14 +60,7 @@ async function patch(request: APIRequestContext, url: string, data: unknown, sid
 }
 
 async function setFlags(request: APIRequestContext, flags: Record<string, boolean>): Promise<void> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  const now = { ...(cfg.config?.experimental ?? {}) }
-  // Each flag it sets, as it was (unset reads false): config writes merge, so putting back the
-  // whole map read before would leave a flag it turned on still on for the next spec.
-  flagsBefore ??= {}
-  for (const k of Object.keys(flags)) if (!(k in flagsBefore)) flagsBefore[k] = now[k] === true
-  const res = await request.put('/api/config', { data: { experimental: { ...now, ...flags } } })
-  expect(res.ok(), await res.text()).toBe(true)
+  await flagLedger.set(request, flags)
 }
 
 async function removeTask(request: APIRequestContext, id: string): Promise<void> {
@@ -187,7 +182,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  if (flagsBefore) await request.put('/api/config', { data: { experimental: flagsBefore } })
+  await flagLedger.restore(request)
   for (const id of made) await removeTask(request, id)
 })
 

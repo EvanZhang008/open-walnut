@@ -34,14 +34,14 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { expectChatShown } from './org-view-helpers'
-import { restoreOneCard, setOneCard } from './one-card-helpers'
+import { restoreOneCard, setOneCard, type OneCardWas } from './one-card-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const LED = `Threads led ${STAMP}`
 const made: string[] = []
 // Its cards are the one-card experiment's (threads_one_card): on for this spec, put back after it.
-let oneCardWas: boolean | null = null
+let oneCardWas: OneCardWas | null = null
 const ids = { lead: '', leadSid: '', work: '', other: '' }
 const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots`
 

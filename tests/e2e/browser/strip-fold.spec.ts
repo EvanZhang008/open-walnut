@@ -19,6 +19,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { startProofVideo } from './proof-video'
+import { serverFlags } from './server-flags'
 
 interface PlayData { title: string; ask: string; ask_more?: string; options?: Array<{ label: string; recommended?: boolean }>; next_ask?: string; flags?: Record<string, boolean>; viewport?: { width: number; height: number } }
 const DATA: PlayData | null = process.env.STRIP_DATA ? JSON.parse(fs.readFileSync(process.env.STRIP_DATA, 'utf8')) as PlayData : null
@@ -30,7 +31,8 @@ const MORE = DATA?.ask_more ?? Array.from({ length: 6 }, (_, i) => `Point ${i + 
 const NEXT = DATA?.next_ask ?? `Start the next problem with its data model or its API ${STAMP}?`
 const OPTIONS = DATA?.options ?? [{ label: 'Stop here, next problem', recommended: true }, { label: 'Fix it, then review' }]
 const made: string[] = []
-let flagsBefore: Record<string, boolean> | null = null
+// Every flag it sets is put back exactly as it was, unset included (server-flags.ts).
+const flagLedger = serverFlags()
 let taskId = ''
 let sid = ''
 
@@ -45,12 +47,7 @@ async function call<T>(request: APIRequestContext, method: 'post' | 'patch' | 'p
 }
 
 async function setFlags(request: APIRequestContext, flags: Record<string, boolean>): Promise<void> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  const now = { ...(cfg.config?.experimental ?? {}) }
-  flagsBefore ??= {}
-  for (const k of Object.keys(flags)) if (!(k in flagsBefore)) flagsBefore[k] = now[k] === true
-  const res = await request.put('/api/config', { data: { experimental: { ...now, ...flags } } })
-  expect(res.ok(), await res.text()).toBe(true)
+  await flagLedger.set(request, flags)
 }
 
 const askOf = async (request: APIRequestContext): Promise<string> =>
@@ -83,7 +80,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  if (flagsBefore) await request.put('/api/config', { data: { experimental: flagsBefore } })
+  await flagLedger.restore(request)
   for (const id of made) {
     const task = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined
     if (task?.session_id) await request.post(`/api/v1/sessions/${task.session_id}/terminate`, { data: { force: true } })

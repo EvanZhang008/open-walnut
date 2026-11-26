@@ -23,17 +23,41 @@ export async function readServerFlags(request: APIRequestContext): Promise<Recor
 export type RestoreServerFlags = (request: APIRequestContext) => Promise<void>
 
 /**
- * Sets `flags` on the server and returns the write that puts each of them back: its value before,
- * or `null` (removed) for one that was never set, so every_experiment counts it again as before.
+ * The flags a spec moves on the server, over any number of writes, each put back after it exactly as
+ * it was before the first write that moved it: its old value, or `null` (removed) when it was never set.
+ * A "put back" of a map read before cannot do that: config writes merge, so a flag the spec added stays
+ * on (2026-11-26: resize-observer-loop.webkit put back the map it read and left every_experiment and
+ * chat_glass_edges on for every WebKit spec after it). Pass each call the request of the hook it runs in.
+ */
+export interface ServerFlags {
+  set(request: APIRequestContext, flags: Record<string, boolean>): Promise<void>
+  restore(request: APIRequestContext): Promise<void>
+}
+
+export function serverFlags(): ServerFlags {
+  let was: Record<string, boolean | null> = {}
+  return {
+    async set(request, flags) {
+      const now = await readServerFlags(request)
+      for (const k of Object.keys(flags)) if (!(k in was)) was[k] = k in now ? now[k] : null
+      const res = await request.put('/api/config', { data: { experimental: flags } })
+      expect(res.ok(), await res.text()).toBe(true)
+    },
+    async restore(request) {
+      if (Object.keys(was).length === 0) return
+      const put = await request.put('/api/config', { data: { experimental: was } })
+      expect(put.ok(), await put.text()).toBe(true)
+      was = {}
+    },
+  }
+}
+
+/**
+ * Sets `flags` on the server and returns the write that puts each of them back (serverFlags above).
  * The restore takes its own request: a beforeAll's `request` cannot be used again in afterAll.
  */
 export async function setServerFlags(request: APIRequestContext, flags: Record<string, boolean>): Promise<RestoreServerFlags> {
-  const before = await readServerFlags(request)
-  const res = await request.put('/api/config', { data: { experimental: flags } })
-  expect(res.ok(), await res.text()).toBe(true)
-  const restore = Object.fromEntries(Object.keys(flags).map((k) => [k, k in before ? before[k] : null]))
-  return async (later) => {
-    const put = await later.put('/api/config', { data: { experimental: restore } })
-    expect(put.ok(), await put.text()).toBe(true)
-  }
+  const ledger = serverFlags()
+  await ledger.set(request, flags)
+  return (later) => ledger.restore(later)
 }

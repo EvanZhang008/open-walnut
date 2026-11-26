@@ -20,6 +20,7 @@ import path from 'node:path'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { headerLabelsButton, openHeaderLabels, openLabelsFlyout } from './session-header-labels-helpers'
 import { timeAgo } from '../../../web/src/utils/time'
+import { serverFlags } from './server-flags'
 
 const SHOT_DIR = process.env.CHANGE_STATUS_SHOTS ?? (process.env.WALNUT_TASK_DIR ? path.join(process.env.WALNUT_TASK_DIR, 'shots') : '')
 const TASK = 'pw-task-changes'
@@ -37,13 +38,12 @@ async function shot(page: Page, name: string, clip?: Locator): Promise<void> {
   else await page.screenshot({ path: file })
 }
 
-/** Turns the experiment on or off server-wide; returns the flags to put back. */
-async function setFlag(request: APIRequestContext, on: boolean): Promise<Record<string, boolean>> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  const before = { ...(cfg.config?.experimental ?? {}) }
-  const res = await request.put('/api/config', { data: { experimental: { ...before, change_status: on } } })
-  expect(res.ok(), await res.text()).toBe(true)
-  return before
+// Every flag it sets is put back exactly as it was, unset included (server-flags.ts).
+const flagLedger = serverFlags()
+
+/** Turns the experiment on or off server-wide; afterAll puts it back. */
+async function setFlag(request: APIRequestContext, on: boolean): Promise<void> {
+  await flagLedger.set(request, { change_status: on })
 }
 
 async function openSession(page: Page): Promise<Locator> {
@@ -77,21 +77,19 @@ async function storedReadText(request: APIRequestContext): Promise<string> {
   return `Read ${timeAgo(at, { long: true })}`
 }
 
-let restore: Record<string, boolean> | null = null
-
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
 })
 
 test.afterAll(async ({ request }) => {
-  if (restore) await request.put('/api/config', { data: { experimental: restore } })
+  await flagLedger.restore(request)
 })
 
 test('change link pills read their status, and the card opens a stage', async ({ page, request }) => {
   test.setTimeout(90_000)
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
-  restore = await setFlag(request, false)
+  await setFlag(request, false)
   await page.setViewportSize({ width: 1280, height: 900 })
 
   // The provider's live read of one stage (the fixture server knows no review service).
@@ -236,7 +234,6 @@ test('the card shows the watcher\'s latest read, and why a merged change has no 
   test.setTimeout(90_000)
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
-  restore ??= await setFlag(request, true)
   await setFlag(request, true)
   await page.setViewportSize({ width: 1280, height: 900 })
   const asks: string[] = []

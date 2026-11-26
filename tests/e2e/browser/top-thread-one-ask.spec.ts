@@ -34,6 +34,7 @@ import { isolateUiPrefs } from './todo-panel-helpers'
 import { startProofVideo } from './proof-video'
 import { PHONE } from './phone-helpers'
 import { expectNoTextOverlap } from './text-overlap-check'
+import { serverFlags } from './server-flags'
 
 interface PlayOption { label: string; recommended?: boolean }
 /** A real thread to play: what the user's own Interview task showed (TOP_ASK_DATA). */
@@ -61,7 +62,8 @@ const ASK = DATA?.ask ?? `Which rate limiter do you put in front of the API ${ST
 // Two choices, as the user's own card had: the card reaches the height where its lines crowded.
 const OPTIONS: PlayOption[] = DATA?.options ?? [{ label: 'A token bucket per client', recommended: true }, { label: 'A fixed window per route' }]
 const made: string[] = []
-let flagsBefore: Record<string, boolean> | null = null
+// Every flag it sets is put back exactly as it was, unset included (server-flags.ts).
+const flagLedger = serverFlags()
 let taskId = ''
 let sid = ''
 let threadId = ''
@@ -81,12 +83,7 @@ async function call<T>(request: APIRequestContext, method: 'post' | 'patch' | 'p
 }
 
 async function setFlags(request: APIRequestContext, flags: Record<string, boolean>): Promise<void> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  const now = { ...(cfg.config?.experimental ?? {}) }
-  flagsBefore ??= {}
-  for (const k of Object.keys(flags)) if (!(k in flagsBefore)) flagsBefore[k] = now[k] === true
-  const res = await request.put('/api/config', { data: { experimental: { ...now, ...flags } } })
-  expect(res.ok(), await res.text()).toBe(true)
+  await flagLedger.set(request, flags)
 }
 
 const askIdOf = async (request: APIRequestContext): Promise<string> =>
@@ -124,7 +121,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  if (flagsBefore) await request.put('/api/config', { data: { experimental: flagsBefore } })
+  await flagLedger.restore(request)
   if (letterId) await request.post(`/api/v1/human-inbox/${letterId}/archive`, { data: { archived: true } }).catch(() => {})
   for (const id of made) {
     const task = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined

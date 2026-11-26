@@ -17,12 +17,13 @@ import { devices, expect, test, type APIRequestContext } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { installResizeLoopProbe, resizeLoopReport } from './resize-observer-culprits'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { serverFlags } from './server-flags'
 
 test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1512, height: 900 } })
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const made: string[] = []
-let flagsBefore: Record<string, boolean> | null = null
+const flags = serverFlags()
 
 async function post<T>(request: APIRequestContext, url: string, data: unknown): Promise<T> {
   const res = await request.post(url, { data })
@@ -31,7 +32,7 @@ async function post<T>(request: APIRequestContext, url: string, data: unknown): 
 }
 
 test.afterAll(async ({ request }) => {
-  if (flagsBefore) await request.put('/api/config', { data: { experimental: flagsBefore } })
+  await flags.restore(request)
   for (const id of made) await request.delete(`/api/tasks/${id}?force=true`).catch(() => undefined)
 })
 
@@ -43,10 +44,8 @@ test('sending from Home\'s columns and opening Org\'s nodes resizes no box outsi
   test.setTimeout(420_000)
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
   const cwd = `${fixtureRoot}/projects/walnut`
-  const cfg = (await (await request.get('/api/config')).json()) as { config: { experimental?: Record<string, boolean> } }
-  flagsBefore = { ...(cfg.config.experimental ?? {}) }
   // The user's own setting: every experiment on, the glass chat among them.
-  expect((await request.put('/api/config', { data: { experimental: { ...flagsBefore, every_experiment: true, chat_glass_edges: true } } })).ok()).toBe(true)
+  await flags.set(request, { every_experiment: true, chat_glass_edges: true })
 
   const sids: string[] = []
   for (const msg of ['snapshot-long-turn:120000:dense', 'snapshot-clean-turn:Resize column two finished', 'snapshot-clean-turn:Resize column three finished']) {

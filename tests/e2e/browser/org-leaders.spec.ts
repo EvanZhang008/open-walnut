@@ -23,6 +23,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import fs from 'node:fs/promises'
+import { serverFlags } from './server-flags'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -31,7 +32,8 @@ const NODE = `project:${PROJECT.trim().toLowerCase()}`
 const FLAG = 'org_leaders'
 const made: string[] = []
 const ids = { team: '', sub: '', solo: '' }
-let flagsBefore: Record<string, boolean> | null = null
+// Every flag it sets is put back exactly as it was, unset included (server-flags.ts).
+const flagLedger = serverFlags()
 const SHOTS = `${process.env.WALNUT_TASK_DIR || 'test-results'}/shots`
 
 async function post<T>(request: APIRequestContext, url: string, data: unknown): Promise<T> {
@@ -51,11 +53,7 @@ async function createTask(request: APIRequestContext, title: string, parent?: st
 }
 
 async function setFlag(request: APIRequestContext, on: boolean): Promise<void> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  const now = { ...(cfg.config?.experimental ?? {}) }
-  if (flagsBefore === null) flagsBefore = { ...now }
-  const res = await request.put('/api/config', { data: { experimental: { ...now, [FLAG]: on } } })
-  expect(res.ok(), await res.text()).toBe(true)
+  await flagLedger.set(request, { [FLAG]: on })
 }
 
 async function openOrg(page: Page): Promise<void> {
@@ -95,7 +93,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  if (flagsBefore) await request.put('/api/config', { data: { experimental: flagsBefore } })
+  await flagLedger.restore(request)
   await request.put('/api/v1/org/settings', { data: { directorsLayout: 'fold', directorsShowProjects: true } })
   for (const id of [...made].reverse()) {
     for (let i = 0; i < 10; i++) {

@@ -52,6 +52,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { startProofVideo } from './proof-video'
 import { pinPageFlags } from './page-flags'
+import { serverFlags } from './server-flags'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const PROJECT = `Orchard hold ${STAMP}`
@@ -69,7 +70,8 @@ const ids = { task: '', sid: '', lead: '', leadSid: '' }
  * here (the cleanups) leaves no line either way.
  */
 const SERVER_FLAGS = ['task_threads', 'letters_as_threads', 'reply_thread_line', 'org_leaders']
-let flagsWere: Record<string, boolean> = {}
+// Every flag it sets is put back exactly as it was, unset included (server-flags.ts).
+const flagLedger = serverFlags()
 
 // One worker: the flags are the server's own, set for the whole file and put back at its end.
 test.describe.configure({ mode: 'serial' })
@@ -207,10 +209,7 @@ async function runMatrix(page: Page, request: APIRequestContext, surface: 'pane'
 test.beforeAll(async ({ request }) => {
   test.setTimeout(400_000)
   if (TEST_PORT === 3456) throw new Error('These checks write tasks and threads: run them on a test server, never production')
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  flagsWere = Object.fromEntries(SERVER_FLAGS.map((f) => [f, cfg.config?.experimental?.[f] === true]))
-  const on = await request.put('/api/config', { data: { experimental: Object.fromEntries(SERVER_FLAGS.map((f) => [f, true])) } })
-  expect(on.ok(), await on.text()).toBe(true)
+  await flagLedger.set(request, Object.fromEntries(SERVER_FLAGS.map((f) => [f, true])))
   const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
   const cwd = `${fixtureRoot}/projects/walnut`
   // The session pane: a task with Threads on.
@@ -235,7 +234,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  await request.put('/api/config', { data: { experimental: flagsWere } })
+  await flagLedger.restore(request)
   for (const id of [...made].reverse()) {
     const t = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined
     if (t?.session_id) await request.post(`/api/v1/sessions/${t.session_id}/terminate`, { data: { force: true } })

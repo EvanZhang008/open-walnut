@@ -13,12 +13,12 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { restoreOneCard, setOneCard } from './one-card-helpers'
+import { restoreOneCard, setOneCard, type OneCardWas } from './one-card-helpers'
 
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Card fold ${STAMP}`
 const made: string[] = []
-let oneCardWas: boolean | null = null
+let oneCardWas: OneCardWas | null = null
 const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots`
 
 const DESIGNS = '/Users/someone/.local/state/open-walnut/tasks/b89f10f0-bdd0-5134-aafc-8fecb73668ed/design-t3/index.html'

@@ -29,16 +29,18 @@ import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { startProofVideo } from './proof-video'
 import { PHONE, setKeyboardInset } from './phone-helpers'
-import { restoreOneCard, setOneCard } from './one-card-helpers'
+import { restoreOneCard, setOneCard, type OneCardWas } from './one-card-helpers'
+import { serverFlags } from './server-flags'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const made: string[] = []
 // Its cards are the one-card experiment's (threads_one_card): on for this spec, put back after it.
-let oneCardWas: boolean | null = null
+let oneCardWas: OneCardWas | null = null
 const ids = { task: '', sid: '', thread: '' }
 const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots/top-thread-room`
-let flagsBefore: Record<string, boolean> | null = null
+// Every flag it sets is put back exactly as it was, unset included (server-flags.ts).
+const flagLedger = serverFlags()
 const WHY = { user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes.' }
 
 test.describe.configure({ mode: 'serial' })
@@ -52,14 +54,7 @@ async function call<T>(request: APIRequestContext, method: 'post' | 'patch', url
 }
 
 async function setFlags(request: APIRequestContext, flags: Record<string, boolean>): Promise<void> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  const now = { ...(cfg.config?.experimental ?? {}) }
-  // Each flag it sets, as it was (unset reads false): config writes merge, so putting back the
-  // whole map read before would leave a flag it turned on still on for the next spec.
-  flagsBefore ??= {}
-  for (const k of Object.keys(flags)) if (!(k in flagsBefore)) flagsBefore[k] = now[k] === true
-  const res = await request.put('/api/config', { data: { experimental: { ...now, ...flags } } })
-  expect(res.ok(), await res.text()).toBe(true)
+  await flagLedger.set(request, flags)
 }
 
 const LONG = Array.from({ length: 14 }, (_, i) => `Step ${i + 1}: the release notes list the memory fix, the signed build and the rollback plan for the ${STAMP} build, with the checks that ran.`).join('\n\n')
@@ -147,7 +142,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  if (flagsBefore) await request.put('/api/config', { data: { experimental: flagsBefore } })
+  await flagLedger.restore(request)
   await restoreOneCard(request, oneCardWas)
   for (const id of made) {
     const task = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined

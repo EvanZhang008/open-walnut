@@ -19,14 +19,14 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openSection, showTasks, taskRow } from './org-view-helpers'
-import { restoreOneCard, setOneCard } from './one-card-helpers'
+import { restoreOneCard, setOneCard, type OneCardWas } from './one-card-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
 const PROJECT = `Org answers ${STAMP}`
 const made: string[] = []
 // Its cards are the one-card experiment's (threads_one_card): on for this spec, put back after it.
-let oneCardWas: boolean | null = null
+let oneCardWas: OneCardWas | null = null
 const ids = { lead: '', leadSid: '', q: '', qSid: '', letter: '', choice: '', open: '', words: '', wordsSid: '' }
 let cwd = ''
 

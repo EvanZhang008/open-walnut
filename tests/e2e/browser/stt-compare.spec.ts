@@ -32,6 +32,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
+import { serverFlags } from './server-flags'
 
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const FLAG = 'stt_compare'
@@ -49,13 +50,11 @@ test.describe.configure({ mode: 'serial' })
 test.setTimeout(120_000)
 test.use({ viewport: { width: 1280, height: 860 } })
 
-let flagsBefore: Record<string, boolean> | null = null
+// Every flag it sets is put back exactly as it was, unset included (server-flags.ts).
+const flagLedger = serverFlags()
 
 async function setFlag(request: APIRequestContext, on: boolean): Promise<void> {
-  const cfg = await (await request.get('/api/config')).json() as { config?: { experimental?: Record<string, boolean> } }
-  flagsBefore ??= { ...(cfg.config?.experimental ?? {}) }
-  const res = await request.put('/api/config', { data: { experimental: { ...(cfg.config?.experimental ?? {}), [FLAG]: on } } })
-  expect(res.ok(), await res.text()).toBe(true)
+  await flagLedger.set(request, { [FLAG]: on })
 }
 
 async function seedTakes(request: APIRequestContext): Promise<void> {
@@ -97,7 +96,7 @@ async function shot(page: Page, name: string): Promise<void> {
 
 test.afterAll(async ({ request }) => {
   await request.put('/api/stt/compare/settings', { data: { engines: { judge: { allow_upload: false } } } }).catch(() => {})
-  if (flagsBefore) await request.put('/api/config', { data: { experimental: flagsBefore } })
+  await flagLedger.restore(request)
 })
 
 test('the pane is off the nav and Find while the experiment is off', async ({ page, request }) => {

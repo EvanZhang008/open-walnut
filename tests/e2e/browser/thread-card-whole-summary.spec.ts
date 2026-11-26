@@ -19,12 +19,12 @@ import fs from 'node:fs'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { restoreOneCard, setOneCard } from './one-card-helpers'
+import { restoreOneCard, setOneCard, type OneCardWas } from './one-card-helpers'
 
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Whole summary ${STAMP}`
 const made: string[] = []
-let oneCardWas: boolean | null = null
+let oneCardWas: OneCardWas | null = null
 let popUpWas: boolean | null = null
 const SHOTS = `${process.env.WALNUT_TASK_DIR ?? 'test-results'}/shots`
 

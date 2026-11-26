@@ -13,14 +13,14 @@ import { expect, test } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { restoreOneCard, setOneCard } from './one-card-helpers'
+import { restoreOneCard, setOneCard, type OneCardWas } from './one-card-helpers'
 import { card, openLead, popUpFlag, removeTask, send, shot, startSession } from './lead-threads-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Result ${STAMP}`
 const made: string[] = []
-let oneCardWas: boolean | null = null
+let oneCardWas: OneCardWas | null = null
 const ids = { lead: '', leadSid: '', owner: '', ownerSid: '', his: '', result: '' }
 
 test.describe.configure({ mode: 'serial' })

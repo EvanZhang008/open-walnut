@@ -28,7 +28,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome, seedColumns } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
-import { restoreOneCard, setOneCard } from './one-card-helpers'
+import { restoreOneCard, setOneCard, type OneCardWas } from './one-card-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
@@ -38,7 +38,7 @@ const made: string[] = []
 let taskId = ''
 let sid = ''
 let threadId = ''
-let oneCardWas: boolean | null = null
+let oneCardWas: OneCardWas | null = null
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
