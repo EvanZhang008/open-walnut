@@ -337,6 +337,11 @@ export function setLeaderDelivery(fn: ((sid: string) => void) | null): void {
   leaderDelivery = fn
 }
 
+/** Deliver `sid`'s waiting rows here now (a session a leader switch held, released: home-session-runtime.ts). */
+export function deliverSessionHere(sid: string): void {
+  leaderDelivery?.(sid)
+}
+
 /**
  * The host does not hold `sid` (it said so twice, outside any hand-over: its store lost the row, it
  * gave the row back): the session is the leader's again, at rest, and its next delivery runs here,

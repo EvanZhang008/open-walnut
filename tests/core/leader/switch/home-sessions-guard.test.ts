@@ -88,5 +88,10 @@ describe('the sessions in the data home: found by folder at one place', () => {
     expect(code(read('src/core/session-auto-recover.ts'))).toMatch(/heldBySwitch\(record\)\) return \{ ok: false, reason: 'leader-switch' \}/)
     expect(code(read('src/core/session-auto-recover.ts'))).toMatch(/rec\.archived \|\| heldBySwitch\(rec\)\) continue/)
     expect(code(read('src/core/session-message-queue.ts'))).toMatch(/heldBySwitch\(areaRecord\) \? MOVE_HELD_REASON/)
+    // Every delivery of a session's rows (a send, the startup drain, a daemon that reconnects) goes through processNextNow.
+    const runner = code(read('src/providers/claude-code-session.ts'))
+    const at = runner.indexOf('private async processNextNow(')
+    expect(at).toBeGreaterThan(0)
+    expect(runner.slice(at, at + 2_500)).toMatch(/if \(heldBySwitch\(stopRecord\)\)/)
   })
 })

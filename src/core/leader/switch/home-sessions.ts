@@ -297,8 +297,9 @@ export async function settleHomeSessionsAfterRollback(o: { home: string; isOpenS
     const st = rec.leaderSwitch
     if (!st || st.rolledBack || st.moved || o.isOpenSwitch(st.switchId)) continue
     if (st.supervised && st.stopRequestId) await o.deps.reenable(rec.claudeSessionId, st.stopRequestId).catch(() => {})
-    await o.deps.release(rec.claudeSessionId).catch(() => {})
+    // Settled first, so the delivery the release starts finds the session free.
     await o.deps.save(rec.claudeSessionId, { leaderSwitch: { ...st, rolledBack: at } })
+    await o.deps.release(rec.claudeSessionId).catch(() => {})
     n++
   }
   if (n) await o.deps.resume().catch(() => {})

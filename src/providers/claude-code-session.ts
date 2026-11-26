@@ -32,6 +32,7 @@ import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { projectOrInbox } from '../core/inbox-project.js'
 import { bashCommandParts, bashRuleCovers, claudeChoiceResponse, cliDenyMessage, MESSAGE_DENIES_PROMPT, pendingPermissionRecordFields, ruleAllowedLine, scopeOfDestination, settingsBashRules, settingsFilesOf, PermissionSaveError, type BashRuleScope, permissionDecisionLine, withPermissionDecision, UnknownPermissionOptionError, permissionEventFields, requestFromPendingRecord, type ClaudeCanUseToolRequest, type ClaudePermissionUpdate } from './claude-permission-options.js'
 import { unwritableSettingsFile } from './settings-file-access.js'
+import { heldBySwitch } from '../core/sessions/switch-hold.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { frameStartData } from '../core/sessions/send-frame.js'
 import { controlsReportedWithin } from './remote-judged-session.js'
@@ -17289,6 +17290,12 @@ export class SessionRunner {
     }
     if (stopRecord?.stopRequest?.state === 'pending') {
       log.session.info('processNext: waiting for user stop confirmation', { sessionId })
+      return
+    }
+    // A leader switch holds it (stopped in the data home, its records not in place here yet): its rows wait, and the
+    // switch delivers them once it settles (core/leader/switch/home-session-runtime.ts).
+    if (heldBySwitch(stopRecord)) {
+      log.session.info('processNext: held by a leader switch until its records are in place', { sessionId, switchId: stopRecord?.leaderSwitch?.switchId })
       return
     }
     const stopFence = stopRecord?.stopRequest?.id ?? null

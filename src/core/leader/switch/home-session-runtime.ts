@@ -54,6 +54,10 @@ export async function homeStopDeps(home: string): Promise<HomeStopDeps> {
       if (!conn.hasCapability(HOME_STOP_CAPABILITY)) return { ok: false, why: `this machine's session runtime lacks ${HOME_STOP_CAPABILITY}` }
       const reply = await conn.send('stop', { sid: rec.claudeSessionId, reason: 'leader_switch', stopRequestId, home, initiator: 'automatic' }, STOP_ANSWER_MS)
       if (reply.ok === true && (reply.stopped === true || reply.noop === true)) return { ok: true }
+      // The runtime holds no start of it by this Walnut (a start still on its way here, the record ahead of its
+      // spawn): nothing of it runs to stop, and its spawn now meets the marker. The scan after the stops still fails
+      // the stop on a process of it in the home.
+      if (reply.ok === true && reply.reason === 'not_owned' && reply.detail === 'not_journaled') return { ok: true }
       return { ok: false, why: reply.ok === false ? String(reply.error ?? 'refused') : describeStopRefusal(reply) }
     },
     processesInHome: (spellings) => processesInFolders(spellings),
@@ -81,9 +85,11 @@ export async function rollbackDeps(): Promise<RollbackDeps> {
   }
 }
 
+/** The rows held for the switch go out again, and the session's waiting rows are delivered here now. */
 async function releaseHeld(sid: string): Promise<void> {
-  const { releaseMoveHeldRows } = await import('../../sessions/engine-switch-io.js')
+  const [{ releaseMoveHeldRows }, { deliverSessionHere }] = await Promise.all([import('../../sessions/engine-switch-io.js'), import('../../../providers/host-handover.js')])
   await releaseMoveHeldRows(sid)
+  deliverSessionHere(sid)
 }
 
 export async function placeDeps(): Promise<PlaceDeps> {
