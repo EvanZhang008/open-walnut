@@ -79,7 +79,8 @@ export interface JudgeInput {
 }
 
 /** One model call; `nodeId` is the node whose reflection pays for it (Usage). */
-export type CallModel = (system: string, user: string, nodeId?: string) => Promise<string>;
+/** `maxTokens`: a call whose answer may be long (guidance-compact.ts) asks for more than the default 3000. */
+export type CallModel = (system: string, user: string, nodeId?: string, opts?: { maxTokens?: number }) => Promise<string>;
 
 const SIGNAL_LINE: Record<ReflectionSignal, string> = {
   frustration: 'The user\'s message reads frustrated or angry. Find what the agents did that earned it, and the rule that prevents it.',
@@ -272,10 +273,10 @@ export async function judge(input: JudgeInput, callModel: CallModel, nodeId?: st
 }
 
 /** The default model call: the configured main model, recorded in Usage under `reflection`. */
-export const callModelDefault = (): CallModel => async (system, user, taskId) => {
+export const callModelDefault = (): CallModel => async (system, user, taskId, opts) => {
   const { sendMessage } = await import('../../../model/model.js');
   const result = await sendMessage({
-    system, messages: [{ role: 'user', content: user }], config: { maxTokens: 3000 }, purpose: 'background',
+    system, messages: [{ role: 'user', content: user }], config: { maxTokens: opts?.maxTokens ?? 3000 }, purpose: 'background',
     usage: { source: 'reflection', agentId: 'org-reflection', ...(taskId ? { taskId } : {}) },
   });
   return (result.content ?? []).map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : '')).join('').trim();

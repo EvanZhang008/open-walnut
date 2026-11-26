@@ -13,7 +13,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-reflectio
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import type { Task } from '../../../src/core/types.js'
-import { COMPACT_CALLS_PER_DAY_MAX, COMPACT_CHECK_SYSTEM, COMPACT_SYSTEM, compactGuidance, readCompact, readCompactCheck } from '../../../src/core/org/reflection/guidance-compact.js'
+import { COMPACT_CALLS_PER_DAY_MAX, COMPACT_CHECK_SYSTEM, COMPACT_MAX_TOKENS, COMPACT_SYSTEM, compactGuidance, readCompact, readCompactCheck } from '../../../src/core/org/reflection/guidance-compact.js'
 import { guidanceFileOf, readGuidance, renderGuidance, reflectionDayFileOf, reflectionDayJsonOf } from '../../../src/core/org/reflection/records.js'
 import { localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
 import { guidanceRoomLeft } from '../../../src/core/org/reflection/team-guidance-hint.js'
@@ -59,6 +59,10 @@ describe('the answer is checked before two lines become one', () => {
     expect(readCompact(one([1], A), [{ text: long, from: 'x' }], new Set([1])).kind === 'read').toBe(true)
     expect(why(one([3], OWN.slice(0, 10)))).toContain('the user wrote')
   })
+  it('an answer cut off by its token limit keeps the edits written out whole before the cut', () => {
+    const cut = `{"edits": [${JSON.stringify({ lines: [1, 2], text: MERGED })}, {"lines": [3], "text": "My own rule: never pi`
+    expect(readCompact(cut, lines, both)).toEqual({ kind: 'read', edits: [{ lines: [1, 2], text: MERGED }], refused: [] })
+  })
   it('several edits of one answer are each checked, and a line is in one edit only', () => {
     const four = [...lines.slice(0, 2), { text: A.replace('the user', 'him'), from: 'x' }, { text: B.replace('the user', 'him'), from: 'x' }]
     const r = readCompact(JSON.stringify({ edits: [{ lines: [1, 2], text: MERGED }, { lines: [2, 3], text: MERGED }, { lines: [3, 4], text: MERGED.replace('the user', 'him') }] }), four, new Set([1, 2, 3, 4]))
@@ -74,9 +78,10 @@ describe('a full guidance with lessons waiting', () => {
     expect(guidanceRoomLeft('Marina VP', all.map((l) => l.text))).toBeLessThan(200)
     const asked: string[] = []
     const checked: string[] = []
-    const callModel = async (system: string, user: string) => {
+    const callModel = async (system: string, user: string, _n?: string, opts?: { maxTokens?: number }) => {
       if (system === COMPACT_CHECK_SYSTEM) { checked.push(user); return '{"lost":[]}' }
       expect(system).toBe(COMPACT_SYSTEM)
+      expect(opts?.maxTokens).toBe(COMPACT_MAX_TOKENS)
       asked.push(user)
       const n = (t: string) => user.split('\n').findIndex((l) => l.endsWith(t)) - 2 // the line's number in the prompt
       return JSON.stringify({ edits: [{ lines: [n(A), n(B)], text: MERGED }] })

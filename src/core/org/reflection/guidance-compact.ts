@@ -25,6 +25,11 @@ export const COMPACT_CALLS_PER_DAY_MAX = 4;
 export const COMPACT_ROOM_MIN = 200;
 /** Edits one call may propose (2026-11-26 replay on the real files: the fullest was 450 over, and a pair freed 7 to 35 characters). */
 export const COMPACT_EDITS_MAX = 8;
+/**
+ * The edit call's answer room: up to COMPACT_EDITS_MAX lines of up to MERGED_LINE_MAX characters (2026-11-26 on
+ * production: at the default 3000 tokens, eight Chinese edits were cut off and the answer read as no JSON).
+ */
+export const COMPACT_MAX_TOKENS = 8000;
 /** An edit frees at least this many characters, or it is no room made. */
 const FREES_MIN = 12;
 /**
@@ -72,10 +77,24 @@ function editRefusal(nums: readonly number[], text: string, lines: readonly Guid
   return '';
 }
 
+/** The edit objects written out whole in an answer that does not parse (one cut off by its token limit). Pure. */
+function completeEdits(raw: string): unknown[] {
+  const out: unknown[] = [];
+  for (const m of raw.matchAll(/\{\s*"lines"\s*:\s*\[[\d\s,]*\]\s*,\s*"text"\s*:\s*"(?:[^"\\]|\\.)*"\s*\}/g)) {
+    try { out.push(JSON.parse(m[0])); } catch { /* not whole */ }
+  }
+  return out;
+}
+
 /** The model's answer read and each edit checked by rule; `targets` are the lines it may change. Pure. */
 export function readCompact(raw: string, lines: readonly GuidanceLine[], targets: ReadonlySet<number>): CompactResult {
   let a: { edits?: unknown; merges?: unknown; lines?: unknown; text?: unknown };
-  try { a = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch { return { kind: 'failed', why: 'the answer is not JSON' }; }
+  try { a = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch {
+    // An answer cut off mid-way still holds the edits written out whole before the cut.
+    const whole = completeEdits(raw);
+    if (!whole.length) return { kind: 'failed', why: 'the answer is not JSON' };
+    a = { edits: whole };
+  }
   const list = Array.isArray(a.edits) ? a.edits : Array.isArray(a.merges) ? a.merges : a.lines ? [a] : [];
   const edits: CompactEdit[] = [];
   const refused: CompactRefusal[] = [];
@@ -139,7 +158,7 @@ export async function compactGuidance(node: Task, nodeName: string, waiting: num
       'THE LINES:', ...lines.map((l, i) => `${i + 1}. ${l.text}${targets.has(i + 1) ? '' : ' (the user\'s own)'}`),
       ...(refusedBefore.length ? ['', 'REFUSED BEFORE:', ...refusedBefore] : []),
     ].join('\n');
-    const raw = await deps.callModel(COMPACT_SYSTEM, prompt, node.id).catch((err) => `${err}`);
+    const raw = await deps.callModel(COMPACT_SYSTEM, prompt, node.id, { maxTokens: COMPACT_MAX_TOKENS }).catch((err) => `${err}`);
     const r = readCompact(raw, lines, targets);
     if (r.kind === 'failed') {
       log.task.warn('reflection: no guidance edit to make room', { nodeId: node.id, why: r.why });
