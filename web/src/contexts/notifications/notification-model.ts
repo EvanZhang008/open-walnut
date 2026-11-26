@@ -389,6 +389,17 @@ export function isRejectOption(o: NotificationAcpOption): boolean {
 }
 
 /**
+ * The choice of a permission prompt filled as its main action (`btn-primary`): the first yes that
+ * is not a standing rule, else the first yes. Always one, whatever the list names (the team's
+ * rule, 2026-11-26: when a set of keys is made one look, the main action and the recommended
+ * choice stay filled in the main colour). The phone's twin is `PendingPermission.strongChoiceID`.
+ */
+export function strongChoiceId(options: readonly NotificationAcpOption[]): string | undefined {
+  const yes = options.filter((o) => !isRejectOption(o));
+  return (yes.find((o) => o.kind !== 'allow_always') ?? yes[0])?.optionId;
+}
+
+/**
  * Where a notification's deep link points, iPhone-style. Null → nothing to open.
  *
  * Lives here (not in a surface file) because BOTH the panel card and the

@@ -4,7 +4,7 @@ export type {
 } from './types';
 export {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
-  toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
+  toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, strongChoiceId, sessionLabelOf, formatRelative,
   linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
   causeLabelOf, partitionErrorsByCause, attentionBadgeCount, answerableCount,
   systemIssueCount, errorsBadgeCount, letterIdOf, personFixesCard,

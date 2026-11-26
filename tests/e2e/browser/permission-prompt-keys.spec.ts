@@ -270,9 +270,9 @@ test.describe('Claude prompt choices on the desktop card', () => {
     await expect(toasts.filter({ hasText: 'WebFetch' })).toBeVisible({ timeout: 15_000 })
     // None for the card on screen (asks other specs left on the shared server may toast too).
     await expect(toastsHere).toHaveCount(strayHere)
-    // A list that names rules stays neutral until the person picks.
+    // A list that names rules still fills its main action, once (the team's rule, 11-26).
     const other = toasts.filter({ hasText: 'WebFetch' })
-    await expect(other.locator('.nfc-perm-primary')).toHaveCount(0)
+    await expect(other.locator('.nfc-perm-primary')).toHaveCount(1)
     await shot(page, 'toast-elsewhere', other)
   })
 

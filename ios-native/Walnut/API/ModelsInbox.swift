@@ -53,6 +53,9 @@ struct LetterAction: Codable, Identifiable, Equatable {
     let id: String
     let label: String
     let description: String?
+    /// The choice the letter recommends (the server's `LetterAction.recommended`; absent on
+    /// older servers): filled in the accent as the recommended choice always is.
+    var recommended: Bool? = nil
 }
 
 /// Stamped server-side from the caller's session id — an agent can't forge it.

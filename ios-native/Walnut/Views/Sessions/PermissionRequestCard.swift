@@ -440,9 +440,8 @@ struct PermissionRequestCard: View {
 
     /// The choices, each a row of its own, full width: the family's option row, the one look for
     /// each choice of a question (standard.md, iOS column; it was three looks: hairline rows, solid
-    /// grey rows, two half-width keys). A plain list keeps its strong yes, its first Allow filled;
-    /// a list that names rules (details, a Deny that takes a note) stays neutral
-    /// (`PendingPermission.strongChoiceID`, the web's rule).
+    /// grey rows, two half-width keys). The first Allow is always filled in the accent, the main
+    /// action (`PendingPermission.strongChoiceID`, the web's `strongChoiceId`).
     private var choiceButtons: some View {
         let list = choices
         let strong = PendingPermission.strongChoiceID(list)
@@ -723,6 +722,9 @@ struct AskUserQuestionCard: View {
     @ViewBuilder
     private func optionRow(question: AskQuestion, option: AskQuestionOption) -> some View {
         let picked = (selections[question.question] ?? []).contains(option.label)
+        // The agent's recommended choice ("On-disk (Recommended)") is filled in the accent, as the
+        // Threads card's is: the recommended choice always stands out (the team's rule, 11-26).
+        let recommended = WalnutOptionLabel.shown(option.label).marked
         Button {
             selections[question.question] = AskUserQuestion.toggleSelection(
                 current: selections[question.question],
@@ -736,20 +738,21 @@ struct AskUserQuestionCard: View {
                       ? (question.multiSelect ? "checkmark.circle.fill" : "largecircle.fill.circle")
                       : "circle")
                     .font(.body)
-                    .foregroundStyle(picked ? Theme.tint : Color.secondary)
+                    .foregroundStyle(recommended ? Theme.onTint : (picked ? Theme.tint : Color.secondary))
                 // Read in full (`lines: nil`). An agent's "On-disk (Recommended)" shows as
                 // "On-disk" with the "Recommended" mark at the right; the pick still sends the
                 // label as the agent wrote it (`option.label` above).
                 WalnutOptionLabel(label: option.label, detail: option.description, lines: nil)
             }
         }
-        // The family's option row, as on the permission card and the thread card. A pick-then-
-        // submit form: no row is filled before a pick; a picked one wears the accent ring on
-        // the row's own corner.
-        .buttonStyle(.walnut(.option(recommended: false)))
+        // The family's option row, as on the permission card and the thread card: the recommended
+        // one filled in the accent. A picked one wears a ring on the row's own corner (the
+        // accent, or onTint on the filled row) and its radio mark is filled.
+        .buttonStyle(.walnut(.option(recommended: recommended)))
         .overlay {
             WalnutButtonStyle.optionShape
-                .strokeBorder(Theme.tint, lineWidth: picked ? 1.5 : 0)
+                .inset(by: recommended ? 2 : 0)
+                .strokeBorder(recommended ? Theme.onTint : Theme.tint, lineWidth: picked ? 1.5 : 0)
         }
         .disabled(answering)
         .accessibilityIdentifier("session.askQuestion.option")

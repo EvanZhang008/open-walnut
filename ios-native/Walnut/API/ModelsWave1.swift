@@ -132,12 +132,12 @@ struct PendingPermission: Codable, Identifiable, Equatable {
     }
 
     /// The choice drawn as the card's strong yes (a filled option row), or nil for a neutral list.
-    /// The web's rule (PermissionPromptControls.tsx): a list that names rules stays neutral, no
-    /// choice looking picked or recommended before the person picks (a choice with details, or
-    /// a Deny that takes a note); a plain list keeps its strong yes, its first Allow. Pure.
+    /// The choice filled in the accent: always the first Allow, whatever the list names (the
+    /// team's rule, 2026-11-26: when a set of keys is made one look, the main action and the
+    /// recommended choice stay filled in the main colour). The web's twin is
+    /// `strongChoiceId` (web/src/contexts/notifications/notification-model.ts). Pure.
     static func strongChoiceID(_ choices: [PermissionChoice]) -> String? {
-        guard !choices.contains(where: { $0.detail != nil || $0.takesNote }) else { return nil }
-        return choices.first(where: \.allow)?.id
+        choices.first(where: \.allow)?.id
     }
 }
 

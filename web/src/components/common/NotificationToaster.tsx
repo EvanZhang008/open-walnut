@@ -32,7 +32,7 @@ import '@/styles/undo-toast.css';
 import { ICON_CHEVRON_RIGHT } from './Icons';
 import {
   useNotifications, permissionDetail, requestIdOf,
-  toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf,
+  toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, strongChoiceId, sessionLabelOf,
   linkTargetOf, resolvedLabelOf,
   type Notification,
 } from '@/contexts/notifications';
@@ -546,6 +546,8 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
   // A note typed turns the Allow choices off: nothing stays armed under it.
   const kept = { armed: note.text ? null : second.armed, confirm: second.confirm };
   const noteReject = acpOptions.find((o) => isRejectOption(o) && o.takesNote);
+  // The main action, always filled (`strongChoiceId`).
+  const strong = strongChoiceId(acpOptions);
   // The server held this choice (its rule's file cannot be written): why, under it.
   const held = stored?.failed && stored.failReason ? stored.optionId : undefined;
   const respond = (
@@ -727,9 +729,8 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
                 return (
                   <button
                     key={o.optionId}
-                    // A list that names rules stays neutral: no choice looks picked or recommended
-                    // before the person picks (a Claude prompt's list, whose Deny takes a note). A plain list keeps its strong yes.
-                    className={`btn btn-sm nfc-perm-btn${kept.armed === o.optionId ? ' is-armed' : ''}${isLongRule(o.detail) ? ' perm-option--long-rule' : ''}${isReject || o.kind === 'allow_always' || acpOptions.some((x) => x.detail || x.takesNote) ? '' : ' btn-primary nfc-perm-primary'}${o === noteReject && note.text ? ' btn-danger perm-deny-with-note' : ''}${held === o.optionId ? ' btn-danger is-failed' : ''}`}
+                    // The main action is always filled (`strongChoiceId`), a list that names rules too.
+                    className={`btn btn-sm nfc-perm-btn${kept.armed === o.optionId ? ' is-armed' : ''}${isLongRule(o.detail) ? ' perm-option--long-rule' : ''}${o.optionId === strong ? ' btn-primary nfc-perm-primary' : ''}${o === noteReject && note.text ? ' btn-danger perm-deny-with-note' : ''}${held === o.optionId ? ' btn-danger is-failed' : ''}`}
                     data-choice={o.optionId}
                     data-on={kept.armed === o.optionId ? 'true' : undefined}
                     // A toast reads each choice in one line: the whole rule and its file are here.

@@ -367,9 +367,8 @@ describe('iOS UI standard: one look per kind of control', () => {
         .filter((b) => !/\.walnut\(\s*\.option\(/.test(b.style) && !OWN_KEYS.test(b.after))
         .map((b) => `ios-native/${rel}:${b.line}: ${b.style.trim()}`)
       expect(offenders).toEqual([])
-      // A plain list keeps its strong yes; a list that names rules stays neutral (the web's rule).
+      // The first Allow is always filled (PendingPermission.strongChoiceID).
       expect(read(rel)).toMatch(/\.buttonStyle\(\.walnut\(\.option\(recommended: strong\)\)\)/)
-      expect(read('Walnut/API/ModelsWave1.swift')).toMatch(/guard !choices\.contains\(where: \{ \$0\.detail != nil \|\| \$0\.takesNote \}\) else \{ return nil \}/)
     })
 
     it('finds a choice drawn another way', () => {
@@ -379,6 +378,56 @@ describe('iOS UI standard: one look per kind of control', () => {
       expect(styledButtons(bad).some((b) => ANSWERS.test(b.button) && !/\.option\(/.test(b.style))).toBe(true)
       expect(styledButtons(good).every((b) => /\.option\(/.test(b.style) && /WalnutOptionLabel\(/.test(b.button))).toBe(true)
       expect(styledButtons(bare).some((b) => !/WalnutOptionLabel\(/.test(b.button))).toBe(true)
+    })
+  })
+
+  describe('the main action and the recommended choice are always filled in the main colour', () => {
+    // 2026-11-26, the team's rule (Walnut VP): "when a set of keys is made one look, keep the main
+    // action and the recommended choice in the main colour; never make every key the same colour".
+    // 942e9326b2 had made a permission list that names rules, and the ask card, all plain rows.
+    const read = (rel: string) => fs.readFileSync(path.join(IOS_ROOT, rel), 'utf8')
+    const WEB = path.join(__dirname, '../../web/src')
+    const readWeb = (rel: string) => fs.readFileSync(path.join(WEB, rel), 'utf8')
+
+    it('no phone choice row is hard-wired never to fill', () => {
+      const offenders = appSwiftFiles()
+        .filter((rel) => !DESIGN_SYSTEM_FILES.includes(rel))
+        .flatMap((rel) => codeLines(read(rel)).flatMap((l, i) => (/\.option\(\s*recommended:\s*false\s*\)/.test(l) ? [`ios-native/${rel}:${i + 1}: ${l.trim()}`] : [])))
+      expect(offenders, `A choice row takes its recommended (or main) flag from the data, never a literal false:\n${offenders.join('\n')}`).toEqual([])
+    })
+
+    it("the phone's strong choice is always the first Allow, and the ask card fills its recommended one", () => {
+      const models = read('Walnut/API/ModelsWave1.swift')
+      const body = models.slice(models.indexOf('static func strongChoiceID'), models.indexOf('static func strongChoiceID') + 200)
+      expect(body).toMatch(/choices\.first\(where: \\\.allow\)\?\.id/)
+      expect(body).not.toMatch(/guard|detail|takesNote/)
+      const card = read('Walnut/Views/Sessions/PermissionRequestCard.swift')
+      expect(card).toMatch(/let recommended = WalnutOptionLabel\.shown\(option\.label\)\.marked/)
+      expect(card).toMatch(/\.buttonStyle\(\.walnut\(\.option\(recommended: recommended\)\)\)/)
+      expect(read('Walnut/Views/Inbox/LetterReaderView.swift')).toMatch(/\.option\(recommended: action\.recommended == true\)/)
+    })
+
+    it("the web's permission prompts fill their main action through strongChoiceId, whatever the list names", () => {
+      for (const rel of ['components/common/PermissionPromptControls.tsx', 'components/common/NotificationToaster.tsx']) {
+        const src = readWeb(rel)
+        expect(src, rel).toMatch(/const strong = strongChoiceId\(acpOptions\)/)
+        // Every btn-primary on a choice is the strong one, never gated on what the list names.
+        const gates = [...src.matchAll(/\$\{([^{}]*)\? '' : ' btn-primary[^']*'\}/g)].map((m) => m[1])
+        expect(gates, `${rel}: a btn-primary that depends on the list's details or notes`).toEqual([])
+        expect(src, rel).toMatch(/o\.optionId === strong \? ' btn-primary/)
+      }
+    })
+
+    it('strongChoiceId picks the first plain yes, a list with rules and a note-taking deny included', async () => {
+      const { strongChoiceId } = await import('../../web/src/contexts/notifications/notification-model')
+      const rules = [
+        { optionId: 'always', kind: 'allow_always', name: 'Always allow', detail: 'Bash(npm test:*)' },
+        { optionId: 'once', kind: 'allow_once', name: 'Allow' },
+        { optionId: 'no', kind: 'reject_once', name: 'Deny', takesNote: true },
+      ]
+      expect(strongChoiceId(rules as never)).toBe('once')
+      expect(strongChoiceId([rules[0], rules[2]] as never)).toBe('always')
+      expect(strongChoiceId([rules[2]] as never)).toBeUndefined()
     })
   })
 

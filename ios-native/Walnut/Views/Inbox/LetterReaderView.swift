@@ -460,8 +460,9 @@ struct LetterReaderView: View {
                         if busyActionId == action.id { ProgressView().controlSize(.small) }
                     }
                 }
-                // A choice of the letter's question: the family's round option row.
-                .buttonStyle(.walnut(.option(recommended: false)))
+                // A choice of the letter's question: the family's option row, the recommended one
+                // filled in the accent.
+                .buttonStyle(.walnut(.option(recommended: action.recommended == true)))
                 // While the note is being spoken, a choice would go without its words.
                 .disabled(busyActionId != nil || decisionVoice.state != .idle)
                 .accessibilityIdentifier("inbox.letter.action.\(action.id)")

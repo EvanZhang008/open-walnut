@@ -15,7 +15,7 @@
  */
 import { useState, type ReactNode } from 'react';
 import {
-  isRejectOption, isUnanswerableAsk, permissionDetail, requestIdOf, validAcpOptions, type Notification,
+  isRejectOption, strongChoiceId, isUnanswerableAsk, permissionDetail, requestIdOf, validAcpOptions, type Notification,
 } from '@/contexts/notifications';
 import type { PermissionDetail } from '@/contexts/notifications/notification-model';
 import {
@@ -242,6 +242,8 @@ export function PermissionAnswerButtons({ answer, allowLabel = 'Allow', dismissL
   if (!answerable || askWithoutInput) return resolved ? null : <>{fallback}</>;
   // A Claude prompt's Deny takes a note (claude-permission-options.ts takesNote).
   const noteReject = acpOptions.find((o) => isRejectOption(o) && o.takesNote);
+  // The main action, always filled (`strongChoiceId`).
+  const strong = strongChoiceId(acpOptions);
   // The server held this choice (its rule's file cannot be written): why, under it.
   const held = answer.stored?.failed && answer.stored.failReason ? answer.stored.optionId : undefined;
   if (acpOptions.length > 0) {
@@ -254,9 +256,9 @@ export function PermissionAnswerButtons({ answer, allowLabel = 'Allow', dismissL
           return (
             <button
               key={o.optionId}
-              // A list that names rules stays neutral: no choice looks picked or recommended
-              // before the person picks (a Claude prompt's list, whose Deny takes a note). A plain list keeps its strong yes.
-              className={`btn btn-sm notification-perm-btn${kept.armed === o.optionId ? ' is-armed' : ''}${isLongRule(o.detail) ? ' perm-option--long-rule' : ''}${reject || o.kind === 'allow_always' || acpOptions.some((x) => x.detail || x.takesNote) ? '' : ' btn-primary approve'}${reject && o.takesNote && note.text ? ' btn-danger perm-deny-with-note' : ''}${held === o.optionId ? ' btn-danger is-failed' : ''}`}
+              // The main action is always filled (`strongChoiceId`), a list that names rules too:
+              // a set of keys made one look keeps its main action in the main colour.
+              className={`btn btn-sm notification-perm-btn${kept.armed === o.optionId ? ' is-armed' : ''}${isLongRule(o.detail) ? ' perm-option--long-rule' : ''}${o.optionId === strong ? ' btn-primary approve' : ''}${reject && o.takesNote && note.text ? ' btn-danger perm-deny-with-note' : ''}${held === o.optionId ? ' btn-danger is-failed' : ''}`}
               data-testid={tid(reject ? 'deny' : 'allow')}
               data-choice={o.optionId}
               data-on={kept.armed === o.optionId ? 'true' : undefined}

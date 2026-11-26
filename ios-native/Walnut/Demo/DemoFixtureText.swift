@@ -336,7 +336,7 @@ enum DemoFixtureText {
                    from: sender("s-copy", "Headlines", task: "t-copy", taskTitle: "Review the onboarding copy changes", project: "Pebble"),
                    createdAgo: 1.5 * 3600, read: false,
                    actions: [
-                       LetterAction(id: "a", label: "Ship option A", description: "Share moments, not files"),
+                       LetterAction(id: "a", label: "Ship option A", description: "Share moments, not files", recommended: true),
                        LetterAction(id: "b", label: "Ship option B", description: "Your photos, together"),
                        LetterAction(id: "c", label: "Ship option C", description: "Albums for the people in them"),
                    ],

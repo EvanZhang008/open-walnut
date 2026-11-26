@@ -68,15 +68,16 @@ final class ChoiceAndDiffCountTests: XCTestCase {
         XCTAssertEqual(PendingPermission.strongChoiceID(list), "approved")
     }
 
-    func testAListThatNamesRulesStaysNeutral() {
+    func testTheFirstAllowIsAlwaysTheStrongChoice() {
         let withDetail = [
             PermissionChoice(id: "allow", label: "Allow", detail: nil, allow: true, optionId: "allow", takesNote: false),
             PermissionChoice(id: "s", label: "Allow for this session", detail: "Bash(npm test:*)", allow: true, optionId: "s", takesNote: false),
             PermissionChoice.plainDeny(takesNote: false),
         ]
-        XCTAssertNil(PendingPermission.strongChoiceID(withDetail))
-        // The plain pair of a Claude prompt: its Deny takes a note.
-        XCTAssertNil(PendingPermission.strongChoiceID([.plainAllow, .plainDeny(takesNote: true)]))
+        // A list that names rules still fills its main action (the team's rule, 11-26).
+        XCTAssertEqual(PendingPermission.strongChoiceID(withDetail), "allow")
+        // The plain pair of a Claude prompt, whose Deny takes a note: Allow is filled.
+        XCTAssertEqual(PendingPermission.strongChoiceID([.plainAllow, .plainDeny(takesNote: true)]), "allow")
         // No allow at all: nothing to make strong.
         XCTAssertNil(PendingPermission.strongChoiceID([.plainDeny(takesNote: false)]))
     }
