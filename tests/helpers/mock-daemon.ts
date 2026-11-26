@@ -173,6 +173,8 @@ export class MockDaemon {
   /** Command names to silently swallow (no reply) — one-shot each; forces a
    *  client-side command timeout (bulk-channel self-heal tests). */
   private _swallowNext = new Set<string>()
+  /** Commands whose next frames are answered `ok: false` with this error, as many times as asked. */
+  private _refuseNext = new Map<string, { error: string; times: number }>()
   /** `<cmd>\u0000<sid>` pairs swallowed every time until released (holdCommandsFor). */
   private _held = new Set<string>()
   /** Sessions flagged as dead via simulateDeath — exitCode returned in session_dead replies. */
@@ -418,6 +420,11 @@ export class MockDaemon {
     if (typeof cmd.cmd === 'string' && this._swallowNext.has(cmd.cmd)) {
       this._swallowNext.delete(cmd.cmd)
       return // no reply — client's per-command timer fires
+    }
+    const refusal = typeof cmd.cmd === 'string' ? this._refuseNext.get(cmd.cmd) : undefined
+    if (refusal) {
+      if (--refusal.times <= 0) this._refuseNext.delete(cmd.cmd as string)
+      return this.sendError(ws, id, refusal.error)
     }
 
     const canned = typeof cmd.cmd === 'string' ? this._answers.get(cmd.cmd) : undefined
@@ -1566,6 +1573,11 @@ export class MockDaemon {
    *  Forces the client's per-command timeout to fire. */
   swallowNextCommand(cmd: string): void {
     this._swallowNext.add(cmd)
+  }
+
+  /** Answer the next `times` commands named `cmd` with `ok: false` and `error` (recorded in the history, nothing done). */
+  refuseNextCommand(cmd: string, error: string, times = 1): void {
+    this._refuseNext.set(cmd, { error, times })
   }
 
   /** Swallow EVERY command named `cmd` for session `sid` (no reply, nothing done) until

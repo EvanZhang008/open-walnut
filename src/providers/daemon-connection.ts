@@ -38,8 +38,9 @@ import crypto from 'node:crypto'
 import net from 'node:net'
 import type { Duplex } from 'node:stream'
 import { log } from '../logging/index.js'
-import { leaderPermitActive, onceOutwardDoorsOpened, outwardDoorRefusal } from '../core/leader/switch/doors.js'
+import { doorsClosed, leaderPermitActive, onceOutwardDoorsOpened, outwardDoorRefusal } from '../core/leader/switch/doors.js'
 import { ownBridgeHeld } from '../core/leader/own-bridge-hold.js'
+import { BridgePushRetry } from './bridge-push-retry.js'
 import { HoldNews, holdLog } from './daemon-hold-news.js'
 import { PTY_STREAM_CAPABILITY, ptyStreamMissingSentence } from '../core/hosts/terminal-link.js'
 import { createStreamEndpoint, listenLoopback, spliceStream, type PtyOpenOptions, type PtyStream, type StreamEndpoint } from '../lib/link-stream.js'
@@ -975,6 +976,11 @@ export class DaemonConnection {
   private bridgePushInFlight = false
   /** A push asked for while one was out: run once more after it, from fresh config (a new machine token). */
   private bridgePushAgain = false
+  /** A refused or failed push is tried again soon (bridge-push-retry.ts), under the tick's own conditions. */
+  private readonly bridgeRetry = new BridgePushRetry(() => {
+    if (this._destroyed || !this._connected || this.pushesNoLeaderState || homeWritesStopped()) return
+    this.pushBridgeConfig()
+  })
   /** hooks.configure serialization (see pushDaemonHooks): in-flight guard +
    *  coalesced rerun flag + last-acked hash for RPC dedup. The hash resets on
    *  disconnect so a reconnect always re-pushes (the daemon may be a fresh
@@ -2309,8 +2315,10 @@ export class DaemonConnection {
           log.session.warn('DaemonConnection: bridge config push rejected by daemon', {
             host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
           })
+          this.bridgePushFailed(off)
           return
         }
+        this.bridgeRetry.succeeded()
         // Record the daemon's own bridge liveness so /api/system/health can
         // surface phone-reachability per host (a wedged bridge dial used to
         // rot for days with zero observability).
@@ -2338,11 +2346,21 @@ export class DaemonConnection {
         log.session.warn('DaemonConnection: bridge config push failed', {
           host: this.hostKey, error: err instanceof Error ? err.message : String(err),
         })
+        this.bridgePushFailed(off)
       } finally {
         this.bridgePushInFlight = false
         if (this.bridgePushAgain) { this.bridgePushAgain = false; if (this.connected) this.pushBridgeConfig() }
       }
     })()
+  }
+
+  /** A push refused or failed (not a deliberate skip): soon again, and on every host once this server may mint. */
+  private bridgePushFailed(off: boolean): void {
+    // A revoked host's turn-off is not retried (the tick sends it again); a closed link has nothing to retry.
+    if (off || !this._connected || this.pushesNoLeaderState) return
+    this.bridgeRetry.failed()
+    // A new leader before its write permission mints no machine token: push every host once it holds it.
+    if (doorsClosed()) onceOutwardDoorsOpened('bridge-config', pushBridgeConfigToAllHosts)
   }
 
   /**
@@ -3057,6 +3075,7 @@ export class DaemonConnection {
   }
 
   private stopBridgeRepush(): void {
+    this.bridgeRetry.clear()
     if (this.bridgeRepushTimer) {
       clearInterval(this.bridgeRepushTimer)
       this.bridgeRepushTimer = null
@@ -11105,6 +11124,13 @@ export function lookAtServiceSetsOnAllHosts(): void {
 export function pushTriggersToAllHosts(): void {
   for (const conn of connectionPool.values()) {
     if (conn.connected) conn.pushTriggers()
+  }
+}
+
+/** Push every connected host's bridge config: this server just got the write permission, so its machine tokens can be minted. */
+export function pushBridgeConfigToAllHosts(): void {
+  for (const conn of connectionPool.values()) {
+    if (conn.connected) conn.pushBridgeConfig()
   }
 }
 
