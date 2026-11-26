@@ -92,6 +92,23 @@
 .settings-addons-stat[data-direct] .settings-addons-stat-label { color: var(--chart-s2); font-weight: 600; }
 /* A fourth figure (Billed directly) joins the row instead of wrapping to a second one. */
 .settings-addons-stats[data-count="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* Too narrow for a row of figures (a five-figure amount needs about 145px a card): two columns, a
+   hairline between the rows, and an odd last figure across both. */
+@container sgroup (max-width: 599px) {
+  .settings-addons-stats[data-count="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container sgroup (max-width: 459px) {
+  .settings-addons-stats[data-count] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container sgroup (max-width: 599px) {
+  .settings-addons-stats[data-count="4"] > .settings-addons-stat:nth-child(odd) { box-shadow: none; }
+  .settings-addons-stats[data-count="4"] > .settings-addons-stat:nth-child(n + 3) { border-top: 1px solid var(--settings-hairline, var(--border)); }
+}
+@container sgroup (max-width: 459px) {
+  .settings-addons-stats[data-count] > .settings-addons-stat:nth-child(odd) { box-shadow: none; }
+  .settings-addons-stats[data-count] > .settings-addons-stat:nth-child(n + 3) { border-top: 1px solid var(--settings-hairline, var(--border)); }
+  .settings-addons-stats[data-count] > .settings-addons-stat:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
 
 /* Engines compared (EngineCompareCard): metrics are rows, engines are columns. */
 .usage-ec-body { display: block; padding-top: 10px; }

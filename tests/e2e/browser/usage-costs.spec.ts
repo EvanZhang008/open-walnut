@@ -9,6 +9,7 @@
 import { devices, test, expect, type Page } from '@playwright/test'
 import { LONG_TITLE, routeCosts } from './usage-costs-fixture'
 import { expectTooltipNotPeek } from './truncation-peek-helpers'
+import { cutLargeText, usageFigureProblems } from './figure-fit-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -433,6 +434,12 @@ test('work Walnut did not start is counted by default, a filter narrows it, and 
   await expect(page.getByTestId('usage-direct-cost')).toContainText('Billed directly')
   expect(money(await page.getByTestId('usage-direct-cost').textContent())).toBeGreaterThan(0)
   await expect(page.getByTestId('usage-direct-note')).toContainText('part of the total')
+  // On a desktop pane the four figures stay one row, each whole (the phone's two rows: phone-choice-strips).
+  const tops = await page.locator('.settings-addons-stat').evaluateAll((cards) => cards.map((c) => Math.round(c.getBoundingClientRect().top)))
+  expect(tops).toHaveLength(4)
+  expect(new Set(tops).size, 'one row').toBe(1)
+  expect(await usageFigureProblems(page)).toEqual([])
+  expect(await cutLargeText(page)).toEqual([])
   // The account Codex went through: the one billed directly is first and marked.
   const accounts = page.getByTestId('usage-accounts')
   await expect(accounts).toBeVisible()

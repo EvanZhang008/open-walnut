@@ -127,7 +127,11 @@
 }
 .settings-addons-actions:first-child { margin-top: 0; }
 
-/* Usage summary: three equal numbers, 20px/600 tabular, muted label below. */
+/* Usage summary: three equal numbers, 20px/600 tabular, muted label below. A figure is the reading,
+   so it is never cut: the row goes to two columns where the figures would not fit
+   (usage-breakdown.css), and a figure wider than its column still wraps rather than ending in
+   an ellipsis (2026-11-26: "$15,..." on every card at a 390px phone). The row's width is read
+   from its settings group, already a size container (`sgroup`, settings-rows.css). */
 .settings-addons-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -148,9 +152,7 @@
   font-weight: 600;
   color: var(--fg);
   font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .settings-addons-stat-label {
   font-size: var(--font-size-md);

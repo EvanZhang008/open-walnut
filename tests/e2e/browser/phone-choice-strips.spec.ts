@@ -13,6 +13,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { PHONE } from './phone-helpers'
 import { routeCosts } from './usage-costs-fixture'
+import { cutLargeText, usageFigureProblems } from './figure-fit-helpers'
 
 test.use({
   viewport: PHONE.viewport,
@@ -120,6 +121,12 @@ test('Usage: Started by and Break down by say they scroll and keep the pick in v
   await expect(page.getByTestId('usage-total-cost')).toBeVisible({ timeout: 30_000 })
   await expect.poll(() => page.locator('.settings-pane .wn-seg').count()).toBeGreaterThan(1)
   expect(await stripProblems(page)).toEqual([])
+  // The headline figures sit two to a row here and each shows whole ("$15,..." on all four before).
+  await expect(page.locator('.settings-addons-stat')).toHaveCount(4)
+  expect(await usageFigureProblems(page)).toEqual([])
+  expect(await cutLargeText(page)).toEqual([])
+  const tops = await page.locator('.settings-addons-stat').evaluateAll((cards) => cards.map((c) => Math.round(c.getBoundingClientRect().top)))
+  expect(new Set(tops).size, 'two rows of two').toBe(2)
   // Picked while out of view, the strip itself brings it in (a script click, so neither
   // Playwright nor the focus scrolls it): the last choice, then one in the middle.
   const group = page.getByRole('radiogroup', { name: /break down by/i })
