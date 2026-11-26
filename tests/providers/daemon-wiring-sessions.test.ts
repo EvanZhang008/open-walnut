@@ -270,7 +270,9 @@ describe('daemon wiring: session reap, registry, orphan poll, send paths and str
     const ensureClaude = vi.fn(async () => ({ ok: true, path: 'fixture-cli', kind: 'native' }))
     const requireBudgetAllowance = vi.fn(async () => {})
     const isJournalSid = (sid: unknown) => typeof sid === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(sid)
-    const run = new Function('sessions', 'process', 'fs', 'core', 'chainFifoWrite', 'addSubscriber', 'sendOk', 'sendError', 'logMsg', 'Buffer', 'sessionStartGate', 'sessionStopVersions', 'cronRuntime', 'ensureWatcher', 'handleSendCommand', 'hostRuntime', 'isJournalSid', 'requireBudgetAllowance', 'cliArgvFiles', 'demoQuiesce', 'shellSetupOfStart', 'passwdReady',
+    // leader-switch-home-stop-v1: the handed-over home guard comes first, for an adoption too (no marker here).
+    const refuseHandedOverHome = vi.fn(async () => {})
+    const run = new Function('sessions', 'process', 'fs', 'core', 'chainFifoWrite', 'addSubscriber', 'sendOk', 'sendError', 'logMsg', 'Buffer', 'sessionStartGate', 'sessionStopVersions', 'cronRuntime', 'ensureWatcher', 'handleSendCommand', 'hostRuntime', 'isJournalSid', 'requireBudgetAllowance', 'cliArgvFiles', 'demoQuiesce', 'shellSetupOfStart', 'passwdReady', 'refuseHandedOverHome',
       js + '\nreturn cmdStart')(
       sessions, { kill, env: {} }, { existsSync: () => true }, { handleSendCommand: send }, fifo,
       addSubscriber, sendOk, sendError, () => {}, Buffer,
@@ -279,7 +281,7 @@ describe('daemon wiring: session reap, registry, orphan poll, send paths and str
       // The start's args go through the real inline step (hook-files-v1) first.
       createCliArgvFiles({ fs, path, crypto, dir: '/nonexistent/argv' }), { fenced: false },
       // The host's shell_setup and the passwd read the replace path asks before its gate (session-shell.ts).
-      () => '', async () => {},
+      () => '', async () => {}, refuseHandedOverHome,
     )
     const command = { sid: 'sid', args: ['fixture-cli'], cwd: '/fixture', resume: true, message: '' }
     const result = await run({}, 1, { ...command, deferMessage: true })
@@ -291,6 +293,7 @@ describe('daemon wiring: session reap, registry, orphan poll, send paths and str
     expect(addSubscriber).toHaveBeenCalledOnce()
     expect(ensureClaude).not.toHaveBeenCalled()
     expect(requireBudgetAllowance).toHaveBeenCalledExactlyOnceWith('sid')
+    expect(refuseHandedOverHome).toHaveBeenCalledExactlyOnceWith('sid', '/fixture')
     await expect(run({}, 2, command)).rejects.toThrow('replace path reached')
     expect(ensureClaude).toHaveBeenCalledOnce()
   })
