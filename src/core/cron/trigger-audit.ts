@@ -265,7 +265,9 @@ export function mergeRunOutcome(
   const at = ref
     ? base.findIndex((e) => e.outcome === 'fired' && (e.delivery?.summary ?? '').includes(ref))
     : -1;
-  if (at < 0) return appendAudit(base, entry, max);
+  // No row of this run yet: its fire is recorded once its start returns, and a run can end
+  // first (a session that answers at once). Kept apart, named, for that row to fold in.
+  if (at < 0) return appendAudit(base, ref ? { ...entry, outcomeOf: ref } : entry, max);
   const merged = [...base];
   merged[at] = {
     ...base[at],
@@ -277,6 +279,28 @@ export function mergeRunOutcome(
     injected: entry.injected ?? base[at].injected,
   };
   return merged.slice(0, Math.max(1, max));
+}
+
+/**
+ * Append a fire's own row (the one that names its run's task in its summary), folding in that
+ * run's outcome when the outcome came first (mergeRunOutcome kept it as `outcomeOf`). The result
+ * is the row the usual order gives: one row per run, with its batch, its preview and its verdict
+ * (2026-11-26: a triage run whose mock CLI answered at once had two rows, and the fire's row never
+ * said "ended ok", tests/e2e/triage-run.test.ts).
+ */
+export function appendFireRow(
+  list: TriggerAuditEntry[] | undefined,
+  entry: TriggerAuditEntry,
+  max: number,
+): TriggerAuditEntry[] {
+  const base = Array.isArray(list) ? list : [];
+  const summary = entry.delivery?.summary ?? '';
+  const early = entry.outcome === 'fired' && summary
+    ? base.findIndex((e) => !!e.outcomeOf && summary.includes(e.outcomeOf))
+    : -1;
+  if (early < 0) return appendAudit(base, entry, max);
+  const { outcomeOf, ...outcome } = base[early]!;
+  return mergeRunOutcome(appendAudit(base.filter((_, i) => i !== early), entry, max), outcome, outcomeOf!, max);
 }
 
 /**

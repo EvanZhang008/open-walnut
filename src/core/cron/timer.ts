@@ -13,7 +13,7 @@ import { cloudModeSkipsJob, computeJobNextRunAtMs, isClockOwned, nextWakeAtMs, r
 import { ensureLoaded, forgetDiskStamp, persist } from './store.js';
 import { withFileLock } from '../../utils/file-lock.js';
 import {
-  appendAudit, auditDelivery, injectedPreview, wakeAuditEntry, TRIGGER_FIRE_LOG_MAX,
+  appendFireRow, auditDelivery, injectedPreview, wakeAuditEntry, TRIGGER_FIRE_LOG_MAX,
 } from './trigger-audit.js';
 import {
   appendRun, catchUpNote, HELD_RECHECK_MS, judgesSlots, runEntry, runFailed, runSlots, SLOT_RETRIES,
@@ -294,7 +294,7 @@ export function applyJobResult(
       // One audit row per wake fire, with the text the run injected. A 'skipped'
       // run never reached an executor, so calling that a fire would be a lie —
       // its lastStatus/lastError carry the reason instead.
-      job.state.fireLog = appendAudit(
+      job.state.fireLog = appendFireRow(
         job.state.fireLog,
         wakeAuditEntry({
           atMs: result.startedAt,
@@ -493,7 +493,7 @@ function recordRoutineRun(state: CronServiceState, job: CronJob, result: JobRunO
  */
 function recordSessionRun(job: CronJob, result: JobRunOutcome): void {
   if (job.executor?.type !== 'session' || job.wake || job.check || result.status === 'skipped') return;
-  job.state.fireLog = appendAudit(
+  job.state.fireLog = appendFireRow(
     job.state.fireLog,
     {
       ...wakeAuditEntry({

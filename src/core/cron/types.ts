@@ -118,6 +118,12 @@ export type TriggerAuditEntry = {
   limitSeconds?: number;
   /** Check errors only: the machine failed it, not the check (trigger-check-core.ts MACHINE_FAULT_KINDS). */
   fault?: MachineFaultKind;
+  /**
+   * A run's outcome that came before the row of the fire that started it (the run ended before
+   * the fire was recorded): the run's ref (its task id), so that row folds it in when it is
+   * written (trigger-audit.ts appendFireRow). Gone once folded.
+   */
+  outcomeOf?: string;
 };
 
 /** The daemon's last report about a check, for the card and the error counter. */

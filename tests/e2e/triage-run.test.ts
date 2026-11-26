@@ -201,13 +201,18 @@ describe('Inbox Triage runs, end to end', () => {
   }, 120_000);
 
   it('the run was handed ONE envelope whose counts match the events', async () => {
-    const job = await vi.waitFor(async () => {
+    // This run's one row, once its fire is recorded. The run can end before that (the mock CLI
+    // answers at once): its outcome then waits apart until the fire's row folds it in
+    // (trigger-audit.ts appendFireRow), so a row with no batch yet is not the fire's row.
+    const fire = await vi.waitFor(async () => {
       const found = await triageRoutine();
-      expect(found?.state?.fireLog?.length ?? 0).toBeGreaterThan(0);
-      return found;
+      const mine = (found?.state?.fireLog ?? []).filter((e: any) =>
+        (e.delivery?.summary ?? '').includes(firstTaskId) || e.outcomeOf === firstTaskId);
+      expect(mine, JSON.stringify(found?.state?.fireLog)).toHaveLength(1);
+      expect(mine[0].items).toBeDefined();
+      return mine[0];
     }, { timeout: 30_000, interval: 200 });
 
-    const fire = job.state.fireLog[0];
     expect(fire.outcome).toBe('fired');
     expect(fire.items).toBe(22);
     const injected: string = fire.injected?.preview ?? '';
@@ -283,10 +288,19 @@ describe('Inbox Triage runs, end to end', () => {
     expect(lines[0]).toMatch(/^- \d{4}-\d{2}-\d{2} \d{2}:\d{2} run · /);
     expect(lines[0]).toContain('ended ok');
 
-    // Carried forward, so the NEXT envelope can show what the last run did.
+    // Carried forward, so the NEXT envelope can show what the last run did. That is the newest
+    // line, not this run's: the second run settles on its own once its mock CLI answers, at any
+    // time after it started, and then its line is the one carried (2026-11-26: in 3 runs of 6 the
+    // state held the 24-item run's line, which read here as "the minute moved"). So both runs'
+    // lines are in the journal, once each, and the state holds the newest of them.
+    const runIds = [...seenTasks];
+    expect(runIds).toHaveLength(2);
     await vi.waitFor(async () => {
-      expect((await loadTriageState()).lastJournalLine).toBe(lines[0]);
-    }, { timeout: 20_000, interval: 200 });
+      const runLines = (await readJournal()).split('\n').filter((l) => /^- \d{4}-\d{2}-\d{2} \d{2}:\d{2} run · /.test(l));
+      for (const id of runIds) expect(runLines.filter((l) => l.includes(`task ${id.slice(0, 8)}`))).toHaveLength(1);
+      expect(runLines).toContain(lines[0]);
+      expect((await loadTriageState()).lastJournalLine).toBe(runLines.at(-1));
+    }, { timeout: 30_000, interval: 200 });
 
     // The verdict MERGED into the fire row that names this run's task — one row
     // per run, not one for the dispatch and another for the outcome. Two runs
