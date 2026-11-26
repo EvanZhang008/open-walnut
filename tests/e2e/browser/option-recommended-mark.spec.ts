@@ -170,6 +170,46 @@ test('the notification center answer form shows the same mark, and answers with 
   await expect.poll(() => submitted).toMatchObject({ allow: true, answers: { [QUESTIONS[0]!.question]: 'Postgres (Recommended)' } })
 })
 
+const RULE_CHOICES = [
+  { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once' },
+  { optionId: 'allow_session', kind: 'allow_always', name: 'Allow for this session', detail: 'Bash(npm test:*)' },
+  { optionId: 'reject_once', kind: 'reject_once', name: 'Deny', takesNote: true },
+]
+
+/** Each choice row's box, its words' box and its number key's top (null without one). */
+const rowBoxes = (rows: Locator) => rows.evaluateAll((els) => els.map((el) => {
+  const r = el.getBoundingClientRect()
+  const w = el.querySelector('.permission-choice-text, .permission-choice-label')!.getBoundingClientRect()
+  const k = el.querySelector('.prompt-key')?.getBoundingClientRect()
+  const label = el.querySelector('.permission-choice-label')!.getBoundingClientRect()
+  return { top: r.top, bottom: r.bottom, wordsTop: w.top, wordsBottom: w.bottom, labelTop: label.top, keyTop: k ? k.top : null }
+}))
+
+/** The words sit in the row's middle, and a number key on the first line of the words. */
+async function expectWordsCentred(rows: Locator, what: string): Promise<void> {
+  for (const [i, b] of (await rowBoxes(rows)).entries()) {
+    const above = b.wordsTop - b.top
+    const below = b.bottom - b.wordsBottom
+    expect(Math.abs(above - below), `${what} row ${i + 1}: words ${above.toFixed(1)} px under the top, ${below.toFixed(1)} px over the bottom`).toBeLessThanOrEqual(3)
+    if (b.keyTop !== null) expect(Math.abs(b.keyTop - b.labelTop), `${what} row ${i + 1}: the key is on the words' first line`).toBeLessThanOrEqual(4)
+  }
+}
+
+test.describe('at a phone width', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+  test("a rules list's one-line choices keep their words in the middle of the 44 px row", async ({ page }) => {
+    const { panel } = await openSession(page)
+    await prompt(page, { requestId: 'req-rules-phone', toolName: 'Bash', input: { command: 'npm test', description: 'Run the tests' }, reason: 'This command requires approval', acpOptions: RULE_CHOICES })
+    const card = panel.locator('.permission-request-card[data-request-id="req-rules-phone"]')
+    await expect(card).toBeVisible()
+    await card.scrollIntoViewIfNeeded()
+    await shot(card, 'rules-card-390')
+    const rows = card.locator('.permission-request-choice')
+    await expect(rows).toHaveCount(3)
+    await expectWordsCentred(rows, '390')
+  })
+})
+
 test("a Claude prompt's list that names rules still fills its main action, Allow once", async ({ page }) => {
   const { panel } = await openSession(page)
   await prompt(page, {
@@ -191,4 +231,5 @@ test("a Claude prompt's list that names rules still fills its main action, Allow
   expect(await fillOf(rows.nth(1))).not.toBe(await primaryFill(page))
   // Its words read on the fill, not in the text colour.
   expect(await rows.first().locator('.permission-choice-label').evaluate((e) => getComputedStyle(e).color)).toBe(await rows.first().evaluate((e) => getComputedStyle(e).color))
+  await expectWordsCentred(rows, '1512')
 })

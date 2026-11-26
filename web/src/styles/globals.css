@@ -2754,9 +2754,13 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .permission-request-btn.permission-request-choice .prompt-key { margin-right: 0; }
 /* A row's name reads in the text colour; the main action's row (btn-primary) keeps its own ink. */
 .permission-request-choice:not(.btn-primary) .permission-choice-label { color: var(--fg); }
-.permission-request-btn.permission-request-choice { align-items: flex-start; }
+/* The key sits on the first line of a choice that wraps, and the row's words stay in its middle
+   when the row is taller than they are (a phone's 44 px finger size): the one line of items is
+   centred (align-content), its items keep their tops together. The words take the rest of the line
+   from a zero basis, so they wrap inside it and never onto a line of their own. */
+.permission-request-btn.permission-request-choice { align-items: flex-start; flex-wrap: wrap; align-content: center; }
 .permission-request-choice .prompt-key { margin-top: 1px; }
-.permission-choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.permission-choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 0; }
 /* The file a rule goes in is read whole, wrapping in a narrow pane. */
 .permission-choice-saved { font-size: var(--font-size-sm); font-weight: 400; color: color-mix(in srgb, var(--fg-muted) 70%, var(--fg)); min-width: 0; overflow-wrap: break-word; }
 /* The file's name never breaks: in a narrow column it moves whole under "Saves to". */
