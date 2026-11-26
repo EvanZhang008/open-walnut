@@ -286,6 +286,7 @@ export const STARTERS: Record<string, [StarterKind, string, string?]> = {
  * name), one entry a timer in source order, kinds as CLOCKS. Read from the source on 2026-11-25 (review round 2).
  */
 export const REARMING: Record<string, Clock[]> = {
+  'src/core/org/threads-sync.ts': [['none', 'View sweep: lets go of parsed thread views no reader asked for in VIEW_KEEP_MS, again while any is left; in-memory only, writes no file.']],
   'src/lib/hybrid-search/embedder.ts': [
     ['none', 'Idle reaper of the query embed worker: looks again while a job runs, then ends the worker process; writes no file.'],
     ['none', 'Idle reaper of the passage embed worker: re-arms while a job runs, then ends the worker process; writes no file.'],
