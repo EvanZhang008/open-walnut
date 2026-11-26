@@ -86,6 +86,8 @@ function persistMockCompactBoundary(sessionId, metadata, uuid, commandUuid, root
  * review lab and the side panel's reload spec: the product's own reload path, not a stand-in).
  */
 let lastInputUserUuid = null;
+/** The uuid of the user line taken at the first stdin read, when one came with it. */
+let firstReadUuid = null;
 function persistFileOf(sid) {
   const root = process.env.MOCK_CLAUDE_PERSIST_DIR;
   const allow = (process.env.MOCK_CLAUDE_PERSIST_SESSIONS ?? '').split(',').filter(Boolean);
@@ -345,6 +347,7 @@ if (inputFormat === 'stream-json') {
         if (!adoptedFirstMessage && parsed.message?.content) {
           adoptedFirstMessage = true;
           lastInputUserUuid = parsed.uuid ?? null;
+          firstReadUuid = parsed.uuid ?? null;
           message = typeof parsed.message.content === 'string'
             ? parsed.message.content
             : JSON.stringify(parsed.message.content);
@@ -626,11 +629,15 @@ function dieOnTakenLine(text) {
   process.kill(process.pid, 'SIGKILL');
 }
 // The first line, read at startup, is taken as Claude Code takes any line: named
-// queued then started (only here, for the die modes: other modes keep printing
-// nothing for it).
-if (inputFormat === 'stream-json' && process.env.MOCK_CLAUDE_DIE_COUNT_FILE && lastInputUserUuid && /(die-after-start|answer-then-die):\d+/.test(message)) {
-  for (const state of ['queued', 'started']) {
-    process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: lastInputUserUuid, state, session_id: outputSessionId }) + '\n');
+// queued then started, whatever its mode. Named only in the die modes before
+// 2026-11-25, a session's first line that came over stdin kept its queue row for
+// good (Walnut keeps a named line's row until its `started`), and every message
+// behind it waited (threads-pop-up.spec.ts test 8, a fresh session kept busy).
+if (inputFormat === 'stream-json' && firstReadUuid) {
+  if (process.env.MOCK_CLAUDE_NO_LIFECYCLE_CAPS !== '1') {
+    for (const state of ['queued', 'started']) {
+      process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: firstReadUuid, state, session_id: outputSessionId }) + '\n');
+    }
   }
   dieOnTakenLine(message);
 }

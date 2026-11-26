@@ -60,6 +60,14 @@ interface DaemonSession {
   stderrStart?: number
   /** The process itself has exited (its `exit` event fired). */
   procExited?: boolean
+  /** The start's own line still going in: a send waits for it, as the real daemon's start gate holds one. */
+  firstLine?: Promise<void>
+}
+
+/** The CLI reads its user lines from stdin (`--input-format stream-json`), as every real start does. */
+function streamJsonInput(args: string[]): boolean {
+  const i = args.indexOf('--input-format')
+  return i >= 0 && args[i + 1] === 'stream-json'
 }
 
 /** A non-blocking FIFO write takes at most the pipe's free space (8192 bytes on macOS), so a
@@ -76,6 +84,22 @@ function writeFifoFully(fd: number, buf: Buffer): void {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EAGAIN' || Date.now() > deadline) throw err
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    }
+  }
+}
+
+/** writeFifoFully off the loop, for a start's own line: the CLI may still be booting, so the
+ *  rest of a line past the pipe's free space waits for it to read, as the real daemon's boot-wait
+ *  write does, without holding the fixture's loop (and the server in it). */
+async function writeFifoFullyAsync(fd: number, buf: Buffer, timeoutMs = 60_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let off = 0
+  while (off < buf.length) {
+    try {
+      off += fs.writeSync(fd, buf, off)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EAGAIN' || Date.now() > deadline) throw err
+      await new Promise((resolve) => setTimeout(resolve, 5))
     }
   }
 }
@@ -633,7 +657,7 @@ export class MockDaemon {
       if (message) {
         try {
           const fd = fs.openSync(live.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
-          writeFifoFully(fd, Buffer.from(JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n'))
+          writeFifoFully(fd, Buffer.from(JSON.stringify({ type: 'user', message: { role: 'user', content: message }, ...(typeof cmd.uuid === 'string' && cmd.uuid ? { uuid: cmd.uuid } : {}) }) + '\n'))
           fs.closeSync(fd)
           this._fifoWrites.push({ sid, message, timestamp: Date.now() })
           this._turnActive.add(sid)
@@ -686,7 +710,15 @@ export class MockDaemon {
     if (resume && sid) {
       cliArgs.push('--resume', sid)
     }
-    if (message) {
+    // The start's own line goes in as the real daemons write it (daemon-session-start.ts): the
+    // first user line on the CLI's stdin, before any send can reach the session. As an argument
+    // it was a mock of its own: the mock CLI took the first stdin line in its place, so a send
+    // that came right after the start ran as the first turn and the start's message never ran.
+    // A CLI that reads no stdin (no `--input-format stream-json`) still takes it as an argument.
+    const firstLine = message && streamJsonInput(cliArgs)
+      ? JSON.stringify({ type: 'user', message: { role: 'user', content: message }, ...(typeof cmd.uuid === 'string' && cmd.uuid ? { uuid: cmd.uuid } : {}) }) + '\n'
+      : null
+    if (message && !firstLine) {
       cliArgs.push(message)
     }
 
@@ -731,8 +763,8 @@ export class MockDaemon {
       markExited()
     })
 
-    // Close file descriptors (process has them now)
-    try { fs.closeSync(pipeFd) } catch { /* ignore */ }
+    // Close file descriptors (process has them now); the pipe once the start's line went in.
+    if (!firstLine) { try { fs.closeSync(pipeFd) } catch { /* ignore */ } }
     try { fs.closeSync(outputFd) } catch { /* ignore */ }
     try { fs.closeSync(stderrFd) } catch { /* ignore */ }
 
@@ -790,7 +822,18 @@ export class MockDaemon {
       this.pollJsonl(ws, session.sid, session)
     }, 50)  // 50ms poll (faster than real daemon's 100ms for test speed)
 
-    this.sendOk(ws, id, { pid, outputFile: jsonlPath, offset: 0 })
+    if (!firstLine) return this.sendOk(ws, id, { pid, outputFile: jsonlPath, offset: 0 })
+    // The start answers once its line went in, as the real daemon's does.
+    const line = writeFifoFullyAsync(pipeFd, Buffer.from(firstLine)).finally(() => { try { fs.closeSync(pipeFd) } catch { /* closed */ } })
+    session.firstLine = line
+    line.then(
+      () => { session.firstLine = undefined; this.sendOk(ws, id, { pid, outputFile: jsonlPath, offset: 0 }) },
+      (err: Error) => {
+        session.firstLine = undefined
+        try { proc.kill('SIGKILL') } catch { /* gone */ }
+        this.sendError(ws, id, `start: initial message not delivered (${err.message})`)
+      },
+    )
   }
 
   private cmdAttach(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
@@ -863,6 +906,12 @@ export class MockDaemon {
     if (!session) {
       // Real daemon replies strict-ack, not envelope error, for unknown sid.
       return this.sendOk(ws, id, { ok: false, reason: 'not_found' })
+    }
+    // Behind the start's own line, as the real daemon's start gate keeps it.
+    if (session.firstLine) {
+      const again = () => this.cmdSend(ws, id, cmd)
+      void session.firstLine.then(again, again)
+      return
     }
 
     // send-dedupe-v1, same rule as daemon-core: a resend whose fate the CLI's

@@ -541,6 +541,11 @@ test('on: a picture pasted in the card below goes to the subtask with his words,
   const on = await request.patch(`/api/tasks/${own}`, { data: { threads_on: true } })
   expect(on.ok(), await on.text()).toBe(true)
   const ownSid = await startSession(request, own, (await discoverBrowserFixture(TEST_PORT)).fixtureRoot)
+  // Busy until the checks below read the card: idle, the session read his reply at once and the
+  // card left while it was being looked at ("Element is not attached"). Its first turn answers
+  // first, so the long turn is a turn of its own.
+  await expect.poll(async () => ((await (await request.get(`/api/v1/sessions/${ownSid}/history?tail=40`)).json()) as { messages?: Array<{ text?: string }> }).messages?.some((m) => m.text === 'Started.') ?? false, { timeout: 60_000 }).toBe(true)
+  const endTurn = await busyUntilEnded(request, ownSid)
   const opened = await post<{ thread: { id: string } }>(request, `/api/v1/tasks/${own}/threads/open`, {
     title: `Shed paint colour ${STAMP}`, text: `Which colour should the shed be painted? ${STAMP}`, state: 'needs', from: 'node',
     user_kind: 'user_own', user_kind_why: 'It is his own shed.', separate_reason: 'A decision of its own.',
@@ -582,6 +587,8 @@ test('on: a picture pasted in the card below goes to the subtask with his words,
   await expect.poll(() => sent.getByTestId('org-thread-popped-sent-pictures').locator('img').evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
   await page.waitForTimeout(800)
   await shot(page, '7-picture-sent', popped)
+  // Now the session may read it.
+  endTurn()
   // The subtask's thread holds the picture with his words, and its session reads both in one message.
   type File = { threads: Array<{ id: string; messages: Array<{ text: string; images?: string[]; delivery?: { state: string } }> }> }
   let images: string[] = []

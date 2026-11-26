@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 220,
+  "count": 219,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -48,7 +48,6 @@
     "display-menu.spec.ts :: keyboard reaches every Display control, with a visible ring and readable checks in both themes",
     "draft-quick-parse-off.spec.ts :: opening a draft with an empty composer fires no quick-parse and no config read",
     "engine-settings-popover-r2.spec.ts :: engine settings popover: review round two › rows get more than half the box, the repo segment always shows, About is a glyph after the switch",
-    "engine-settings-popover-r2.webkit.spec.ts :: webkit: rows over half the box; the repo segment shows at 1280 and at 420 wide",
     "engine-settings-popover-r3.spec.ts :: engine settings popover: round three, copy and chrome › an unavailable side wears a lock and its reason; the dark popover is a raised layer",
     "engine-settings-popover-scope.spec.ts :: engine settings popover: write scope › two columns, one dialog at a time; long cwds stay distinct; a closed column takes its dialog along",
     "error-notification-routing.spec.ts :: session errors appear only in Notifications, never in main chat",
@@ -270,7 +269,6 @@
     "display-menu.spec.ts :: keyboard reaches every Display control, with a visible ring and readable checks in both themes": "Error: expect(received).toBeGreaterThanOrEqual(expected)",
     "draft-quick-parse-off.spec.ts :: opening a draft with an empty composer fires no quick-parse and no config read": "Error: the gate must be read AFTER the empty check, never before it",
     "engine-settings-popover-r2.spec.ts :: engine settings popover: review round two › rows get more than half the box, the repo segment always shows, About is a glyph after the switch": "Error: expect(received).toBe(expected) // Object.is equality",
-    "engine-settings-popover-r2.webkit.spec.ts :: webkit: rows over half the box; the repo segment shows at 1280 and at 420 wide": "Error: expect(locator).toHaveText(expected) failed",
     "engine-settings-popover-r3.spec.ts :: engine settings popover: round three, copy and chrome › an unavailable side wears a lock and its reason; the dark popover is a raised layer": "Error: expect(received).toBeGreaterThanOrEqual(expected)",
     "engine-settings-popover-scope.spec.ts :: engine settings popover: write scope › two columns, one dialog at a time; long cwds stay distinct; a closed column takes its dialog along": "Error: expect(locator).toContainText(expected) failed",
     "error-notification-routing.spec.ts :: session errors appear only in Notifications, never in main chat": "Error: expect(received).toBe(expected) // Object.is equality",
