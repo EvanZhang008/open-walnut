@@ -14,7 +14,11 @@
  *
  * `keepMs`: for a big file read in bursts (a conversation's chat history, 18 MB on the live
  * server, read three times at every boot), the value is let go that long after its last read,
- * so the burst shares one parse and the file is not held between bursts.
+ * so the burst shares one parse and the file is not held between bursts. Reads at once of one
+ * version share the parse under way.
+ *
+ * readJsonFileShaped: the same for a store that keeps the file reshaped and unfrozen, whose own
+ * readers are proven never to change what they get (org/threads-store.ts readThreads).
  */
 import fs from 'node:fs/promises';
 import { readJsonFile } from './fs.js';
@@ -29,18 +33,18 @@ export interface KeptReadOptions {
   keepMs?: number;
 }
 
-function drop(filePath: string): void {
-  const hit = kept.get(filePath);
+function drop(store: Map<string, Kept>, filePath: string): void {
+  const hit = store.get(filePath);
   if (hit?.timer) clearTimeout(hit.timer);
-  kept.delete(filePath);
+  store.delete(filePath);
 }
 
 /** (Re)arm the let-go clock of a value kept for a while only. */
-function touch(filePath: string, k: Kept, keepMs: number | undefined): void {
+function touch(store: Map<string, Kept>, filePath: string, k: Kept, keepMs: number | undefined): void {
   if (k.timer) clearTimeout(k.timer);
   k.timer = undefined;
   if (keepMs === undefined) return;
-  const timer = setTimeout(() => { if (kept.get(filePath) === k) kept.delete(filePath); }, keepMs);
+  const timer = setTimeout(() => { if (store.get(filePath) === k) store.delete(filePath); }, keepMs);
   timer.unref?.();
   k.timer = timer;
 }
@@ -77,36 +81,79 @@ function deepFreeze<T>(v: T): T {
  * fallback: a missing file keeps the first one.
  */
 export async function readJsonFileKept<T>(filePath: string, fallback: T, options: KeptReadOptions = {}): Promise<Readonly<T>> {
+  // A fallback answered for a failed read is the caller's own, never frozen (as before).
+  return keptRead(kept, filePath, fallback, (raw) => deepFreeze(raw as T), options, (raw) => raw as T);
+}
+
+/** The values of readJsonFileShaped, apart from the frozen ones: one file may be read both ways. */
+const shapedKept = new Map<string, Kept>();
+
+/**
+ * readJsonFileKept for a store whose value is the file reshaped (`shape` on the parsed JSON, or on
+ * `fallback` for a missing file), shared and NOT frozen: `shape` may change the parsed JSON in place,
+ * and the store's own readers are proven never to change what they get (the store says how).
+ */
+export async function readJsonFileShaped<T>(filePath: string, fallback: unknown, shape: (raw: unknown) => T, options: KeptReadOptions = {}): Promise<T> {
+  return keptRead(shapedKept, filePath, fallback, shape, options);
+}
+
+async function keptRead<T>(
+  store: Map<string, Kept>, filePath: string, fallback: unknown, finish: (raw: unknown) => T, options: KeptReadOptions, finishFailed = finish,
+): Promise<T> {
   const stamp = await stampOf(filePath);
-  const hit = kept.get(filePath);
+  const hit = store.get(filePath);
   if (hit && stamp !== null && hit.stamp === stamp) {
-    touch(filePath, hit, options.keepMs);
+    touch(store, filePath, hit, options.keepMs);
     return hit.value as T;
   }
-  let read: T;
+  // A burst of reads at once (a page load, a boot) shares the one parse under way of this version.
+  const loading = stamp === null ? undefined : inflight.get(store)?.get(filePath);
+  if (loading && loading.stamp === stamp) {
+    // Only a value that was kept is shared: a failed read's fallback stays its own caller's.
+    const r = await loading.read.catch(() => null);
+    if (r?.kept) return r.value as T;
+  }
+  if (stamp === null) return (await parseKept(store, filePath, stamp, fallback, finish, options, finishFailed)).value;
+  let byFile = inflight.get(store);
+  if (!byFile) { byFile = new Map(); inflight.set(store, byFile); }
+  const read = parseKept(store, filePath, stamp, fallback, finish, options, finishFailed);
+  const entry = { stamp, read };
+  byFile.set(filePath, entry);
+  try { return (await read).value; } finally { if (byFile.get(filePath) === entry) byFile.delete(filePath); }
+}
+
+/** The parses under way, per store and file. */
+const inflight = new Map<Map<string, Kept>, Map<string, { stamp: string; read: Promise<{ value: unknown; kept: boolean }> }>>();
+
+async function parseKept<T>(
+  store: Map<string, Kept>, filePath: string, stamp: string | null, fallback: unknown, finish: (raw: unknown) => T, options: KeptReadOptions, finishFailed: (raw: unknown) => T,
+): Promise<{ value: T; kept: boolean }> {
+  let read: unknown;
   try {
     // Throw on a failed read whatever the caller asked: a fallback for a file that exists and
     // could not be read is never kept (a missing file is still the fallback, kept as 'none').
-    read = await readJsonFile<T>(filePath, fallback, { readErrors: 'throw' });
+    read = await readJsonFile<unknown>(filePath, fallback, { readErrors: 'throw' });
   } catch (err) {
-    drop(filePath);
+    drop(store, filePath);
     if (options.readErrors === 'throw' || (err instanceof Error && err.message.startsWith('Failed to parse'))) throw err;
-    return await readJsonFile<T>(filePath, fallback, { readErrors: options.readErrors }); // logs it and answers the fallback, as before
+    // Logs it and answers the fallback, as before.
+    return { value: finishFailed(await readJsonFile<unknown>(filePath, fallback, { readErrors: options.readErrors })), kept: false };
   }
-  const value = deepFreeze(read);
+  const value = finish(read);
   // Stamped before the read: a write during it changes the stamp, so the next read parses again.
-  drop(filePath);
+  drop(store, filePath);
   if (stamp !== null) {
     const k: Kept = { stamp, value, chars: stamp === 'none' ? 0 : Number(stamp.split(':')[1]) || 0 };
-    kept.set(filePath, k);
-    touch(filePath, k, options.keepMs);
+    store.set(filePath, k);
+    touch(store, filePath, k, options.keepMs);
   }
-  return value;
+  return { value, kept: stamp !== null };
 }
 
 /** Drop the kept value of a file this process just wrote (optional: the stamp catches it too). */
 export function forgetKeptJson(filePath: string): void {
-  drop(filePath);
+  drop(kept, filePath);
+  drop(shapedKept, filePath);
 }
 
 registerMemoryHolder({
@@ -116,10 +163,12 @@ registerMemoryHolder({
   // An estimate: the parsed objects of a JSON file take about four times its bytes.
   read: () => {
     let bytes = 0;
-    for (const k of kept.values()) bytes += k.chars * 4;
-    return { entries: kept.size, bytes };
+    for (const k of [...kept.values(), ...shapedKept.values()]) bytes += k.chars * 4;
+    return { entries: kept.size + shapedKept.size, bytes };
   },
 });
 
 /** Tests only. */
-export function _resetJsonKeptForTesting(): void { for (const k of [...kept.keys()]) drop(k); }
+export function _resetJsonKeptForTesting(): void {
+  for (const store of [kept, shapedKept]) for (const k of [...store.keys()]) drop(store, k);
+}

@@ -76,6 +76,8 @@ const writesOf = (node?: string) => [...inflight].filter((w) => node === undefin
 function forget(): void {
   for (const t of timers.values()) clearTimeout(t)
   timers.clear(); lastAt.clear(); chains.clear(); writing.clear(); changes.clear(); inflight.clear(); cache.clear(); cacheChars = 0
+  if (viewSweep) clearTimeout(viewSweep)
+  viewSweep = undefined
 }
 
 function fresh(): void {
@@ -153,11 +155,12 @@ export async function syncFromJson(node: string): Promise<void> {
     return
   }
   // An empty file (a write cut short) never empties a node the database holds threads of.
-  if (!text.trim() && current(node).file.threads.length) { keepOurs(node, mark, 'is empty'); return }
+  if (!text.trim() && storedNow(node).threads.length) { keepOurs(node, mark, 'is empty'); return }
   // Changes here not yet in the file: merged by thread, never dropped whole, the database's copy saved first.
   let fromDb = 0
-  if (nodeRow(node)?.dirty && current(node).file.threads.length) {
-    const saved = await saveConflictCopy(node, current(node).file).catch((err) => {
+  const ours = nodeRow(node)?.dirty ? storedNow(node) : null
+  if (ours?.threads.length) {
+    const saved = await saveConflictCopy(node, ours).catch((err) => {
       log.task.warn('org threads: the database copy was not set aside before a merge', { node, error: err instanceof Error ? err.message : String(err) })
       return ''
     })
@@ -230,7 +233,7 @@ async function exportNow(node: string): Promise<void> {
   const seen = changes.get(node) ?? 0
   // Every reply whole, also where the database keeps it once (thread-answer-refs.ts): the file is what
   // an older build and the JSON mode read.
-  const text = JSON.stringify(current(node).file, null, 2) + '\n'
+  const text = JSON.stringify(storedNow(node), null, 2) + '\n'
   const p = threadsJsonFile(node)
   writing.add(node)
   let outside = false
@@ -301,17 +304,35 @@ async function exportWaiting(node: string): Promise<void> {
 
 /**
  * Each node's threads as JSON text, made when it is loaded and at each write (only this server
- * writes them), so a read is one parse and never shares an object with another caller. Dropped when
- * a closed thread in it passes its week (a read leaves that one out), and on any other change.
+ * writes them). Dropped when a closed thread in it passes its week (a read leaves that one out),
+ * and on any other change: a write here (keepCache), a file changed outside (syncFromJson), the sweep.
+ *
+ * `view`: the threads parsed once from that text, which every reader of the node shares until it
+ * changes (dbReadThreads; 2026-11-25: one parse per read of the whole node, about 8 MB of text
+ * across the nodes, was the server's largest JSON.parse after a start, 0.6 to 1.8 GB of objects).
+ * No reader changes what it reads (tests/core/org/threads-shared-read.test.ts lists how each is
+ * kept from it); a write's step gets its own copy (current). Let go VIEW_KEEP_MS after its last read.
  */
-const cache = new Map<string, { texts: string[]; pos: number[]; until: number; chars: number }>()
-/** The cache's bound: the nodes used last are kept, up to this much text. */
-const CACHE_CHARS = 32 * 1024 * 1024
+const cache = new Map<string, { texts: string[]; pos: number[]; until: number; chars: number; view?: ThreadsFile; viewAt?: number }>()
+/**
+ * The cache's bound: the nodes used last are kept, up to this much text (2026-11-25: 2.8 M chars
+ * for every node on the live server). A node's view takes about two bytes per char of its text.
+ */
+const CACHE_CHARS = 16 * 1024 * 1024
 let cacheChars = 0
+/** A node's shared read is let go this long after its last read (the JSON mode's too, threads-store.ts). */
+export const VIEW_KEEP_MS = 60_000
+let viewSweep: ReturnType<typeof setTimeout> | undefined
+let viewParses = 0
 registerMemoryHolder({
   name: 'threads.texts',
-  budgetBytes: CACHE_CHARS * 2,
-  read: () => ({ entries: cache.size, chars: cacheChars }),
+  // The texts (two bytes a char) and their views (measured about two bytes a char of text).
+  budgetBytes: CACHE_CHARS * 4,
+  read: () => {
+    let viewChars = 0
+    for (const c of cache.values()) if (c.view) viewChars += c.chars
+    return { entries: cache.size, bytes: cacheChars * 2 + viewChars * 2 }
+  },
 })
 
 function dropCache(node: string): void {
@@ -338,18 +359,26 @@ function keepCache(node: string, file: ThreadsFile, pos: number[], texts = file.
   }
 }
 
-function cached(node: string): NodeSnapshot | null {
+/** The node's cache entry while it holds; used last, so kept longest. */
+function liveEntry(node: string) {
   const c = cache.get(node)
   if (!c) return null
   if (Date.now() > c.until) { dropCache(node); return null }
-  // Used last: kept longest.
   cache.delete(node)
   cache.set(node, c)
-  const threads = JSON.parse(`[${c.texts.join(',')}]`) as OrgThread[]
-  return snapshotOf({ version: 1, taskId: node, threads }, c.pos, c.texts)
+  return c
 }
 
-/** The node as stored now: from the cache, else loaded (and cached before anyone holds it). */
+const parseTexts = (texts: readonly string[]): OrgThread[] => JSON.parse(`[${texts.join(',')}]`) as OrgThread[]
+
+/** A copy of the node of its own, from the cache: what a write's step may change in place. */
+function cached(node: string): NodeSnapshot | null {
+  const c = liveEntry(node)
+  if (!c) return null
+  return snapshotOf({ version: 1, taskId: node, threads: parseTexts(c.texts) }, c.pos, c.texts)
+}
+
+/** The node as stored now, a copy of the caller's own: from the cache, else loaded (and cached before anyone holds it). */
 function current(node: string): NodeSnapshot {
   const hit = cached(node)
   if (hit) return hit
@@ -358,9 +387,70 @@ function current(node: string): NodeSnapshot {
   return snap
 }
 
+/** The node's threads every reader shares: parsed once per change of the node (`view`). Never changed in place. */
+function sharedView(node: string): ThreadsFile {
+  const c = liveEntry(node)
+  if (c?.view) { c.viewAt = Date.now(); return c.view }
+  // Parsed from the kept text, or loaded (current keeps its text): objects no write's step holds.
+  const view: ThreadsFile = c ? { version: 1, taskId: node, threads: parseTexts(c.texts) } : current(node).file
+  viewParses++
+  freezeReadForTests(view)
+  const kept = cache.get(node)
+  if (kept) { kept.view = view; kept.viewAt = Date.now(); armViewSweep() }
+  return view
+}
+
+/**
+ * The node as stored now, for this module's own one-off looks (an export, a file changed outside):
+ * the readers' view when one is kept, else a parse of its own that is not kept, so a write's
+ * export does not hold a view nobody reads.
+ */
+function storedNow(node: string): ThreadsFile {
+  return liveEntry(node)?.view ?? current(node).file
+}
+
+/**
+ * A test run with WALNUT_THREADS_FREEZE_READS=1 freezes every shared read, so a reader that
+ * changes what it read throws there instead of changing it for every other reader
+ * (tests/core/org/threads-shared-read.test.ts). Never in a server: nothing is frozen at run time.
+ */
+export function freezeReadForTests<T>(file: T): T {
+  if (TEST_PROCESS && process.env.WALNUT_THREADS_FREEZE_READS === '1') deepFreeze(file)
+  return file
+}
+
+function deepFreeze(v: unknown): void {
+  if (!v || typeof v !== 'object' || Object.isFrozen(v)) return
+  Object.freeze(v)
+  for (const k of Object.keys(v)) deepFreeze((v as Record<string, unknown>)[k])
+}
+
+/** One clock for every view: a view not read for VIEW_KEEP_MS is let go (its text stays). */
+function armViewSweep(): void {
+  if (viewSweep) return
+  viewSweep = setTimeout(() => {
+    viewSweep = undefined
+    const old = Date.now() - VIEW_KEEP_MS
+    let left = false
+    for (const c of cache.values()) {
+      if (c.view && (c.viewAt ?? 0) <= old) { c.view = undefined; c.viewAt = undefined }
+      else if (c.view) left = true
+    }
+    if (left) armViewSweep()
+  }, VIEW_KEEP_MS)
+  viewSweep.unref?.()
+}
+
+/** For tests: how many times a node's threads were parsed for its readers (each change of a node at most once). */
+export const _threadViewParsesForTesting = (): number => viewParses
+
+/**
+ * The node's threads, shared by every reader until the node changes: read only. A caller that
+ * changes threads builds new objects (`{ ...t }`, `[...threads]`) or copies what it changes.
+ */
 export async function dbReadThreads(node: string): Promise<ThreadsFile> {
   await syncFromJson(node)
-  return current(node).file
+  return sharedView(node)
 }
 
 /**

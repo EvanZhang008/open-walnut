@@ -10,7 +10,8 @@
  * refused, the way Board writes are.
  */
 import { oneCardOn } from './one-card.js';
-import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
+import { updateJsonFile } from '../../utils/fs.js';
+import { forgetKeptJson, readJsonFileShaped } from '../../utils/json-kept.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { OrgThreadsChangedEvent } from '../event-types.js';
 // Only the leader keeps Threads: every replica (the companion and a host replica alike) holds none.
@@ -21,7 +22,7 @@ import {
   type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadDelivery, type ThreadMessage, type ThreadPatch, type ThreadState, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
 import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
-import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, jsonNodes, threadsJsonFile as threadsFile } from './threads-sync.js';
+import { dbDropExpired, dbMutateThreads, dbReadThreads, dbThreadNodes, flushNodeExport, freezeReadForTests, jsonNodes, threadsJsonFile as threadsFile, VIEW_KEEP_MS } from './threads-sync.js';
 import { askOwnerKept, askOwnerOf, askOwnerTask, askPointerView, pointerTaskIds } from './thread-task-ask.js';
 import { heldCandidate, ownThreadTaskIds } from './thread-subject-pairs.js';
 import type { ThreadAskedIn, ThreadHeldAsk } from './thread-view.js';
@@ -54,12 +55,18 @@ export async function threadTaskIds(): Promise<string[]> {
   return (await useThreadsDb()) ? dbThreadNodes() : jsonNodes();
 }
 
+/**
+ * The node's threads, READ ONLY: every reader of a node shares one parsed value until the node
+ * changes (a write here, or its file changed outside), in either store (threads-sync.ts sharedView;
+ * the JSON mode by the file's stamp, json-kept.ts). A caller that changes threads builds new
+ * objects or copies what it changes; the writes below get a copy of their own.
+ */
 export async function readThreads(taskId: string): Promise<ThreadsFile> {
   if (isFollower()) return emptyThreads(taskId);
   const file = threadsFile(taskId);
   if (await useThreadsDb()) return dbReadThreads(taskId);
   await jsonReady(taskId);
-  return normalizeThreads(await readJsonFile<unknown>(file, null), taskId);
+  return readJsonFileShaped(file, null, (raw) => freezeReadForTests(normalizeThreads(raw, taskId)), { keepMs: VIEW_KEEP_MS });
 }
 
 /**
@@ -190,7 +197,12 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
   // false: the experiment went off before the database write began, so the file takes it.
   if (!((await useThreadsDb()) && (await dbMutateThreads(taskId, step, threadsDbOnNow)))) {
     await jsonReady(taskId);
-    await updateJsonFile<unknown>(file, null, (raw) => step(normalizeThreads(raw, taskId)));
+    try {
+      await updateJsonFile<unknown>(file, null, (raw) => step(normalizeThreads(raw, taskId)));
+    } finally {
+      // The shared read goes now, not at the next stamp check.
+      forgetKeptJson(file);
+    }
   }
   if (entered.length) {
     const threads = entered;

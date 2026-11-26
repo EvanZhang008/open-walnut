@@ -261,8 +261,10 @@ function ownerThreadsChanged(taskId: string, lane: (id: string) => void = mark):
 }
 
 function threadsChanged(taskId?: string): void {
-  if (taskId) { nodeThreads.delete(taskId); threadsGen.set(taskId, (threadsGen.get(taskId) ?? 0) + 1); }
-  else { nodeThreads.clear(); threadsGenAll++; }
+  // Its join too: a read of an unchanged node is the same rows (readThreads shares one value), so
+  // `rows ===` no longer tells that a task it points at changed (2026-11-25).
+  if (taskId) { nodeThreads.delete(taskId); joined.delete(taskId); threadsGen.set(taskId, (threadsGen.get(taskId) ?? 0) + 1); }
+  else { nodeThreads.clear(); joined.clear(); threadsGenAll++; }
 }
 
 /** Per org node: its Threads joined with the task asks they point at (withTaskAsks), kept while
