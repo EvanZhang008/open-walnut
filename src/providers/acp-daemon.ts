@@ -56,6 +56,10 @@ const GRACEFUL_CANCEL_RPC_TIMEOUT_MS = 15_000
 const ABORT_WAIT_MS = 750
 /** A strict stop's wait after the worker's shutdown answer, before it asks the group with SIGTERM. */
 const STRICT_SHUTDOWN_WAIT_MS = 3_000
+/** A strict stop answers within this (the server's own wait for a stop answer is 30 s): out of time is an error. */
+const STRICT_STOP_BUDGET_MS = 25_000
+/** What a strict stop keeps in hand before it asks ps about a group (two ps calls of 5 s at most). */
+const STRICT_PS_STEP_MS = 10_500
 const KILL_GRACE_MS = 750
 
 interface AcpWorkerEntry<W> {
@@ -107,8 +111,18 @@ interface AcpWorkerEntry<W> {
   registryStart?: string
 }
 
+/** One member of a process group as ps lists it. */
+export interface AcpGroupMember { start: string; command: string }
+
 /** What `ps` says about one pid now; 'unknown' when it could not be asked. */
 export type AcpProcessInfo = { state: 'gone' } | { state: 'alive'; start: string; command: string } | { state: 'unknown' }
+
+/**
+ * A worker's process group kept after its leader exited (it was stopping, or it exited on its own): what a strict
+ * stop proves it by. `seenAt` (this daemon life only): when the leader was seen gone; `journal`: the worker's journal
+ * path, which its own command line names. A group read back from the pid file has neither and is never signalled.
+ */
+interface KeptGroup { pid: number; cmd: string; adapter: string; start?: string; seenAt?: number; journal?: string }
 
 /** A pid file row: a pid alone (older daemons), or the pid with what identifies its worker. */
 type PidRow = number | { pid: number; cmd?: string; adapter?: string; start?: string; boot?: number; stopping?: boolean; survive?: boolean; cwd?: string; taskDir?: string; deadlineAt?: number; orphanGraceMs?: number }
@@ -135,6 +149,8 @@ export interface AcpDaemonDeps<W> {
   processInfo?: (pid: number) => Promise<AcpProcessInfo>
   /** The commands of the processes in one process group, null when ps gives no answer (tests stub it). */
   groupCommands?: (pgid: number) => Promise<string[] | null>
+  /** The members of one process group with their starts, null when ps gives no answer (tests stub it). */
+  groupMembers?: (pgid: number) => Promise<AcpGroupMember[] | null>
   /** This host's boot (tests stub it). */
   bootMinute?: () => number
   /**
@@ -171,14 +187,15 @@ function psField(pid: number, field: string, run: typeof execFile): Promise<stri
   })
 }
 
-function psGroupCommands(pgid: number, run: typeof execFile = execFile): Promise<string[] | null> {
+/** The members of one process group, each with its start (ps lstart, C locale) and command line; null when ps gives no answer. */
+function psGroupMembers(pgid: number, run: typeof execFile = execFile, env: NodeJS.ProcessEnv = process.env): Promise<AcpGroupMember[] | null> {
   return new Promise((resolve) => {
-    run('ps', ['-A', '-ww', '-o', 'pgid=', '-o', 'command='], { timeout: 5_000, maxBuffer: 16 << 20 }, (error, stdout) => {
+    run('ps', ['-A', '-ww', '-o', 'pgid=', '-o', 'lstart=', '-o', 'command='], { timeout: 5_000, maxBuffer: 16 << 20, env: { ...env, LC_ALL: 'C' } }, (error, stdout) => {
       if (error) return resolve(null)
-      const out: string[] = []
+      const out: AcpGroupMember[] = []
       for (const line of String(stdout).split('\n')) {
-        const m = /^\s*(\d+)\s+(.*)$/.exec(line)
-        if (m && Number(m[1]) === pgid) out.push(m[2])
+        const m = /^\s*(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+)\s+(.*)$/.exec(line)
+        if (m && Number(m[1]) === pgid) out.push({ start: m[2]!.replace(/\s+/g, ' '), command: m[3]! })
       }
       resolve(out)
     })
@@ -243,14 +260,15 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const workers = new Map<string, AcpWorkerEntry<W>>()
   // A stopping worker that exited while its process group lives on: kept (also in the pid file) until that group is gone.
-  const exitedGroups = new Map<string, { pid: number; cmd: string; adapter: string; boot: number; start?: string }>()
+  const exitedGroups = new Map<string, KeptGroup & { boot: number }>()
   const pidFile = path.join(daemonDir, 'acp-workers.json')
   const use = deps.childProcess ?? {}
   const baseEnv = use.env ?? process.env
   const processInfo = deps.processInfo ?? ((pid: number) => psProcessInfo(pid, use.execFile))
   // Every request id of this daemon life is at least this (acp-survive.ts firstRpcId): a lower one is an earlier life's.
   const lifeFirstRpcId = firstRpcId()
-  const groupCommands = deps.groupCommands ?? ((pgid: number) => psGroupCommands(pgid, use.execFile))
+  const groupMembers = deps.groupMembers ?? ((pgid: number) => psGroupMembers(pgid, use.execFile, baseEnv))
+  const groupCommands = deps.groupCommands ?? (async (pgid: number) => (await groupMembers(pgid))?.map((m) => m.command) ?? null)
   const boot = deps.bootMinute ?? bootMinute
   const registryDir = deps.registryDir ?? path.join(daemonDir, 'detached')
   const registryStart = deps.registryStart ?? ((pid: number) => psStart(pid, use))
@@ -265,7 +283,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   // A worker that exited on its own (not stopping) while its process group lives on (the adapter, its tools): only
   // a strict stop looks at it, and ends that group once ps proves it still runs this worker's adapter (in memory:
   // a daemon restart's sweep takes the rest).
-  const leftGroups = new Map<string, { pid: number; cmd: string; adapter: string }>()
+  const leftGroups = new Map<string, KeptGroup>()
   ensureOwnerOnlyAcpStorage()
 
   function journalPathFor(sid: string): string {
@@ -464,12 +482,14 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     for (const ws of entry.subscribers) {
       if (isWsOpen(ws)) { try { sendEvent(ws, 'acp_state', { sid, state: 'dead', reason }) } catch {} }
     }
-    if (entry.pid && !entry.exited()) {
+    // A strict stop (a leader switch's) never force kills: it reaps only once the group is gone.
+    if (entry.pid && !entry.exited() && !entry.strictStop) {
       signalProcessGroup(entry.pid, 'SIGKILL')
     }
-    if (!entry.stopping && entry.pid && entry.exited() && isProcessGroupAlive(entry.pid)) leftGroups.set(sid, { pid: entry.pid, cmd: entry.cmd, adapter: entry.adapter })
-    if ((deps.strictStop?.() || entry.strictStop) && entry.stopping && entry.pid && isProcessGroupAlive(entry.pid)) {
-      exitedGroups.set(sid, { pid: entry.pid, cmd: entry.cmd, adapter: entry.adapter, boot: boot(), ...(entry.start ? { start: entry.start } : {}) })
+    const kept = entry.pid ? { pid: entry.pid, cmd: entry.cmd, adapter: entry.adapter, ...(entry.start ? { start: entry.start } : {}), seenAt: Date.now(), journal: entry.journalPath } : null
+    if (kept && !entry.stopping && entry.exited() && groupAlive(kept.pid)) leftGroups.set(sid, kept)
+    if (kept && (deps.strictStop?.() || entry.strictStop) && entry.stopping && isProcessGroupAlive(kept.pid)) {
+      exitedGroups.set(sid, { ...kept, boot: boot() })
     }
     if (entry.survive) {
       entry.survive.close()
@@ -881,6 +901,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     if (!entry || entry.state !== 'running') {
       return { id: -1, ok: false, error: { kind: 'no_worker', message: 'no live ACP worker for ' + sid } }
     }
+    // A leader switch's strict stop owns this worker's end: no hard abort (its SIGKILL) beside it.
+    if (entry.strictStop) return { id: -1, ok: false, error: { kind: 'worker_stopping', message: 'a leader switch is stopping the ACP worker for ' + sid } }
     const beforeTerminal = entry.terminalVersion
     const interruptedCommandId = entry.activeCommandId ?? undefined
     const interruptedControlCommandId = entry.activeControlCommandId ?? undefined
@@ -956,20 +978,13 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }
   }
 
-  /**
-   * `strict` (a leader switch's stop, daemon-session-stop.ts): a worker still being adopted is adopted first (one that
-   * cannot be is an error, never "nothing to stop"), and the answer comes only once its process group is gone; a
-   * group that outlives the wait is an error with no force kill. A Demo's daemon stops every worker this way.
-   */
+  /** `strict`: a leader switch's stop (acpStopStrict). A worker a strict stop already touched is always stopped that way. */
   async function acpStop(sid: string, opts: { strict?: boolean } = {}): Promise<void> {
-    if (opts.strict) await settleForStrictStop(sid)
+    if (opts.strict || workers.get(sid)?.strictStop) return acpStopStrict(sid)
     const entry = workers.get(sid)
-    if (!entry || entry.state !== 'running') return opts.strict ? endGroupsStrict(sid) : awaitExitedGroup(sid)
+    if (!entry || entry.state !== 'running') return awaitExitedGroup(sid)
     entry.stopping = true
-    // Once a strict stop asked, every later stop of this worker is strict too (the idle sweep, a plain acpStop).
-    if (opts.strict) entry.strictStop = true
-    const strict = !!entry.strictStop
-    if (!deps.strictStop?.() && !strict) {
+    if (!deps.strictStop?.()) {
       await rpc(entry, 'shutdown')
       setTimeout(() => {
         if (workers.get(sid) !== entry || entry.state !== 'running') return
@@ -982,68 +997,124 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }
     const pid = entry.pid
     await rpc(entry, 'shutdown', undefined, 6000)
-    if (pid && !await waitFor(() => !isProcessGroupAlive(pid), strict ? STRICT_SHUTDOWN_WAIT_MS : 6000)) {
-      // A strict stop asks the group once more, as a native stop does (SIGTERM, never SIGKILL): a tool the
-      // graceful shutdown leaves running (a dev server) would otherwise hold every retry.
-      if (!strict || !ownsGroup(sid, entry, pid) || (signalProcessGroup(pid, 'SIGTERM'), !await waitFor(() => !isProcessGroupAlive(pid), 6000))) {
-        throw new Error('ACP worker shutdown is still pending; its process group has not exited')
-      }
+    if (pid && !await waitFor(() => !isProcessGroupAlive(pid), 6000)) {
+      throw new Error('ACP worker shutdown is still pending; its process group has not exited')
     }
     if (workers.get(sid) === entry) reapWorker(sid, 'stopped')
     // The group this stop waited on is gone; an older one of the same runtime must be too.
     if (exitedGroups.get(sid)?.pid === pid) { exitedGroups.delete(sid); persistPids() }
-    if (leftGroups.get(sid)?.pid === pid) leftGroups.delete(sid)
-    await (strict ? endGroupsStrict(sid) : awaitExitedGroup(sid))
+    await awaitExitedGroup(sid)
   }
 
-  /** The worker `entry` still is this daemon's, or its group's members are its own (the leader exited, the group lives). */
-  function ownsGroup(sid: string, entry: AcpWorkerEntry<W>, pid: number): boolean {
-    return pid > 1 && (workers.get(sid) === entry || exitedGroups.get(sid)?.pid === pid)
+  /**
+   * A leader switch's stop of an ACP worker (daemon-session-stop.ts): the answer comes only once every process group
+   * of the worker is gone, within STRICT_STOP_BUDGET_MS (out of time is an error, the server asks again). A worker
+   * still being adopted is adopted first, a straggler of the last daemon life is judged first. The worker is asked to
+   * shut down; a group that outlives that (a tool it left running) gets one SIGTERM once its identity is proved
+   * (proveGroup), never SIGKILL; a group whose identity is not proved is an error, never signalled.
+   */
+  async function acpStopStrict(sid: string): Promise<void> {
+    const deadline = Date.now() + STRICT_STOP_BUDGET_MS
+    await settleForStrictStop(sid, deadline)
+    const entry = workers.get(sid)
+    if (entry && entry.state === 'running') {
+      entry.stopping = true
+      entry.strictStop = true
+      const pid = entry.pid
+      await rpc(entry, 'shutdown', undefined, Math.max(1, within(deadline, 6000)))
+      if (pid && !await waitFor(() => !groupAlive(pid), within(deadline, STRICT_SHUTDOWN_WAIT_MS))) {
+        const kept = exitedGroups.get(sid)
+        await endGroupStrict(kept?.pid === pid ? kept : {
+          pid, cmd: entry.cmd, adapter: entry.adapter, ...(entry.start ? { start: entry.start } : {}), journal: entry.journalPath,
+          ...(entry.exited() ? { seenAt: Date.now() } : {}),
+        }, deadline)
+      }
+      if (workers.get(sid) === entry) reapWorker(sid, 'stopped')
+    }
+    for (const group of [exitedGroups.get(sid), leftGroups.get(sid)]) {
+      if (!group) continue
+      await endGroupStrict(group, deadline)
+      if (exitedGroups.get(sid) === group) { exitedGroups.delete(sid); persistPids() }
+      if (leftGroups.get(sid) === group) leftGroups.delete(sid)
+    }
+  }
+
+  /** The rest of a strict stop's budget, at most `ms`. */
+  function within(deadline: number, ms: number): number {
+    return Math.max(0, Math.min(ms, deadline - Date.now()))
+  }
+
+  function outOfTime(deadline: number, needMs: number): void {
+    if (deadline - Date.now() < needMs) throw new Error(`ACP worker shutdown is still pending; the stop ran out of its ${STRICT_STOP_BUDGET_MS / 1000} s`)
   }
 
   /**
    * Before a strict stop: a worker still being adopted is adopted (one that cannot be is an error, never "nothing to
-   * stop"), and a straggler row of the last daemon life waits for its sweep (one ps could not settle is an error).
+   * stop"). A straggler row of the last daemon life its boot sweep did not settle (ps gave no answer, or the sweep has
+   * not come to it) is judged now; a proved one is ended as a strict stop ends a group (SIGTERM, never the sweep's
+   * SIGKILL), one ps cannot judge is an error.
    */
-  async function settleForStrictStop(sid: string): Promise<void> {
-    if (!(await adopted(sid))) throw new Error(adoptingRefusal(sid).error)
+  async function settleForStrictStop(sid: string, deadline: number): Promise<void> {
+    const late = new Promise<'late'>((resolve) => { setTimeout(() => resolve('late'), within(deadline, 10_000)).unref?.() })
+    if (await Promise.race([adopted(sid), late]) !== true) throw new Error(adoptingRefusal(sid).error)
     const straggler = stragglers.get(sid)
-    if (!straggler || await straggler.settled !== 'unknown') return
-    // ps gave the boot sweep no answer: asked once more now, as adopted() does for a kept row.
-    if (await sweepStraggler(sid, straggler.row).catch(() => 'unknown' as const) === 'unknown') {
+    if (!straggler) return
+    const settled = await Promise.race([straggler.settled, new Promise<'late'>((resolve) => { setTimeout(() => resolve('late'), within(deadline, 3_000)).unref?.() })])
+    if (settled === 'settled') return
+    outOfTime(deadline, STRICT_PS_STEP_MS)
+    const judged = await judgeStraggler(sid, straggler.row).catch(() => ({ verdict: 'unknown' as const, pid: 0 }))
+    if (judged.verdict === 'unknown') {
       throw new Error(`the ACP worker for ${sid} from the last daemon life could not be checked (ps gave no answer); its process may still run`)
     }
+    if (judged.verdict !== 'leave') await termProvedGroup(judged.pid, deadline)
     if (stragglers.get(sid) === straggler) stragglers.delete(sid)
   }
 
   /**
-   * A strict stop with no running worker: a group the worker left behind (it exited while stopping, or on its own)
-   * gets one SIGTERM, never SIGKILL, and the answer comes once it is gone. Its id is still that group's: a process
-   * group's id is not reused while it has members.
+   * Whether a kept group of id `g.pid` still is this worker's, asked of ps only (no signal): 'ours' while its leader
+   * runs with the worker's recorded start (or, with no start recorded yet, names the worker's journal), or, with the
+   * leader gone, while one of its members started no later than this daemon saw the leader gone (`seenAt`): that
+   * member was in the group then, and a group of the same id made later (the id reused) has only later members. A
+   * tool proves it as well as the adapter, whatever its command. A group read back from the pid file (no seenAt) is
+   * never proved.
    */
-  async function endGroupsStrict(sid: string): Promise<void> {
-    for (const group of [exitedGroups.get(sid), leftGroups.get(sid)]) {
-      const pid = group?.pid
-      if (!group || !pid || pid <= 1) continue
-      const forget = () => {
-        if (exitedGroups.get(sid) === group) { exitedGroups.delete(sid); persistPids() }
-        if (leftGroups.get(sid) === group) leftGroups.delete(sid)
-      }
-      if (!isProcessGroupAlive(pid) || await waitFor(() => !isProcessGroupAlive(pid), 500)) { forget(); continue }
-      // The id was this worker's group when it was kept, maybe hours ago: signalled only while ps shows it still
-      // runs this worker's adapter or worker (as the straggler sweep proves it). Anything else is no proof: an
-      // error, and no signal (a group of that id may be another program's now).
-      const members = await groupCommands(pid)
-      if (!isProcessGroupAlive(pid)) { forget(); continue }
-      const ours = !!members?.some((command) => (!!group.adapter && command.includes(group.adapter)) || (!!group.cmd && command.includes(group.cmd)))
-      if (!ours) {
-        throw new Error(members === null
-          ? `ACP worker shutdown is still pending; ps gave no answer about its process group ${pid}, not signalled`
-          : `ACP worker shutdown is still pending; process group ${pid} no longer shows this worker's adapter, not signalled`)
-      }
-      signalProcessGroup(pid, 'SIGTERM')
-      if (!await waitFor(() => !isProcessGroupAlive(pid), 6000)) throw new Error('ACP worker shutdown is still pending; its process group has not exited')
-      forget()
+  async function proveGroup(g: KeptGroup): Promise<'ours' | 'gone' | 'unproved' | 'unknown'> {
+    if (!groupAlive(g.pid)) return 'gone'
+    const leader = await processInfo(g.pid)
+    if (leader.state === 'unknown') return 'unknown'
+    if (leader.state === 'alive') {
+      const ours = g.start ? leader.start === g.start : (!!g.journal && leader.command.includes(g.journal))
+      return ours ? 'ours' : 'unproved'
+    }
+    if (g.seenAt === undefined) return 'unproved'
+    const members = await groupMembers(g.pid)
+    if (members === null) return 'unknown'
+    if (!groupAlive(g.pid)) return 'gone'
+    // ps gives whole seconds: a member started in the second the leader was seen gone counts.
+    const seenSecond = Math.floor(g.seenAt / 1000) * 1000
+    const ours = members.some((m) => { const at = Date.parse(m.start); return Number.isFinite(at) && at <= seenSecond })
+    return ours ? 'ours' : 'unproved'
+  }
+
+  /** A kept group at a strict stop: gone, or proved and ended with SIGTERM; anything else an error with no signal. */
+  async function endGroupStrict(g: KeptGroup, deadline: number): Promise<void> {
+    if (await waitFor(() => !groupAlive(g.pid), within(deadline, 500))) return
+    outOfTime(deadline, STRICT_PS_STEP_MS)
+    const verdict = await proveGroup(g)
+    if (verdict === 'gone') return
+    if (verdict !== 'ours') {
+      throw new Error(verdict === 'unknown'
+        ? `ACP worker shutdown is still pending; ps gave no answer about its process group ${g.pid}, not signalled`
+        : `ACP worker shutdown is still pending; process group ${g.pid} is not proved to be this worker's any more, not signalled`)
+    }
+    await termProvedGroup(g.pid, deadline)
+  }
+
+  /** One SIGTERM to a group whose identity was just proved, and the wait for it to be gone (never SIGKILL). */
+  async function termProvedGroup(pgid: number, deadline: number): Promise<void> {
+    signalGroupOnly(pgid, 'SIGTERM')
+    if (!await waitFor(() => !groupAlive(pgid), within(deadline, 6000))) {
+      throw new Error('ACP worker shutdown is still pending; its process group has not exited after SIGTERM')
     }
   }
 
@@ -1079,18 +1150,22 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     return !!e && e.state === 'running'
   }
 
-  /** Whether `sid` names a worker of this daemon: running, still being adopted, or a stopped one whose group lives on. */
-  function holds(sid: string): boolean {
-    return workers.has(sid) || keptRows.has(sid) || adopting.has(sid) || stragglers.has(sid) || exitedGroupAlive(sid) || leftGroupAlive(sid)
-  }
-
-  /** True while the group a worker left when it exited on its own still runs; forgets it once the group is gone. */
-  function leftGroupAlive(sid: string): boolean {
-    const group = leftGroups.get(sid)
-    if (!group) return false
-    if (isProcessGroupAlive(group.pid)) return true
-    leftGroups.delete(sid)
-    return false
+  /**
+   * What this daemon holds for `sid`, or null: a worker running or stopping, one still being adopted, a straggler of
+   * the last daemon life not yet settled, or a group a worker left that still runs. `pid`: its process group's id.
+   */
+  function heldBy(sid: string): { pid: number | null } | null {
+    const worker = workers.get(sid)
+    if (worker) return { pid: worker.pid ?? null }
+    const kept = keptRows.get(sid)
+    if (kept || adopting.has(sid)) return { pid: kept?.pid ?? null }
+    const straggler = stragglers.get(sid)
+    if (straggler) return { pid: typeof straggler.row === 'number' ? straggler.row : straggler.row?.pid ?? null }
+    if (exitedGroupAlive(sid)) return { pid: exitedGroups.get(sid)!.pid }
+    const left = leftGroups.get(sid)
+    if (left && groupAlive(left.pid)) return { pid: left.pid }
+    if (left) leftGroups.delete(sid)
+    return null
   }
 
   /** Read only: every worker this daemon holds (demo.quiesce answers with them, so a reset stops each). */
@@ -1407,47 +1482,65 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
    * stop the file names pids that belong to anything.
    */
   async function sweepStraggler(sid: string, row: PidRow): Promise<'settled' | 'unknown'> {
+    const { verdict, pid } = await judgeStraggler(sid, row)
+    if (verdict === 'kill-leader') {
+      if (signalProcessGroup(pid, 'SIGKILL')) log('info', 'acp: straggler process group killed', { sid, pid })
+    } else if (verdict === 'kill-group') {
+      if (signalGroupOnly(pid, 'SIGKILL')) log('info', 'acp: straggler process group killed', { sid, pid, leaderGone: true })
+    }
+    return verdict === 'unknown' ? 'unknown' : 'settled'
+  }
+
+  /**
+   * The judgement of the sweep above, asked of ps only (no signal): 'kill-leader' (the pid still is the worker),
+   * 'kill-group' (the worker is gone, its group still runs its adapter), 'leave' (not provably ours, or nothing left),
+   * or 'unknown' (ps gave no answer). A strict stop acts on it with SIGTERM (settleForStrictStop).
+   */
+  async function judgeStraggler(sid: string, row: PidRow): Promise<{ verdict: 'kill-leader' | 'kill-group' | 'leave' | 'unknown'; pid: number }> {
     const pid = typeof row === 'number' ? row : row?.pid
-    if (!Number.isInteger(pid) || pid <= 1) return 'settled'
+    if (!Number.isInteger(pid) || pid <= 1) return { verdict: 'leave', pid }
     const cmd = typeof row === 'number' ? 'acp-worker' : (row.cmd || 'acp-worker')
     const start = typeof row === 'number' ? undefined : row.start
     const recordedBoot = typeof row === 'number' ? undefined : row.boot
     if (typeof recordedBoot === 'number' && Math.abs(boot() - recordedBoot) > 2) {
       log('info', 'acp: straggler row is from before this host booted; left alone', { sid, pid })
-      return 'settled'
+      return { verdict: 'leave', pid }
     }
     const info = await processInfo(pid)
     if (info.state === 'unknown') {
       log('warn', 'acp: straggler left alone, ps gave no answer', { sid, pid })
-      return 'unknown'
+      return { verdict: 'unknown', pid }
     }
     if (info.state === 'alive') {
       const ours = start ? info.start === start : info.command.includes(cmd)
-      if (!ours) {
-        log('info', 'acp: straggler pid now belongs to another process; left alone', { sid, pid })
-        return 'settled'
-      }
-      if (signalProcessGroup(pid, 'SIGKILL')) log('info', 'acp: straggler process group killed', { sid, pid })
-      return 'settled'
+      if (!ours) log('info', 'acp: straggler pid now belongs to another process; left alone', { sid, pid })
+      return { verdict: ours ? 'kill-leader' : 'leave', pid }
     }
     // The worker is gone; its group may live on (the adapter and its tools). A
     // group of that id that runs anything but the worker's adapter is someone else's.
     const adapter = typeof row === 'number' ? undefined : row.adapter
-    if (!adapter || typeof recordedBoot !== 'number' || !groupAlive(pid)) return 'settled'
+    if (!adapter || typeof recordedBoot !== 'number' || !groupAlive(pid)) return { verdict: 'leave', pid }
     const members = await groupCommands(pid)
     if (!members?.some((command) => command.includes(adapter))) {
       log('info', 'acp: straggler group runs no adapter of this worker; left alone', { sid, pid })
-      return members === null ? 'unknown' : 'settled'
+      return { verdict: members === null ? 'unknown' : 'leave', pid }
     }
-    try {
-      process.kill(-pid, 'SIGKILL')
-      log('info', 'acp: straggler process group killed', { sid, pid, leaderGone: true })
-    } catch {}
-    return 'settled'
+    return { verdict: 'kill-group', pid }
   }
 
-  function groupAlive(pid: number): boolean {
-    try { process.kill(-pid, 0); return true } catch { return false }
+  /** The group answers signal 0; only ESRCH proves it is gone (EPERM is some live group). */
+  function groupAlive(pgid: number): boolean {
+    if (!Number.isInteger(pgid) || pgid <= 1) return false
+    try { process.kill(-pgid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH' }
+  }
+
+  /**
+   * A signal to a process group only (no single-pid fallback, unlike signalProcessGroup): a strict stop's SIGTERM
+   * and the sweep's SIGKILL of a group whose leader is gone, where the bare pid may already be another process's.
+   */
+  function signalGroupOnly(pgid: number, signal: NodeJS.Signals): boolean {
+    if (!Number.isInteger(pgid) || pgid <= 1) return false
+    try { process.kill(-pgid, signal); return true } catch { return false }
   }
 
   function signalProcessGroup(pid: number, signal: NodeJS.Signals): boolean {
@@ -1541,7 +1634,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     subscribe,
     removeSubscriber,
     hasWorker,
-    holds,
+    heldBy,
     listWorkers,
     startupRepair,
     holdingWorkers,

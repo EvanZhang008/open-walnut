@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createAcpDaemon, type AcpProcessInfo } from '../../src/providers/acp-daemon.js'
+import { createAcpDaemon, type AcpGroupMember, type AcpProcessInfo } from '../../src/providers/acp-daemon.js'
 
 // Starts the adapter it is given in its own group, answers every op, and exits by itself (no shutdown)
 // once its exit file exists.
@@ -65,7 +65,7 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
-function daemon(extra: { groupCommands?: (pgid: number) => Promise<string[] | null>; processInfo?: (pid: number) => Promise<AcpProcessInfo>; bootMinute?: () => number } = {}) {
+function daemon(extra: { groupMembers?: (pgid: number) => Promise<AcpGroupMember[] | null>; processInfo?: (pid: number) => Promise<AcpProcessInfo>; bootMinute?: () => number } = {}) {
   return createAcpDaemon<FakeWs>({
     streamsDir: path.join(dir, 'streams'), daemonDir: path.join(dir, 'daemon'),
     sendEvent: (ws, ev, data) => { ws.frames.push({ ev, ...data }) }, isWsOpen: (ws) => ws.open, log: () => {},
@@ -99,33 +99,59 @@ async function workerThatLeftItsAdapter(acp: ReturnType<typeof daemon>, sid: str
 }
 
 describe('a strict ACP stop with no running worker', () => {
-  it('ends the group a worker left (its adapter) with SIGTERM once ps shows that adapter', async () => {
+  it('ends the group a worker left (its adapter) with SIGTERM once ps proves the group (a member from before the exit)', async () => {
     const acp = daemon()
     const adapterPid = await workerThatLeftItsAdapter(acp, 'rt-left-1')
-    expect(acp.holds('rt-left-1')).toBe(true)
+    expect(acp.heldBy('rt-left-1')).toEqual({ pid: expect.any(Number) })
     await acp.acpStop('rt-left-1', { strict: true })
     expect(alive(adapterPid)).toBe(false)
-    expect(acp.holds('rt-left-1')).toBe(false)
+    expect(acp.heldBy('rt-left-1')).toBeNull()
     // A plain stop of the same left group is what it was: it does not look at it.
     await acp.acpStop('rt-left-1')
   }, 30_000)
 
-  it('refuses, and signals nothing, when ps shows no adapter of the worker in that group or gives no answer', async () => {
-    let members: string[] | null = []
-    const acp = daemon({ groupCommands: async () => members })
+  it('refuses, and signals nothing, when no member of that group started before the worker was seen gone, or ps gives no answer', async () => {
+    let members: AcpGroupMember[] | null = []
+    const acp = daemon({ groupMembers: async () => members })
     const adapterPid = await workerThatLeftItsAdapter(acp, 'rt-left-2')
-    await expect(acp.acpStop('rt-left-2', { strict: true })).rejects.toThrow(/no longer shows this worker's adapter, not signalled/)
+    const notProved = /is not proved to be this worker's any more, not signalled/
+    await expect(acp.acpStop('rt-left-2', { strict: true })).rejects.toThrow(notProved)
+    expect(alive(adapterPid)).toBe(true)
+    // The adapter's very command, but started after the worker was seen gone: a group of a reused id, not this one.
+    const adapter = path.join(dir, 'adapter.cjs')
+    members = [{ start: new Date(Date.now() + 60_000).toString().slice(0, 24), command: `${process.execPath} ${adapter}` }]
+    await expect(acp.acpStop('rt-left-2', { strict: true })).rejects.toThrow(notProved)
     expect(alive(adapterPid)).toBe(true)
     members = null
     await expect(acp.acpStop('rt-left-2', { strict: true })).rejects.toThrow(/ps gave no answer about its process group .*not signalled/)
     expect(alive(adapterPid)).toBe(true)
-    expect(acp.holds('rt-left-2')).toBe(true)
+    expect(acp.heldBy('rt-left-2')).not.toBeNull()
     // Once the group is gone by itself, the record goes and the stop answers.
     fs.writeFileSync(path.join(dir, 'release'), '')
     expect(await until(() => !alive(adapterPid), 10_000)).toBe(true)
-    await until(() => !acp.holds('rt-left-2'), 5_000)
+    await until(() => acp.heldBy('rt-left-2') === null, 5_000)
     await acp.acpStop('rt-left-2', { strict: true })
-    expect(acp.holds('rt-left-2')).toBe(false)
+    expect(acp.heldBy('rt-left-2')).toBeNull()
+  }, 30_000)
+})
+
+describe('a strict ACP stop of a group read back from the pid file', () => {
+  it('never signals it: its id is not proved to be the worker\'s group any more (no start, no exit seen in this life)', async () => {
+    // A stopped worker's group the last daemon life kept as stop evidence; here a group that this file leads.
+    const adapter = path.join(dir, 'adapter.cjs')
+    fs.writeFileSync(adapter, ADAPTER)
+    const { spawn } = await import('node:child_process')
+    const child = spawn(process.execPath, [adapter, path.join(dir, 'release')], { detached: true, stdio: 'ignore' })
+    child.unref()
+    const pid = child.pid!
+    adapterPids.push(pid)
+    fs.mkdirSync(path.join(dir, 'daemon'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'daemon', 'acp-workers.json'), JSON.stringify({ 'rt-evidence': { pid, cmd: 'worker.mjs', adapter: `${process.execPath} ${adapter}`, boot: 1000, stopping: true } }))
+    const acp = daemon({ bootMinute: () => 1000 })
+    await acp.startupRepair()
+    expect(acp.heldBy('rt-evidence')).toEqual({ pid })
+    await expect(acp.acpStop('rt-evidence', { strict: true })).rejects.toThrow(/is not proved to be this worker's any more, not signalled/)
+    expect(alive(pid)).toBe(true)
   }, 30_000)
 })
 
@@ -144,12 +170,12 @@ describe('a strict ACP stop of a straggler the boot sweep could not settle', () 
     const acp = daemon({ bootMinute: () => 1000, processInfo: async (pid) => { asked.push(pid); return answers.shift() ?? { state: 'gone' } } })
     await acp.startupRepair()
     expect(asked).toEqual([PID])
-    expect(acp.holds('rt-straggler')).toBe(true)
+    expect(acp.heldBy('rt-straggler')).not.toBeNull()
     await expect(acp.acpStop('rt-straggler', { strict: true })).rejects.toThrow(/could not be checked \(ps gave no answer\)/)
     expect(asked).toEqual([PID, PID])
     await acp.acpStop('rt-straggler', { strict: true })
     expect(asked).toEqual([PID, PID, PID])
-    expect(acp.holds('rt-straggler')).toBe(false)
+    expect(acp.heldBy('rt-straggler')).toBeNull()
     answers = []
   })
 
@@ -157,8 +183,8 @@ describe('a strict ACP stop of a straggler the boot sweep could not settle', () 
     writeRow()
     const acp = daemon({ bootMinute: () => 1000, processInfo: async () => ({ state: 'gone' }) })
     await acp.startupRepair()
-    await until(() => !acp.holds('rt-straggler'), 1_000)
-    expect(acp.holds('rt-straggler')).toBe(false)
+    await until(() => acp.heldBy('rt-straggler') === null, 1_000)
+    expect(acp.heldBy('rt-straggler')).toBeNull()
     await acp.acpStop('rt-straggler', { strict: true })
   })
 })
