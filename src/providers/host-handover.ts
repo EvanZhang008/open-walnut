@@ -161,8 +161,9 @@ export async function takeStartBack(sid: string, host: string, handed: boolean):
   const from = movedFrom.get(sid)
   movedFrom.delete(sid)
   forgetHostJudged(sid)
-  // What waited for the host is the leader's to deliver now (its runner's own queue).
-  forgetWaitingLines(sid)
+  // What waited for the host is the leader's to deliver now (its runner's own queue). Its send's
+  // input edge lands before whatever follows (a refused start's error hands the task back after it).
+  await forgetWaitingLines(sid)
   // The host may no longer bring it here as a new session (handed-sessions.ts).
   await (await import('../core/session-channel/handed-sessions.js')).dropHandsOf(host, sid).catch((err: unknown) => {
     log.session.warn('host hand-over: the hand of a session taken back was not dropped; it lapses by itself', { sessionId: sid, host, error: errText(err) })

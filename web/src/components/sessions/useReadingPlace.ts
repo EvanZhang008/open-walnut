@@ -4,7 +4,8 @@
  * timeline and each Tree Mode page beside it.
  *
  * Records only a box the reader moved (a scroll within a second of his wheel or
- * touch on it, or a press or key anywhere, at the width the box had then; a
+ * touch on it, or a press or key anywhere, at the width the box had then, and the
+ * momentum that goes on from his scroll the same way; a
  * scroll the layout made never writes):
  * 150ms after that scroll stops, at once on a
  * pointer or key press in the box (the click that opens another page comes
@@ -43,6 +44,16 @@ const HOLD_STOPPERS = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const
 /** A scroll this soon after the reader's input in the box is his. */
 const INPUT_SCROLL_MS = 1000;
 const BOX_INPUTS = ['wheel', 'touchstart', 'touchmove'] as const;
+/**
+ * A scroll that goes on from his own, the same way, is his: a fling's momentum, which a phone and
+ * a trackpad run on for seconds after the finger left (2026-11-25: a fling that coasted past
+ * INPUT_SCROLL_MS was kept where the second ran out, mid-way). Read by direction, not by the gap
+ * between frames: a busy page (a recording, a headless WebKit) skips frames. The run ends with a
+ * press or a key anywhere (what scrolls after a click is the click's doing: a page it opens, a send's
+ * landing), a scroll not his, a turn of direction, another page shown, or MOMENTUM_MAX_MS after his
+ * own wheel or touch on the box.
+ */
+const MOMENTUM_MAX_MS = 3000;
 const PAGE_INPUTS = ['pointerdown', 'keydown'] as const;
 
 export interface UseReadingPlaceArgs {
@@ -299,35 +310,52 @@ export function useReadingPlace(a: UseReadingPlaceArgs): ReadingPlaceApi {
     if (!el || !routeShown) return;
     let inputAt = -Infinity;
     let inputWidth = -1;
+    /** The way his own run moves (1 down, -1 up), 0 when none goes on; the box's last scrollTop. */
+    let runDir = 0;
+    let lastTop = el.scrollTop;
+    let boxInputAt = -Infinity;
     // His input: a wheel or a finger on the box, a press or a key anywhere (a
     // jump he clicks moves the box too: the outline, a pin, the find bar), except
     // typing into the composer. A click that shows another page in this box
     // starts a new showing (`shownAt`), so the landing it causes is not his.
     const onInput = (e: Event) => {
       if (!shownRef.current) return;
+      // A press or a key anywhere ends his scroll's run, the composer's too (a send's landing
+      // that follows is not his momentum).
+      if (e.type === 'pointerdown' || e.type === 'keydown') runDir = 0;
       if (e.type === 'keydown') {
         const t = e.target as HTMLElement | null;
         if (t && t.closest('textarea, [contenteditable="true"], [contenteditable=""]')) return;
       }
       inputAt = performance.now();
       inputWidth = el.clientWidth;
+      // His wheel or finger on the box: the momentum window counts from it, never from a press.
+      if (e.type === 'wheel' || e.type === 'touchstart' || e.type === 'touchmove') boxInputAt = inputAt;
     };
     const onScroll = () => {
       if (!shownRef.current) return;
       // Only his scroll writes. A scroll the layout made (a list opening narrows
       // the box and the text rewraps) is no place of his, even right after a click.
-      if (!(performance.now() - inputAt < INPUT_SCROLL_MS && inputAt > shownAt.current) || el.clientWidth !== inputWidth) {
+      // A fling's momentum goes on from his own scroll, the same way (MOMENTUM_MAX_MS).
+      const t = performance.now();
+      const dir = Math.sign(el.scrollTop - lastTop);
+      lastTop = el.scrollTop;
+      const his = (t - inputAt < INPUT_SCROLL_MS && inputAt > shownAt.current)
+        || (runDir !== 0 && dir === runDir && t - boxInputAt < MOMENTUM_MAX_MS && boxInputAt > shownAt.current);
+      if (!his || el.clientWidth !== inputWidth) {
+        runDir = 0;
         // Moved since by something else: what the box shows is no longer his.
         if (dirty.current && recordTimer.current === undefined) moved.current = true;
         return;
       }
+      if (dir !== 0) runDir = dir;
       dirty.current = true;
       moved.current = false;
       clearTimeout(recordTimer.current);
       recordTimer.current = setTimeout(record, RECORD_QUIET_MS);
     };
     // Capture phase: before the click's own handler opens another page.
-    const now = () => { if (dirty.current && !moved.current && !hold.current) record(); };
+    const now = () => { runDir = 0; if (dirty.current && !moved.current && !hold.current) record(); };
     // A page leaving runs no timer: his last scroll is written before it goes (flushPlaces).
     // A phone hides a page before it throws it away and seldom says pagehide, and a hidden
     // page's timers stop: hidden is a leave too.

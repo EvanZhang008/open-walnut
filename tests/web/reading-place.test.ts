@@ -143,3 +143,17 @@ describe('a hidden page writes the reader\'s place as a leaving one does', () =>
     expect(src).toMatch(/visibilityState === 'hidden'\) leave\(\)/)
   })
 })
+
+describe('a fling\'s momentum is the reader\'s scroll', () => {
+  // 2026-11-25: a fling that coasted past INPUT_SCROLL_MS was kept mid-way. The browser flow is
+  // tests/e2e/browser/session-reading-place.spec.ts ("a fling that coasts past the second").
+  it('a scroll that goes on from his own the same way is his, and a press or a key ends the run', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/sessions/useReadingPlace.ts'), 'utf-8')
+    expect(src).toMatch(/\(runDir !== 0 && dir === runDir && t - boxInputAt < MOMENTUM_MAX_MS && boxInputAt > shownAt\.current\)/)
+    // Any press or key on the page ends the run; only his wheel or touch on the box starts its window.
+    expect(src).toMatch(/if \(e\.type === 'pointerdown' \|\| e\.type === 'keydown'\) runDir = 0;/)
+    expect(src).toMatch(/if \(e\.type === 'wheel' \|\| e\.type === 'touchstart' \|\| e\.type === 'touchmove'\) boxInputAt = inputAt;/)
+    expect(src).toMatch(/if \(dir !== 0\) runDir = dir;\s*dirty\.current = true;/)
+    expect(src).toMatch(/const now = \(\) => \{ runDir = 0;/)
+  })
+})

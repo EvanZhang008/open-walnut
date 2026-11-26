@@ -335,6 +335,33 @@ test.describe('every chat pane keeps the reader\'s place', () => {
     expect(Math.abs(top - 160), `pair 6 at its kept height (${top})`).toBeLessThanOrEqual(30)
   })
 
+  // 2026-11-25: a fling coasts on for seconds after the finger left; the timeline kept the place
+  // where the second after his input ran out, mid-way, and a reload came back there.
+  test('a fling that coasts past the second after the reader\'s input is kept where it stopped', async ({ page }) => {
+    const panel = await openSheet(page)
+    await expectPages(panel, [])
+    const box = scrollBoxOf(rightBody(panel))
+    await wheel(page, rightBody(panel), -900)
+    await page.waitForTimeout(400)
+    // One wheel tick, then momentum: the box moves every frame for 1.8 s with no input.
+    await wheel(page, rightBody(panel), -120)
+    await box.evaluate((el) => new Promise<void>((done) => {
+      const start = performance.now()
+      const step = () => {
+        if (performance.now() - start > 1800 || el.scrollTop <= 0) return done()
+        el.scrollTop -= 6
+        requestAnimationFrame(step)
+      }
+      requestAnimationFrame(step)
+    }))
+    const stopped = await settledPlace(page, rightBody(panel))
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    const again = page.locator(`.session-panel[data-session-id="${PLACE_SESSION}"]`).first()
+    await expectPages(again, [])
+    expectSamePlace(await settledPlace(page, rightBody(again)), stopped, `Main, after a reload (kept: ${await kept(page)})`)
+  })
+
   test('a reload brings each pane back to its place', async ({ page }) => {
     const panel = await openSheet(page)
     await clickAt(page, await askedRow(page, rightBody(panel), T.Q1))

@@ -12150,7 +12150,16 @@ export async function parkOnGoneFolder(sessionId: string, rows: QueuedMessage[],
   await noteFolderGoneOnce(sessionId, folder?.cwd, folder?.host)
   // Quiet: the task's workspace is being made again, whose end sends the rows: nothing failed yet.
   if (rows.length === 0 || o.quiet) return
-  reportBatchFailed(sessionId, rows.map((m) => m.id), reason)
+  reportParkedBatch(sessionId, rows.map((m) => m.id), reason)
+}
+
+/**
+ * Rows parked for good on a delivery that failed: the page hears the batch failed, and the session
+ * error hands its task back as Needs you (server.ts applies 'session:error'). The gone folder's park
+ * above and a host-run session's host that kept refusing its lines (host-judged-send.ts) share it.
+ */
+export function reportParkedBatch(sessionId: string, rowIds: string[], reason: string): void {
+  reportBatchFailed(sessionId, rowIds, reason)
   bus.emit(EventNames.SESSION_ERROR, {
     sessionId, error: reason, errorKind: 'delivery_failed' as const, parked: true,
   }, ['main-ai'], { source: 'session-runner' })

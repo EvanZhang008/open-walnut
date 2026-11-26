@@ -32,6 +32,7 @@
  * left, an interrupt after a send goes after it.
  */
 import { log } from '../logging/index.js'
+import { sendSourceReopensTerminal } from '../core/phase.js'
 import { judgingHostOf } from '../core/sessions/judge-of.js'
 import { heldOf } from '../core/sessions/handed-holds.js'
 import type { QueuedLine } from '../core/session-channel/host-api.js'
@@ -50,8 +51,22 @@ interface Waiting {
   attempt: number
   refusals: number
   timer: ReturnType<typeof setTimeout> | null
-  /** The send whose kick did not reach the host: its source and wait end, for the task's input edge. */
-  kick?: { source: string; endsWait: boolean }
+  /** The send whose kick did not reach the host: its source and wait end, for the task's input edge, and when it was sent. */
+  kick?: Kick
+}
+
+interface Kick { source: string; endsWait: boolean; at: number }
+
+/**
+ * The kick a wait keeps for its task's input edge, `o`'s merged into the one waiting: a person's or a
+ * peer's send stays the source (it reopens a COMPLETE task) when an automated one comes after it (a
+ * hold handed on, a redelivery), and the wait ends with the earliest send's time.
+ */
+function keepKick(sid: string, o: Pick<DeliverOpts, 'source' | 'endsWait'>): void {
+  const w = stateOf(sid)
+  const prev = w.kick
+  const source = prev && sendSourceReopensTerminal(prev.source) && !sendSourceReopensTerminal(o.source) ? prev.source : o.source
+  w.kick = { source, endsWait: o.endsWait || prev?.endsWait === true, at: prev?.at ?? Date.now() }
 }
 
 /** Sessions whose lines (or kick) did not reach their host yet. */
@@ -94,10 +109,38 @@ function stateOf(sid: string): Waiting {
   return w
 }
 
-function settle(sid: string): void {
+/**
+ * The wait of `sid` ends, the one place it does. A send's kick still on it that never reached the
+ * host is the task's input all the same, as a send the runner takes is at send time: a forced peer
+ * message reopens a COMPLETE task whatever becomes of its lines (taken back by the leader with the
+ * session, its host gone, parked). `edgeGiven`: the caller ran the edge itself (the host took the
+ * lines, or the edge went before a park's error). 2026-11-26, the Walnut VP: every path that drops a
+ * kick, not only the gone folder (tests/providers/host-judged-send-park-reopen.test.ts).
+ */
+function settle(sid: string, o: { edgeGiven?: boolean } = {}): Promise<void> {
   const w = waiting.get(sid)
   if (w?.timer) clearTimeout(w.timer)
   waiting.delete(sid)
+  return w?.kick && !o.edgeGiven ? kickEdge(sid, w.kick) : Promise.resolve()
+}
+
+/**
+ * The input edge of a kick that never reached its host. Not once the task was completed after the
+ * send (the user closed it meanwhile, and a late retry must not reopen it); never throws.
+ */
+async function kickEdge(sid: string, kick: Kick): Promise<void> {
+  try {
+    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const row = await getSessionByClaudeId(sid).catch(() => null)
+    if (!row?.taskId) return
+    const { getTask } = await import('../core/task-manager.js')
+    const task = await getTask(row.taskId).catch(() => null)
+    if (!task || (task.phase === 'COMPLETE' && Date.parse(task.completed_at ?? '') > kick.at)) return
+    const { noteHostSessionSend } = await import('../core/session-channel/leader-tasks.js')
+    await noteHostSessionSend(sid, kick.source, kick.endsWait)
+  } catch (err) {
+    log.session.warn('host-run session: the input edge of a send that never reached its host failed', { sessionId: sid, error: errText(err) })
+  }
 }
 
 function scheduleRedeliver(sid: string): void {
@@ -110,7 +153,8 @@ function scheduleRedeliver(sid: string): void {
 }
 
 /**
- * A send whose lines park on the gone folder instead of reaching the host still is the task's input,
+ * A send whose lines park (on the gone folder, or after the host kept refusing them) instead of
+ * reaching the host still is the task's input,
  * at send time and before the park's error, as the runner's handleSend makes it for a session it
  * runs (syncPhaseAfterSend runs before its spawn parks): a person's or a peer's message reopens a
  * COMPLETE task, and the folder-gone error that follows hands it back as Needs you, the usual way.
@@ -120,10 +164,11 @@ function scheduleRedeliver(sid: string): void {
  * no answer. A send kept from an earlier try (`kick` on its wait) counts as this one.
  */
 async function inputEdgeBeforePark(sid: string, o: Pick<DeliverOpts, 'kick' | 'source' | 'endsWait'>): Promise<void> {
+  if (o.kick) keepKick(sid, o)
   const kept = waiting.get(sid)?.kick
-  if (!o.kick && !kept) return
+  if (!kept) return
   const { noteHostSessionSend } = await import('../core/session-channel/leader-tasks.js')
-  await noteHostSessionSend(sid, kept?.source ?? o.source, o.endsWait || kept?.endsWait === true)
+  await noteHostSessionSend(sid, kept.source, kept.endsWait)
 }
 
 interface DeliverOpts {
@@ -144,7 +189,7 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
   if (handOverPending(sid)) { waitForHandOver(sid, o); return }
   let side: Awaited<ReturnType<typeof leaderSide>>
   try { side = await leaderSide() } catch (err) {
-    if (o.kick) stateOf(sid).kick = { source: o.source, endsWait: o.endsWait }
+    if (o.kick) keepKick(sid, o)
     scheduleRedeliver(sid)
     throw err
   }
@@ -160,7 +205,7 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
     if (!folder.ok) {
       await inputEdgeBeforePark(sid, o)
       await parkWaitingOnGoneFolder(sid, folder.error ?? 'Working directory not available', folder.folder, folder.remake === 'pending')
-      settle(sid)
+      void settle(sid, { edgeGiven: true })
       return
     }
   }
@@ -171,13 +216,13 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
   let taken: Awaited<ReturnType<typeof takeLinesForHost>>
   try { taken = await takeLinesForHost(sid) } catch (err) {
     // Not taken (the queue file could not be written): the lines are still queued here.
-    if (o.kick) stateOf(sid).kick = { source: o.source, endsWait: o.endsWait }
+    if (o.kick) keepKick(sid, o)
     scheduleRedeliver(sid)
     throw err
   }
   const goesNow = taken.lines.some((m) => !heldOf(m))
-  const kick = o.kick || goesNow
-  if (taken.lines.length === 0 && !kick) { settle(sid); return }
+  const kick = o.kick || goesNow || !!waiting.get(sid)?.kick
+  if (taken.lines.length === 0 && !kick) { void settle(sid); return }
   const payload: Record<string, unknown> = {
     ...(o.body ?? { sessionId: sid, message: '' }),
     sessionId: sid,
@@ -187,7 +232,7 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
   }
   const w = stateOf(sid)
   // The send this kick stands for: its task input edge waits for the host to take it.
-  if (kick) w.kick = { source: o.source, endsWait: o.endsWait || w.kick?.endsWait === true }
+  if (kick) keepKick(sid, o)
   // These rows are this session's now (a row moved here from another session too): its host's
   // facts may name them (handed-sessions.ts linesNotOthers). Written before the send.
   if (taken.lines.length > 0) {
@@ -210,7 +255,7 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
     if (a.error === NOT_OWN_SESSION && handOverPending(sid)) { waitForHandOver(sid, o); return }
     // The host does not hold it: never a refusal. Asked again; a second no takes it back here.
     if (a.error === NOT_OWN_SESSION) {
-      if (o.kick) w.kick = { source: o.source, endsWait: o.endsWait || w.kick?.endsWait === true }
+      if (o.kick) keepKick(sid, o)
       void confirmHostDisowns(sid, host).then((back) => { if (!back && judgingHostOf(sid) === host) scheduleRedeliver(sid) })
       return
     }
@@ -218,14 +263,24 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
     const why = a.error ?? 'no reason given'
     if (w.refusals >= REFUSALS_BEFORE_PARK) {
       const runs = taken.lines.filter((m) => !heldOf(m))
+      // The send is the task's input before the park's error, which hands it back (inputEdgeBeforePark).
+      await inputEdgeBeforePark(sid, o)
       const parked = await parkMessages(runs, `${HOST_REFUSED_REASON}: ${why}`)
       log.session.warn('host-run session: its host kept refusing its lines; they are parked here', { sessionId: sid, host, parked, error: why })
-      settle(sid)
+      if (runs.length > 0) {
+        const { reportParkedBatch } = await import('./claude-code-session.js')
+        reportParkedBatch(sid, runs.map((m) => m.id), `${HOST_REFUSED_REASON}: ${why}`)
+        // A delivery failure's error moves no phase (server.ts): the task is handed back here, as a
+        // refused start is (claude-code-session.ts start-refused), so it never reads Working idle.
+        await refusedBack(sid)
+      }
+      void settle(sid, { edgeGiven: true })
     } else scheduleRedeliver(sid)
     throw new Error(`the host ${host} refused the send: ${why}`)
   }
-  const told = w.kick
-  settle(sid)
+  // Taken back meanwhile (forgetWaitingLines ended this wait and gave its edge): not twice.
+  const told = waiting.get(sid) === w ? w.kick : undefined
+  void settle(sid, { edgeGiven: true })
   // The host has them: their transit ends (session-queue-transit.ts).
   await taken.done()
   if (taken.lines.length > 0) log.session.info('host-run session: its lines went to its host', { sessionId: sid, host, lines: taken.lines.length, kick })
@@ -253,11 +308,24 @@ async function parkWaitingOnGoneFolder(sid: string, reason: string, folder: { cw
     : 'host-run session: its folder is gone; its lines are parked here, not sent', { sessionId: sid, parked: runs.length, error: reason })
 }
 
+/** The lines a host kept refusing parked here: its task is handed back (Needs you), never left Working. */
+async function refusedBack(sid: string): Promise<void> {
+  try {
+    const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+    const row = await getSessionByClaudeId(sid).catch(() => null)
+    if (!row?.taskId) return
+    const { applySessionPhase } = await import('../core/phase.js')
+    await applySessionPhase(row.taskId, 'session:error', 'host-judged:refused-park', { sessionId: sid, processAlive: false })
+  } catch (err) {
+    log.session.warn('host-run session: handing its task back after a refused park failed', { sessionId: sid, error: errText(err) })
+  }
+}
+
 /** A send (or a redelivery) of a session whose hand-over is unanswered: it waits, its kick kept for the release. */
 function waitForHandOver(sid: string, o: DeliverOpts): void {
   const w = stateOf(sid)
   if (w.timer) { clearTimeout(w.timer); w.timer = null }
-  if (o.kick) w.kick = { source: o.source, endsWait: o.endsWait || w.kick?.endsWait === true }
+  if (o.kick) keepKick(sid, o)
   log.session.info('host-run session: its lines wait here until its host answers the hand-over', { sessionId: sid })
 }
 
@@ -305,8 +373,8 @@ export function releaseLinesAfterHandOver(sid: string): void {
 }
 
 /** The session is the leader's again (a hand-over taken back): nothing of it waits for a host. */
-export function forgetWaitingLines(sid: string): void {
-  settle(sid)
+export function forgetWaitingLines(sid: string): Promise<void> {
+  return settle(sid)
 }
 
 /**
@@ -332,7 +400,7 @@ export function handHeldToHost(sid: string): void {
 /** Try `sid`'s waiting lines again now (a retry's time came, its host linked). */
 function redeliver(sid: string): void {
   const host = judgingHostOf(sid)
-  if (!host) { settle(sid); return }
+  if (!host) { void settle(sid); return }
   const w = waiting.get(sid)
   const kick = w?.kick
   inOrder(sid, () => deliver(sid, host, { kick: !!kick, source: kick?.source ?? 'queue-redeliver', endsWait: kick?.endsWait ?? false })).catch(() => { /* logged; it goes again */ })
