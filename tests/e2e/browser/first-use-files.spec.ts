@@ -328,8 +328,10 @@ for (const kind of ['File', 'Folder']) {
       expect(delay.answered()).toBe(false);
       await page.evaluate(() => (window as any).__directoryRestoreFault.denyWrites());
       await documents.click({ button: 'right' });
-      await page.getByRole('menuitem', { name: `New ${kind}…`, exact: true }).click();
-      const input = explorer.getByRole('textbox', { name: `New ${kind.toLowerCase()} name` });
+      // Create labels read in sentence case since 35d5a42e9b. Quoted whole, so
+      // tests/scripts/browser-spec-labels.test.ts sees them if the menu changes again.
+      await page.getByRole('menuitem', { name: kind === 'File' ? 'New file…' : 'New folder…', exact: true }).click();
+      const input = explorer.getByRole('textbox', { name: kind === 'File' ? 'New file name' : 'New folder name' });
       await input.fill('unsubmitted-draft');
       await expect(input).toBeVisible();
       const reads = await page.evaluate(() => (window as any).__directoryRestoreFault.expandedReads);

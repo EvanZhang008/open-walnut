@@ -558,9 +558,10 @@ test.describe('the merged lists at production density', () => {
     ).toHaveCount(0)
     await page.getByTestId('mail-compose-discard').click()
     // An empty new message is discarded without a question; the dialog only appears for typed text.
-    const confirm = page.locator('.btn.btn-primary')
-    if (await confirm.count()) await confirm.first().click()
+    // Asked of the dialog itself: since 35d5a42e9b the New message key is a .btn.btn-primary too, so a
+    // page-wide '.btn.btn-primary' "confirm" clicked New message and opened the composer again.
     await expect(page.getByTestId('mail-composer')).toHaveCount(0, { timeout: 30_000 })
+    await expect(page.getByRole('dialog', { name: 'Discard this draft?' }), 'an empty new message asks nothing').toHaveCount(0)
 
     expect(pageErrors, 'the mail console must not throw in the browser').toEqual([])
     console.log(`all drafts screenshots:\n${shots.join('\n')}`)
