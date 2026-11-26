@@ -1799,6 +1799,14 @@ witness, above).
 
 ## Not built yet
 
+- **A switch back right after a switch waits for the whole copy back.** The new leader's copy to the old machine starts
+  as a new one, so `--back` is refused as not caught up until the whole home has reached the old machine: 20 GB on an
+  unslowed link took about 13 to 18 minutes (718 to 1,198 s measured, [Downtime](#downtime)), a slow link takes hours.
+  Seeding that copy from the old machine's handed-over home is not built.
+- **The leader relay needs a unix socket path of at most 103 bytes** (`<daemon dir>/leader-relay/<16 hex>.sock`). A
+  daemon dir deeper than that leaves the relay off: the host service writes why beside the socket (`<socket>.why`) and
+  the command on that machine reports it. Use a shorter daemon dir (`WALNUT_DAEMON_DIR`; in the rehearsal a short work
+  dir such as `/tmp/x`, since one under a task folder gives a 187-byte path).
 - **The copy link to another machine** is [built](#the-copy-link-to-another-machine) and rehearsed on one computer with
   real daemons ([Rehearsal](#rehearsal), `--remote`); not yet run between the two dev boxes (rehearsal (b)): it needs a
   driver that starts the second machine's daemon, witness service and home on the other box over the account's existing ssh,
