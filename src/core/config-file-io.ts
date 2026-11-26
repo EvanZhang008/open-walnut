@@ -125,6 +125,20 @@ export function parseConfigMapping(content: string): { doc: Record<string, unkno
   }
 }
 
+/**
+ * The text of the last read that the file's identity alone can vouch for: read whole, unchanged
+ * while it was read, and last changed at least KEPT_TEXT_SETTLED_MS before the read. A later read
+ * whose descriptor shows the same identity takes this text instead of reading the bytes again:
+ * getConfig runs some 20 times a second on the live server, and each read made a 25 KB buffer and
+ * a 50 KB string (the file holds non-ASCII text) for the same bytes (2026-11-25, the memory bursts
+ * after a start). Any write after that read moves the identity: its mtime and ctime are at least
+ * the read's clock second, which a stamp that old cannot be even on a filesystem that keeps whole
+ * seconds; a replace by rename is a new inode.
+ */
+let keptText: { file: string; id: ConfigFileId; content: string } | null = null
+const KEPT_TEXT_SETTLED_MS = 2_000
+let keptTextSettledMs = KEPT_TEXT_SETTLED_MS
+
 /** Read the file and its identity on one descriptor, so the two describe the same bytes. */
 export async function readConfigSnapshot(file: string): Promise<ConfigSnapshot> {
   let fh: fs.FileHandle
@@ -137,9 +151,20 @@ export async function readConfigSnapshot(file: string): Promise<ConfigSnapshot> 
   let before: ConfigFileId
   let after: ConfigFileId
   try {
+    // Taken before the first stat: a write after it moves the file's stamp past this time, so a
+    // stamp at least keptTextSettledMs older than it holds even on a 2 s timestamp filesystem.
+    const readAt = Date.now()
     before = idOf(await fh.stat())
-    content = await fh.readFile('utf-8')
-    after = idOf(await fh.stat())
+    const kept = keptText
+    if (kept && kept.file === file && sameFileId(kept.id, before)) {
+      content = kept.content
+      after = before
+    } else {
+      content = await fh.readFile('utf-8')
+      after = idOf(await fh.stat())
+      keptText = sameFileId(before, after) && readAt - Math.max(after.mtimeMs, after.ctimeMs) >= keptTextSettledMs
+        ? { file, id: after, content } : null
+    }
   } catch (err) {
     return { state: 'unreadable', content: null, doc: null, id: null, changing: false, error: err instanceof Error ? err.message : String(err) }
   } finally {
@@ -150,6 +175,12 @@ export async function readConfigSnapshot(file: string): Promise<ConfigSnapshot> 
   const { doc, error } = parseConfigMapping(content)
   if (!doc) return { state: 'unparseable', content, doc: null, id: after, changing, error }
   return { state: 'ok', content, doc, id: after, changing }
+}
+
+/** For tests: forget the kept text, as a new process starts; `settledMs` shortens the window (null: the real one). */
+export function _forgetKeptConfigTextForTesting(settledMs: number | null = null): void {
+  keptText = null
+  keptTextSettledMs = settledMs ?? KEPT_TEXT_SETTLED_MS
 }
 
 // Not unref'd: a short-lived process (the CLI) waiting here must not exit mid-await.
