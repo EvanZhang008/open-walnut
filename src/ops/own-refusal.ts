@@ -63,6 +63,7 @@ export function badInput(message: string): OwnRefusalError {
 export function reworded(err: Error, message: string): Error {
   const copy = Object.assign(Object.create(Object.getPrototypeOf(err) as object) as Error, err)
   Object.defineProperty(copy, 'message', { value: message, writable: true, configurable: true })
+  if (err instanceof OwnRefusalError) Object.assign(copy, { words: message })
   if (err.stack) Object.defineProperty(copy, 'stack', { value: err.stack.replace(err.message, () => message), writable: true, configurable: true })
   return copy
 }

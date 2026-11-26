@@ -471,7 +471,8 @@ async function resolveNoteTarget(args: Record<string, unknown>, call: OpCall): P
   if (!id && !looksLikeNoteId(path)) return path
   const resolved = await call('GET', `/notes/resolve?ref=${encodeURIComponent(ref)}`)
   const resolvedPath = (resolved as { path?: unknown }).path
-  if (typeof resolvedPath !== 'string' || !resolvedPath) throw badInput(`cannot resolve note reference: ${ref}`)
+  // The route refuses a reference that names nothing itself: a 200 with no path is its answer come back broken.
+  if (typeof resolvedPath !== 'string' || !resolvedPath) throw new Error(`cannot resolve note reference: ${ref}`)
   return resolvedPath
 }
 

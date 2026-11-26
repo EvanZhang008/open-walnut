@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { BAD_INPUT_CODE, LOCAL_ONLY_CODE, SHORTENED_TEXT_CODE, ownRefusal, reworded } from '../../../src/ops/own-refusal.js'
+import { BAD_INPUT_CODE, LOCAL_ONLY_CODE, SHORTENED_TEXT_CODE, badInput, ownRefusal, reworded } from '../../../src/ops/own-refusal.js'
 import { executeOp } from '../../../src/ops/index.js'
 import { handleGatewayCapability } from '../../../src/core/peers/capability-router.js'
 import { PeerThrottle } from '../../../src/core/peers/peer-throttle.js'
@@ -94,7 +94,7 @@ describe('an executor refusal is read by its code everywhere', () => {
     // Walnut's own that came back broken, or an op defined wrong, stays a bare Error, listed here
     // with its count: a new one fails this test until it is a coded refusal or is added with why.
     const FAULTS: Record<string, number> = {
-      'core.ts': 1, // note_read: an answer of the API that is not a note
+      'core.ts': 2, // a note reference resolved with no path; note_read: an answer of the API that is not a note
       'executor.ts': 1, // a path argument left out: caught there and answered as invalid arguments
       'human-action-policy.ts': 1, // the server has no listening address
       'registry.ts': 3, // an op defined wrong, at start
@@ -142,6 +142,8 @@ describe('an executor refusal is read by its code everywhere', () => {
     const copy = reworded(new Coded('refused', 409, 'own_session'), 'refused (already applied: model)')
     expect(copy).toBeInstanceOf(Coded)
     expect(copy).toMatchObject({ message: 'refused (already applied: model)', status: 409, code: 'own_session' })
+    // A refusal of an op's own keeps its code; its words alone follow the new message.
+    expect(reworded(badInput('pass id'), 'pass id (see the list)')).toMatchObject({ code: BAD_INPUT_CODE, words: 'pass id (see the list)', extra: { invalidArgs: true } })
   })
 
   it('own_session and a memory write conflict: a 409 under its code, never a thrown error', async () => {
