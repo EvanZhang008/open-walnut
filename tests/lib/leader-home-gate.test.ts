@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { daemonGitWriteRefusal, gitArgvWrites, gitSubcommand, leaderHomeMarkAt, LEADER_SWITCH_MARKER_REL, readOnlyGitEnv, serverGitWriteRefusal } from '../../src/lib/leader-home-gate.js'
 import { markerFile } from '../../src/core/leader/switch/records.js'
+import { gitChildEnv } from '../../src/lib/git-env.js'
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'leader-home-gate-'))
 afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }))
@@ -90,12 +91,29 @@ describe('the marker of a data home', () => {
 })
 
 describe('the read env', () => {
-  it('optional locks off everywhere; in a marked home also no diff index refresh, appended to the config already given', () => {
+  it('only in a marked home: optional locks off and no diff index refresh, appended to the config already given', () => {
     const free = home('env-free')
     const over = home('env-over', JSON.stringify({ state: 'handed-over' }))
-    expect(readOnlyGitEnv({ LANG: 'C' }, free)).toEqual({ LANG: 'C', GIT_OPTIONAL_LOCKS: '0' })
+    const switching = home('env-switching', JSON.stringify({ state: 'switching' }))
+    // Unmarked, or no cwd: the env comes back as given (2026-11-26: optional locks off everywhere made every status
+    // of a touched 20 GB home hash it all again, 98 to 131 s a run).
+    expect(readOnlyGitEnv({ LANG: 'C' }, free)).toEqual({ LANG: 'C' })
+    expect(readOnlyGitEnv({ LANG: 'C' }, '')).toEqual({ LANG: 'C' })
     expect(readOnlyGitEnv({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.x', GIT_CONFIG_VALUE_0: 'y' }, path.join(over, 'plugins', 'p'))).toEqual({
       GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.x', GIT_CONFIG_VALUE_0: 'y', GIT_CONFIG_KEY_1: 'diff.autoRefreshIndex', GIT_CONFIG_VALUE_1: 'false', GIT_OPTIONAL_LOCKS: '0',
+    })
+    expect(readOnlyGitEnv({}, switching)).toEqual({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'diff.autoRefreshIndex', GIT_CONFIG_VALUE_0: 'false', GIT_OPTIONAL_LOCKS: '0' })
+  })
+
+  it('gitChildEnv adds it only with a cwd in a marked home, and there no caller\'s env turns it back on', () => {
+    const free = home('child-free')
+    const over = home('child-over', JSON.stringify({ state: 'handed-over' }))
+    const base = { PATH: '/bin', GIT_DIR: '/inherited' }
+    expect(gitChildEnv(undefined, base)).toEqual({ PATH: '/bin' })
+    expect(gitChildEnv(undefined, base, free)).toEqual({ PATH: '/bin' })
+    expect(gitChildEnv({ GIT_TERMINAL_PROMPT: '0' }, base, free)).toEqual({ PATH: '/bin', GIT_TERMINAL_PROMPT: '0' })
+    expect(gitChildEnv({ GIT_OPTIONAL_LOCKS: '1' }, base, over)).toEqual({
+      PATH: '/bin', GIT_OPTIONAL_LOCKS: '0', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'diff.autoRefreshIndex', GIT_CONFIG_VALUE_0: 'false',
     })
   })
 })

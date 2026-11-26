@@ -43,7 +43,7 @@ function noBundleChannel(error: string): boolean {
 export async function keptTreesOnHub(repoDir: string, keptHashes: string[], oldMain: string, remoteHead: string): Promise<string[] | null> {
   try {
     const { stdout } = await execFileAsync('git', ['rev-list', `${remoteHead}..${oldMain}`], {
-      cwd: repoDir, encoding: 'utf-8', timeout: 120_000, maxBuffer: 256 * 1024 * 1024, env: gitChildEnv(),
+      cwd: repoDir, encoding: 'utf-8', timeout: 120_000, maxBuffer: 256 * 1024 * 1024, env: gitChildEnv(undefined, process.env, repoDir),
     });
     const localOnly = new Set(stdout.split('\n').filter(Boolean));
     return keptHashes.filter((h) => !localOnly.has(h)).map((h) => `${h}^{tree}`);

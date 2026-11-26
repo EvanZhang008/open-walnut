@@ -381,8 +381,6 @@ export function createWorkspaceCore(deps: WorkspaceCoreDeps) {
     var env: Record<string, string | undefined> = Object.assign({}, deps.env)
     for (var i = 0; i < REDIRECT_VARS.length; i++) delete env[REDIRECT_VARS[i]]
     env.GIT_TERMINAL_PROMPT = '0'
-    // A status or diff never rewrites .git/index (a read stays a read: lib/leader-home-gate.ts).
-    env.GIT_OPTIONAL_LOCKS = '0'
     return Object.assign(env, extra || {})
   }
 

@@ -72,3 +72,66 @@ describe('daemon git.status', () => {
     expect(reply).toEqual({ ok: false, error: 'git.status: missing dirs' })
   })
 })
+
+// The daemon's runGit (daemon-git.ts) gives a git the read-only env only in a data home under a leader switch
+// (lib/leader-home-gate.ts readOnlyGitEnv). 2026-11-26: with optional locks off for every repo, a touched file stayed
+// stale in the index for good, so every status hashed it again (98 to 131 s a run on a 20 GB home).
+describe('daemon git.status and the index of the repo it reads', () => {
+  const cleanRepo = (name: string, marker?: string) => {
+    const dir = path.join(home, name)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'a\n')
+    git(dir, 'init', '-q', '-b', 'main')
+    if (marker) {
+      fs.mkdirSync(path.join(dir, 'local', 'leader-switch'), { recursive: true })
+      fs.writeFileSync(path.join(dir, 'local', 'leader-switch', 'handed-over.json'), marker)
+      fs.writeFileSync(path.join(dir, '.git', 'info', 'exclude'), 'local/\n')
+    }
+    git(dir, 'add', '.')
+    git(dir, 'commit', '-qm', 'init')
+    // Same content, an mtime an hour back (never racy): the index's stat data is stale.
+    const earlier = new Date(Date.now() - 3_600_000)
+    fs.utimesSync(path.join(dir, 'a.txt'), earlier, earlier)
+    return { dir, index: path.join(dir, '.git', 'index') }
+  }
+
+  // The env each git of the handler got (node's execFile underneath).
+  const recordingHandler = () => {
+    const envs: Array<Record<string, string | undefined> | undefined> = []
+    const fns = createDaemonGit<null>({
+      daemonEnv: process.env,
+      HOME_DIR: home,
+      execFileCb: ((file: string, args: string[], opts: { env?: Record<string, string | undefined> }, cb: never) => {
+        envs.push(opts.env)
+        return execFile(file, args, opts as never, cb)
+      }) as never,
+    })
+    return { envs, run: async (dirs: string[]) => (await fns.answers['git.status']!({ dirs }, null)).ok }
+  }
+
+  it('an unmarked repo: its gits get the env they always got (none given: the daemon\'s own, optional locks as git has them)', async () => {
+    expect(process.env.GIT_OPTIONAL_LOCKS).toBeUndefined()
+    const { dir } = cleanRepo('free')
+    const { envs, run } = recordingHandler()
+    expect(await run([dir])).toBe(true)
+    expect(envs.length).toBeGreaterThan(0)
+    expect(envs.every((e) => e === undefined)).toBe(true)
+  })
+
+  it('a home under a leader switch: its gits get the read-only env and leave the index byte for byte as it was', async () => {
+    for (const state of ['switching', 'handed-over']) {
+      const { dir, index } = cleanRepo(`marked-${state}`, JSON.stringify({ state }))
+      const before = fs.readFileSync(index)
+      const { envs, run } = recordingHandler()
+      expect(await run([dir])).toBe(true)
+      expect(fs.readFileSync(index).equals(before), state).toBe(true)
+      expect(envs.length).toBeGreaterThan(0)
+      for (const e of envs) {
+        expect(e?.GIT_OPTIONAL_LOCKS, state).toBe('0')
+        // Appended after the config the test env carries (tests/setup/git-env-isolation.ts).
+        const n = Number(e?.GIT_CONFIG_COUNT) - 1
+        expect([e?.[`GIT_CONFIG_KEY_${n}`], e?.[`GIT_CONFIG_VALUE_${n}`]], state).toEqual(['diff.autoRefreshIndex', 'false'])
+      }
+    }
+  })
+})

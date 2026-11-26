@@ -31,7 +31,7 @@ const BIG = 512 * 1024 * 1024;
 /** Async, never execSync: the event-loop ratchet holds for the worker too. */
 function gitOut(repoDir: string, args: string[], input?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd: repoDir, stdio: ['pipe', 'pipe', 'pipe'], env: gitChildEnv() });
+    const child = spawn('git', args, { cwd: repoDir, stdio: ['pipe', 'pipe', 'pipe'], env: gitChildEnv(undefined, process.env, repoDir) });
     const out: Buffer[] = [];
     let size = 0;
     let err = '';

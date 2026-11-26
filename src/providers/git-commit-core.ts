@@ -154,8 +154,6 @@ export function createGitCommitCore(deps: GitCommitDeps) {
   function childEnv(extra: Record<string, string | undefined>): Record<string, string | undefined> {
     var env: Record<string, string | undefined> = Object.assign({}, deps.env || {})
     for (var i = 0; i < REDIRECT_VARS.length; i++) delete env[REDIRECT_VARS[i]]
-    // A status or diff never rewrites .git/index (a read stays a read: lib/leader-home-gate.ts).
-    env.GIT_OPTIONAL_LOCKS = '0'
     for (var k in extra) env[k] = extra[k]
     return env
   }

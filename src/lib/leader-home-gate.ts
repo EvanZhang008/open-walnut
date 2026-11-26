@@ -30,8 +30,8 @@ import path from 'node:path'
 export const LEADER_SWITCH_MARKER_REL = path.join('local', 'leader-switch', 'handed-over.json')
 
 /**
- * Git subcommands that only read the repo they run in (with GIT_OPTIONAL_LOCKS=0, which every gated spawner sets: a
- * `status` or `diff` then never refreshes .git/index). The rule is fail-closed: every other subcommand counts as a
+ * Git subcommands that only read the repo they run in (with readOnlyGitEnv, which every gated spawner applies: in a
+ * marked home a `status` or `diff` then never refreshes .git/index). The rule is fail-closed: every other subcommand counts as a
  * write, so one this list has not heard of is refused in a marked home, never let through.
  */
 export const GIT_READ_SUBCOMMANDS: ReadonlySet<string> = new Set([
@@ -162,14 +162,18 @@ export function serverGitWriteRefusal(argv: readonly string[], cwd: string): str
 }
 
 /**
- * The env a git child gets so that its reads leave the repo byte for byte as it was: GIT_OPTIONAL_LOCKS=0 (a status
- * never writes .git/index back), and in a marked home also diff.autoRefreshIndex=false, since a `git diff` of the work
- * tree rewrites the index after a touch even with optional locks off (git 2.47). Outside a marked home diffs keep their
- * refresh (with it off, a file only touched shows as changed). Appends to GIT_CONFIG_COUNT; returns a new env.
+ * The env a git child gets so that its reads leave a data home under a leader switch byte for byte as it was:
+ * GIT_OPTIONAL_LOCKS=0 (a status never writes .git/index back) and diff.autoRefreshIndex=false (a `git diff` of the
+ * work tree rewrites the index after a touch even with optional locks off, git 2.47). Only a marked home (`cwd` in
+ * it): anywhere else the env comes back unchanged, so a status refreshes the index as git always did and a touched
+ * file is hashed once, not on every status (2026-11-26: with optional locks off everywhere, every git-sync status of
+ * a 20 GB home whose files were touched took 98 to 131 s, against 0.04 s once the index was refreshed). Appends to
+ * GIT_CONFIG_COUNT; returns a new env.
  */
 export function readOnlyGitEnv<T extends Record<string, string | undefined>>(env: T, cwd: string): T {
-  const out: Record<string, string | undefined> = { ...env, GIT_OPTIONAL_LOCKS: '0' }
+  const out: Record<string, string | undefined> = { ...env }
   if (cwd && leaderHomeMarkAt(cwd)) {
+    out.GIT_OPTIONAL_LOCKS = '0'
     const n = Number(out.GIT_CONFIG_COUNT) > 0 ? Number(out.GIT_CONFIG_COUNT) : 0
     out[`GIT_CONFIG_KEY_${n}`] = 'diff.autoRefreshIndex'
     out[`GIT_CONFIG_VALUE_${n}`] = 'false'

@@ -18,7 +18,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-switch-quiet-git'))
 
-import { GitQuiet, commitIfDirty, endGitQuiet, execGitArgsRaw, execGitGroup, git, gitQuietAt, initSync, oldestOwnGitStart, quietGitWriters } from '../../src/integrations/git-sync.js'
+import { GitQuiet, commitIfDirty, endGitQuiet, execGitArgsRaw, execGitGroup, git, gitAsync, gitQuietAt, initSync, oldestOwnGitStart, quietGitWriters } from '../../src/integrations/git-sync.js'
 import { prehashInFlight, setLargeFileLaneForTest } from '../../src/integrations/git-sync-large-files.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 
@@ -163,33 +163,55 @@ describe('a handed-over home takes no git write from git sync (lib/leader-home-g
   })
 })
 
-describe('a read of git sync leaves the home\'s .git as it was (lib/git-env.ts gitChildEnv, lib/leader-home-gate.ts readOnlyGitEnv)', () => {
-  // Same content, a new mtime: a status with optional locks, or a diff of the work tree, refreshes the stat data and
-  // writes .git/index back.
+describe('git sync\'s reads: index refresh as git always does it, none in a marked home (lib/git-env.ts gitChildEnv, lib/leader-home-gate.ts readOnlyGitEnv)', () => {
+  // Same content, an mtime hours back (never racy): a status with optional locks, or a diff of the work tree,
+  // refreshes the stat data and writes .git/index back.
+  let touches = 0
+  // A new whole second each time: git compares the mtime's seconds (nanoseconds only when built with USE_NSEC).
   const touchSeed = () => {
-    const later = new Date(Date.now() + 60_000)
-    fs.utimesSync(path.join(WALNUT_HOME, 'seed.txt'), later, later)
+    const earlier = new Date(Date.now() - 3_600_000 * ++touches)
+    fs.utimesSync(path.join(WALNUT_HOME, 'seed.txt'), earlier, earlier)
     const index = path.join(WALNUT_HOME, '.git', 'index')
     return { index, before: fs.readFileSync(index), mtime: fs.statSync(index).mtimeMs }
   }
-
-  it('anywhere: a status (GIT_OPTIONAL_LOCKS=0) does not rewrite .git/index', async () => {
-    const { index, before, mtime } = touchSeed()
-    expect(git('status --porcelain')).toBe('')
-    await execGitGroup('git status --porcelain', { cwd: WALNUT_HOME, timeout: 10_000 })
-    expect(fs.readFileSync(index).equals(before)).toBe(true)
-    expect(fs.statSync(index).mtimeMs).toBe(mtime)
-  })
-
-  it('in a handed-over home: a diff of the work tree does not rewrite it either (diff.autoRefreshIndex=false)', async () => {
+  const mark = (state: 'switching' | 'handed-over') => {
     fs.mkdirSync(path.join(WALNUT_HOME, 'local', 'leader-switch'), { recursive: true })
-    fs.writeFileSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'), JSON.stringify({ switchId: 's', to: 'machine-b', state: 'handed-over', at: new Date().toISOString() }))
-    const { index, before, mtime } = touchSeed()
-    expect((await execGitArgsRaw(['diff', '--stat'], { cwd: WALNUT_HOME, timeout: 10_000 })).code).toBe(0)
-    await execGitGroup('git diff --name-only', { cwd: WALNUT_HOME, timeout: 10_000 })
-    git('diff --quiet || true')
-    git('status --porcelain')
-    expect(fs.readFileSync(index).equals(before)).toBe(true)
-    expect(fs.statSync(index).mtimeMs).toBe(mtime)
+    fs.writeFileSync(path.join(WALNUT_HOME, 'local', 'leader-switch', 'handed-over.json'), JSON.stringify({ switchId: 's', to: 'machine-b', state, at: new Date().toISOString() }))
+  }
+
+  // 2026-11-26: optional locks off for every git child left a touched file stale in the index for good (git sync runs
+  // no add on a clean tree), so each status of a touched 20 GB home hashed it all again: 98 to 131 s a run, 0.04 s
+  // once refreshed.
+  it('an unmarked home: a status of a touched file refreshes .git/index once, so the next status has nothing to hash', async () => {
+    expect(process.env.GIT_OPTIONAL_LOCKS).toBeUndefined()
+    for (const status of [
+      () => git('status --porcelain'),
+      () => gitAsync('status --porcelain'),
+      () => execGitGroup('git status --porcelain', { cwd: WALNUT_HOME, timeout: 10_000 }),
+      () => execGitArgsRaw(['-c', 'core.bigFileThreshold=1024g', 'status', '--porcelain', '-uall'], { cwd: WALNUT_HOME, timeout: 10_000 }),
+    ]) {
+      const { index, before } = touchSeed()
+      await status()
+      const after = fs.readFileSync(index)
+      expect(after.equals(before), String(status)).toBe(false)
+      await status()
+      expect(fs.readFileSync(index).equals(after), String(status)).toBe(true)
+    }
   })
+
+  for (const state of ['switching', 'handed-over'] as const) {
+    it(`a ${state} home: neither a status nor a diff of the work tree rewrites .git/index`, async () => {
+      mark(state)
+      const { index, before, mtime } = touchSeed()
+      expect(git('status --porcelain')).toBe('')
+      await gitAsync('status --porcelain')
+      await execGitGroup('git status --porcelain', { cwd: WALNUT_HOME, timeout: 10_000 })
+      expect((await execGitArgsRaw(['-c', 'core.bigFileThreshold=1024g', 'status', '--porcelain', '-uall'], { cwd: WALNUT_HOME, timeout: 10_000 })).code).toBe(0)
+      expect((await execGitArgsRaw(['diff', '--stat'], { cwd: WALNUT_HOME, timeout: 10_000 })).code).toBe(0)
+      await execGitGroup('git diff --name-only', { cwd: WALNUT_HOME, timeout: 10_000 })
+      git('diff --quiet || true')
+      expect(fs.readFileSync(index).equals(before)).toBe(true)
+      expect(fs.statSync(index).mtimeMs).toBe(mtime)
+    })
+  }
 })

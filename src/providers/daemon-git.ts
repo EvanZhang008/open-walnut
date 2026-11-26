@@ -13,7 +13,7 @@ import { computeGitDiff, createGitStatus, listGitRefs, GitDiffError, type GitDif
 import type { ExecFileException } from 'node:child_process'
 import type { ChildProcessFns } from './daemon-child-spawn.js'
 import { expandHome, ok, fail, type Answer, type Answers, type DaemonEnv } from './daemon-module-deps.js'
-import { readOnlyGitEnv } from '../lib/leader-home-gate.js'
+import { leaderHomeMarkAt, readOnlyGitEnv } from '../lib/leader-home-gate.js'
 
 export interface DaemonGitDeps {
   daemonEnv: DaemonEnv
@@ -28,8 +28,10 @@ export function createDaemonGit<W>(deps: DaemonGitDeps) {
   /** One git run. Never throws: exit codes are answers; `failure` is the error's own message. */
   function runGit(argv: string[], runCwd: string, opts: { env?: DaemonEnv; timeout: number; maxBuffer: number }) {
     return new Promise<{ stdout: string; stderr: string; code: number; failure: string }>((resolve) => {
-      // Every git here reads: with readOnlyGitEnv it writes nothing either (no index refresh; lib/leader-home-gate.ts).
-      execFileCb(argv[0], argv.slice(1), { cwd: runCwd, env: readOnlyGitEnv({ ...(opts.env ?? daemonEnv) }, runCwd), timeout: opts.timeout, maxBuffer: opts.maxBuffer, encoding: 'utf-8' },
+      // Every git here reads: in a data home under a leader switch readOnlyGitEnv makes it write nothing either (no
+      // index refresh; lib/leader-home-gate.ts). Anywhere else the env is the caller's, as it always was.
+      const env = leaderHomeMarkAt(runCwd) ? readOnlyGitEnv({ ...(opts.env ?? daemonEnv) }, runCwd) : opts.env
+      execFileCb(argv[0], argv.slice(1), { cwd: runCwd, ...(env ? { env } : {}), timeout: opts.timeout, maxBuffer: opts.maxBuffer, encoding: 'utf-8' },
         (err: ExecFileException | null, stdout: string, stderr: string) => {
           if (!err) return resolve({ stdout, stderr, code: 0, failure: '' })
           resolve({

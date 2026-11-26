@@ -224,7 +224,7 @@ export function credentialGuardArgs(cwd?: string): string[] {
       timeout: LOCAL_TIMEOUT,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: gitChildEnv(),
+      env: gitChildEnv(undefined, process.env, cwd ?? WALNUT_HOME),
     });
     // https://ANYTHING@host — userinfo present means embedded credentials
     if (/https?:\/\/[^/\s]+@/.test(urls)) return ['-c', 'credential.helper='];
@@ -258,7 +258,7 @@ export async function credentialGuardArgsAsync(cwd?: string): Promise<string[]> 
       cwd: dir,
       timeout: LOCAL_TIMEOUT,
       encoding: 'utf-8',
-      env: gitChildEnv(),
+      env: gitChildEnv(undefined, process.env, dir),
     });
     if (/https?:\/\/[^/\s]+@/.test(stdout)) args = ['-c', 'credential.helper='];
   } catch {
@@ -471,7 +471,8 @@ export async function gitAsync(args: string, options?: { cwd?: string; timeout?:
   const stdout = await execGitGroup(`git ${guard ? `${guard} ` : ''}${args}`, {
     cwd: options?.cwd ?? WALNUT_HOME,
     timeout: options?.timeout ?? LOCAL_TIMEOUT,
-    env: gitChildEnv(options?.env),
+    // execGitGroup builds the child env (gitChildEnv with this cwd) from this.
+    env: options?.env,
   });
   return stdout.trim();
 }
