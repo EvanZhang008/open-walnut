@@ -87,6 +87,7 @@ const REPORTS: Record<string, string> = {
   'scripts/desktop-health-monitor.sh': 'logs the load',
   'scripts/ios-perf/kb-loop-probe.sh': 'prints a warning that a timeout may be starvation, never waits',
   'scripts/lib/deploy-queue.sh': 'stretches the deploy gap while the Mac is busy, up to a fixed bound; it holds no test run',
+  'scripts/leader-switch/real/preflight.sh': 'prints the other machine\'s load for rehearsal (b)\'s one-time go or no-go (real-world.ts judgeFacts: refuse at or above the core count), never waits on it',
   'scripts/pw-cleanup.sh': 'prints the load in its status',
   'src/core/session-health-monitor.ts': 'writes the load per core into its slow-tick warning, never waits on it',
   'src/core/stall-recorder-hold.ts': 'writes the load into a stall record',
