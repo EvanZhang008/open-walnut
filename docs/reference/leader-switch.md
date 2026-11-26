@@ -1796,7 +1796,9 @@ witness, above).
 ## Not built yet
 
 - **The copy link to another machine** is [built](#the-copy-link-to-another-machine) and rehearsed on one computer with
-  real daemons ([Rehearsal](#rehearsal), `--remote`); not yet run between the two dev boxes (rehearsal (b)). The old leader's
+  real daemons ([Rehearsal](#rehearsal), `--remote`); not yet run between the two dev boxes (rehearsal (b)): it needs a
+  driver that starts the second machine's daemon, witness service and home on the other box over the account's existing ssh,
+  puts a tunnel where each loopback proxy is, and reads that machine's files over ssh for the checks. The old leader's
   own sessions follow by their host key ([Paths](#paths), where a session runs); a subagent run's or a detached record's host
   is not moved.
 - **The command on the machine that will lead** is [built](#running-the-command-on-either-machine) and rehearsed with real
