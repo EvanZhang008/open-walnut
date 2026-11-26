@@ -173,7 +173,7 @@ describe('the primary sends through its companion without SSH', () => {
 
   it('distinguishes no bridge from a send whose answer was lost', async () => {
     h.request.mockRejectedValueOnce(new BridgeOfflineError('devbox'))
-    expect((await send()).body).toEqual({ error: 'host_unavailable', sent: false })
+    expect((await send()).body).toEqual({ error: 'host_unavailable', code: 'host_reconnecting', sent: false })
     h.request.mockRejectedValueOnce(new Error('bridge request timed out'))
     expect((await send()).body).toEqual({ error: 'delivery_unconfirmed', sent: true })
     h.request.mockResolvedValueOnce({ ok: true, duplicate: true, fate: 'ran' })
