@@ -274,8 +274,12 @@ final class ReviewSurfaceTests: XCTestCase {
         let row = try XCTUnwrap(draft.range(of: "private var pillRow: some View {"))
         let rowEnd = try XCTUnwrap(draft.range(of: "\n    private ", range: row.upperBound..<draft.endIndex))
         let rowBody = draft[row.upperBound..<rowEnd.lowerBound]
-        XCTAssertTrue(rowBody.contains("if launchPillsInPillRow {\n                    launchPills"))
-        XCTAssertTrue(draft.contains("return ComposerBar.pillLayout(stacked: false) {"))
+        // In the folder row (which wraps), the mode and model keys are each their own key, so
+        // the model key takes the next line alone rather than running off the screen.
+        XCTAssertTrue(rowBody.contains("if launchPillsInPillRow {"))
+        XCTAssertTrue(rowBody.contains("launchModePill\n                launchModelPill"))
+        XCTAssertTrue(rowBody.contains("OrgChipFlow("))
+        XCTAssertTrue(draft.contains("ComposerBar.pillLayout(stacked: false) {"))
         XCTAssertTrue(draft.contains("if !quickDirs.isEmpty, !movesQuickFoldersIntoPage {"))
         XCTAssertTrue(draft.contains("!quickDirs.isEmpty && dynamicTypeSize.isAccessibilitySize"))
         let page = try XCTUnwrap(draft.range(of: "private var introOrStatus: some View {"))
