@@ -101,13 +101,22 @@ async function readThread(request: APIRequestContext, node: string, title: strin
   return thread.id
 }
 
-async function openLead(page: Page): Promise<void> {
+/**
+ * Open the lead's detail. Its side bar opens on the Threads, unless he hid it: the hidden side bar is
+ * kept for the node (OrgNodeDetail.tsx `node.railHidden`, since fe120da0d6), over a reload too.
+ */
+async function openLead(page: Page, rail: 'shown' | 'hidden' = 'shown'): Promise<void> {
   await page.getByTestId('sidebar-org').click()
   await expect(page.getByTestId('org-page')).toBeVisible()
   await page.getByTestId('org-search').fill(PROJECT)
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey(PROJECT)}"]`).click()
   const detail = page.getByTestId('org-detail')
   await expect(detail).toHaveAttribute('data-key', rowKey(PROJECT))
+  if (rail === 'hidden') {
+    await expect(detail.getByTestId('org-rail-toggle')).toHaveAttribute('aria-pressed', 'false')
+    await expect(page.getByTestId('org-rail')).toHaveCount(0)
+    return
+  }
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
 }
 
@@ -272,7 +281,9 @@ test('on a VP: the top is the Threads list\'s first, steps through all of them, 
   await shot(page, '4-hidden', page.getByTestId('org-detail'))
   await page.reload()
   await page.waitForLoadState('networkidle')
-  if (!(await page.getByTestId('org-detail').isVisible())) await openLead(page)
+  // The side bar stays hidden over the reload, so the lead opens again without it (2026-11-26: the
+  // spec still asked for the Threads side bar here, which the kept hide of fe120da0d6 never shows).
+  if (!(await page.getByTestId('org-detail').isVisible())) await openLead(page, 'hidden')
   await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', rowKey(PROJECT))
   const again = topOf(page.getByTestId('org-chat'))
   await expect(again).toHaveAttribute('data-hidden', 'true', { timeout: 30_000 })
