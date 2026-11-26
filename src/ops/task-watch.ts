@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { TASK_RECEIPT } from './task-answers.js';
+import { badInput } from './own-refusal.js';
 
 defineOp({
   name: 'task_watch',
@@ -25,7 +26,7 @@ defineOp({
     off: z.boolean().optional().describe('true ends the watch'),
   },
   handler: async (args, call) => {
-    if (!args.off && !args.every) throw new Error('Pass every ("30m", "3h", "1d"), or off: true to end the watch.');
+    if (!args.off && !args.every) throw badInput('Pass every ("30m", "3h", "1d"), or off: true to end the watch.');
     const body = await call('PUT', `/tasks/${encodeURIComponent(String(args.id))}/watch`, args.off
       ? { off: true }
       : { every: args.every, ...(args.for ? { for: args.for } : {}) }) as

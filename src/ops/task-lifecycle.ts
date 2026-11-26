@@ -12,7 +12,7 @@
 
 import { z } from 'zod'
 import { defineOp } from './registry.js'
-import { OwnRefusalError } from './own-refusal.js'
+import { OwnRefusalError, badInput, reworded } from './own-refusal.js'
 import { withOutcome } from './outcome.js'
 import { TASK_RECEIPT } from './task-answers.js'
 import { SESSION_EFFORT_IDS, SESSION_MODE_IDS, SESSION_OUTPUT_MODE_IDS, type SessionEffort, type SessionOutputMode } from '../core/types.js'
@@ -33,7 +33,7 @@ async function sessionOfTask(id: string, call: Call, opts: { queued?: boolean } 
   const sid = task.session_id || task.exec_session_id || (Array.isArray(ids) ? ids.at(-1) : undefined)
   if (typeof sid !== 'string' || !sid) {
     if (opts.queued && task.start_queue) throw new QueuedStart(task.id, typeof task.title === 'string' ? task.title : '')
-    throw new Error(`Task ${task.id} has no session (not started). Nothing to stop or restart; task_start runs it.`)
+    throw new OwnRefusalError('no_session', `Task ${task.id} has no session (not started). Nothing to stop or restart; task_start runs it.`, { status: 409 })
   }
   return { taskId: task.id, title: typeof task.title === 'string' ? task.title : '', sessionId: sid }
 }
@@ -227,7 +227,7 @@ defineOp({
   },
   handler: async ({ id, model, effort, mode, reply_style: replyStyle }, call) => {
     if (model === undefined && effort === undefined && mode === undefined && replyStyle === undefined) {
-      throw new Error('Name at least one of model, effort, mode, reply_style.')
+      throw badInput('Name at least one of model, effort, mode, reply_style.')
     }
     const target = await sessionOfTask(String(id), call)
     if (mode !== undefined) {
@@ -255,9 +255,9 @@ defineOp({
         if (replyStyle !== undefined) applied.reply_style = replyStyle
       }
     } catch (err) {
+      // The refusal keeps its own code and status; only its words say what was already applied.
       const done = Object.keys(applied)
-      const message = err instanceof Error ? err.message : String(err)
-      throw new Error(done.length ? `${message} (already applied: ${done.join(', ')})` : message)
+      throw err instanceof Error && done.length ? reworded(err, `${err.message} (already applied: ${done.join(', ')})`) : err
     }
     const summary = Object.entries(applied).map(([k, v]) => `${k} ${String(v)}`).join(', ')
     return withOutcome(

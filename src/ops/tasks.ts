@@ -27,6 +27,7 @@ import { routingView } from '../core/task-deliverable.js'
 import { fullTaskRows, TASK_LIST_BINDING } from './task-routing-rows.js'
 import { SEARCH_SEMANTIC_WAIT_MS, type OpCall } from './core.js'
 import { clause } from '../utils/format.js'
+import { OwnRefusalError, badInput } from './own-refusal.js'
 import {
   askedFields, pickTaskFields, TASK_BULK_ANSWER, TASK_COMPLETE_ANSWER, TASK_CREATE_ANSWER, TASK_GET_ANSWER,
   TASK_GET_BULK_ANSWER, TASK_LIST_ANSWER, TASK_NOT_DONE_SETTLE_ANSWER, TASK_RECEIPT, TASK_UPDATE_ANSWER,
@@ -329,7 +330,7 @@ defineOp({
         appliedScope = undefined
         scopeNote = `scope "${askedScope}" needs a calling task, so it was left out and the filters you gave decide.`
       } else if (!place?.id) {
-        throw new Error('Cannot locate the caller: scope folder or project needs a calling task. '
+        throw badInput('Cannot locate the caller: scope folder or project needs a calling task. '
           + 'To list one project, pass project:"<its name>" with no scope; for the whole board, omit scope.')
       }
     }
@@ -685,9 +686,9 @@ defineOp({
   handler: async (args, call) => {
     const { record_only, start_session, start_message, message, ...rest } = args
     if (record_only !== undefined && start_session !== undefined && record_only === start_session) {
-      throw new Error('record_only and start_session conflict. Use record_only=true to defer, or omit both to start.')
+      throw badInput('record_only and start_session conflict. Use record_only=true to defer, or omit both to start.')
     }
-    if (message !== undefined && start_message !== undefined) throw new Error('Use message, not both message and start_message.')
+    if (message !== undefined && start_message !== undefined) throw badInput('Use message, not both message and start_message.')
     const recordOnly = record_only === true || start_session === false
     const launch: Record<string, unknown> = {}
     const fields: Record<string, unknown> = {}
@@ -700,7 +701,7 @@ defineOp({
     if (!recordOnly && typeof launch.host === 'string' && launch.host.trim().startsWith('@')) {
       const picked = await call('GET', `/hosts/pick?need=${encodeURIComponent(launch.host.trim().slice(1))}`) as
         { pick?: { host?: string; reason?: string } } | undefined
-      if (!picked?.pick?.host) throw new Error(`No host was picked for ${launch.host}. Read host_list and name a host.`)
+      if (!picked?.pick?.host) throw new OwnRefusalError('no_host', `No host was picked for ${launch.host}. Read host_list and name a host.`, { status: 409 })
       fields.launch_host_asked = launch.host.trim()
       launch.host = picked.pick.host
       hostNote = `Host: ${clause(picked.pick.reason)}. `
@@ -713,7 +714,7 @@ defineOp({
     if (instruction) launch.message = instruction
     if (!fields.description && instruction) fields.description = instruction
     if (recordOnly && (message !== undefined || start_message !== undefined || Object.keys(launch).some((k) => k !== 'message'))) {
-      throw new Error('record_only does not accept execution options. Omit record_only to start work.')
+      throw badInput('record_only does not accept execution options. Omit record_only to start work.')
     }
     const created = await call('POST', '/tasks', fields) as
       { task?: Record<string, unknown>; placement?: Placement; reused?: boolean } | undefined
@@ -946,7 +947,7 @@ defineOp({
       if (v !== undefined) body[k] = v
     }
     if (Object.keys(body).length === 0) {
-      throw new Error('task_update needs at least one field to change besides `id`.')
+      throw badInput('task_update needs at least one field to change besides `id`.')
     }
     // The line goes through its own route first (core/sessions/report-set.ts), so a phase in the same
     // call is written after it and wins.
@@ -1116,7 +1117,7 @@ defineOp({
       // Asked for a part: every caller gets that part, an agent's built for its cap.
       return askedPart(args) ? agentMemoryPage(read, args, caller?.answer) : read
     }
-    if (!id) throw new Error('No task of your own: pass task.')
+    if (!id) throw badInput('No task of your own: pass task.')
     const [body, folder] = await Promise.all([
       call('GET', `/tasks/${encodeURIComponent(id)}/agent-memory`) as Promise<
         { title?: string; memory?: AgentMemory | null; chars?: number; soft_limit?: number; limit?: number }>,
@@ -1182,7 +1183,7 @@ defineOp({
     const id = typeof args.task === 'string' && args.task.trim()
       ? args.task.trim()
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
-    if (!id) throw new Error('No task of your own: pass task.')
+    if (!id) throw badInput('No task of your own: pass task.')
     if (typeof args.name === 'string' && args.name.trim()) {
       const body = await call('GET', `/tasks/${encodeURIComponent(id)}/agent-skills/${encodeURIComponent(args.name.trim())}`) as
         { scope?: string; skill?: { name?: string; at?: string; by_name?: string } }
@@ -1233,7 +1234,7 @@ defineOp({
     const id = typeof args.task === 'string' && args.task.trim()
       ? args.task.trim()
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
-    if (!id) throw new Error('No task of your own to keep skills for: pass task.')
+    if (!id) throw badInput('No task of your own to keep skills for: pass task.')
     const scope = args.scope ?? 'own'
     const path = `/tasks/${encodeURIComponent(id)}/agent-skills/${encodeURIComponent(String(args.name).trim())}`
     if (args.delete) {
@@ -1272,7 +1273,7 @@ defineOp({
     const id = typeof args.task === 'string' && args.task.trim()
       ? args.task.trim()
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
-    if (!id) throw new Error('No task of your own to keep a MEMORY.md for: pass task.')
+    if (!id) throw badInput('No task of your own to keep a MEMORY.md for: pass task.')
     if (typeof args.file === 'string' && args.file.trim()) {
       const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/memory-files/${encodeURIComponent(args.file.trim())}`, { content: args.content }) as
         { name?: string; removed?: boolean; bytes?: number; count?: number }
@@ -1320,7 +1321,7 @@ defineOp({
     const id = typeof args.task === 'string' && args.task.trim()
       ? args.task.trim()
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
-    if (!id) throw new Error('No task of your own: pass task.')
+    if (!id) throw badInput('No task of your own: pass task.')
     const body = await call('GET', `/tasks/${encodeURIComponent(id)}/brief${args.compact === true ? '?compact=1' : ''}`) as
       { title?: string; compact?: boolean; brief?: { text?: string; at: string } | null; fresh?: { stale?: boolean; words?: string } | null; issues?: string[]; health?: { line?: string; alarms?: unknown[] }; off?: boolean; note?: string }
     // The Brief is off (experiment brief_off): what was written stays readable, and nothing is asked.
@@ -1363,9 +1364,9 @@ defineOp({
     const id = typeof args.task === 'string' && args.task.trim()
       ? args.task.trim()
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
-    if (!id) throw new Error('No task of your own: pass task.')
+    if (!id) throw badInput('No task of your own: pass task.')
     const edits = Array.isArray(args.edits) ? (args.edits as Array<{ old: string; new: string }>) : []
-    if (typeof args.content !== 'string' && !edits.length) throw new Error('Pass content (the whole letter) or edits.')
+    if (typeof args.content !== 'string' && !edits.length) throw badInput('Pass content (the whole letter) or edits.')
     const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/brief`, {
       ...(typeof args.content === 'string' ? { content: args.content } : {}), ...(edits.length ? { edits } : {}),
     }) as { title?: string; chars?: number; own_chars?: number; limit?: number; issues?: Array<{ kind: string; line: string }>; off?: boolean; note?: string }
@@ -1589,9 +1590,9 @@ defineOp({
       const { id, ...fields } = u
       const body: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(fields)) if (v !== undefined) body[k] = v
-      if (Object.keys(body).length === 0) throw new Error(`task_update_bulk: the patch for ${String(id)} changes no field.`)
+      if (Object.keys(body).length === 0) throw badInput(`task_update_bulk: the patch for ${String(id)} changes no field.`)
       // Two patches for one id would silently keep the last; say so instead.
-      if (bodies.has(String(id))) throw new Error(`task_update_bulk: ${String(id)} appears twice; send one patch per task.`)
+      if (bodies.has(String(id))) throw badInput(`task_update_bulk: ${String(id)} appears twice; send one patch per task.`)
       bodies.set(String(id), body)
     }
     const rows = await bulkRows([...bodies.keys()], (id) => call('PATCH', `/tasks/${encodeURIComponent(id)}`, bodies.get(id)))

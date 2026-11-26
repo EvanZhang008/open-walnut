@@ -17,6 +17,7 @@ import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../co
 import { buildTriggerUpdatePatch, type TriggerUpdateField } from '../core/routines/trigger-update-patch.js'
 import { ownJobWatchWarning } from '../core/routines/own-job-watch.js'
 import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js'
+import { OwnRefusalError, badInput } from './own-refusal.js'
 import {
   byActivity, compactRow, everyLabel, filterWords, fullRow, matchesFilter, pageLimit, MAX_LIMIT,
   isSessionRoutine, type ListedJob, type ListFilter,
@@ -57,8 +58,8 @@ async function setTriggerEnabled(
 ): Promise<{ job: NonNullable<RoutineJobBody['job']>; changed: boolean; away?: Record<string, unknown> }> {
   const path = `/routines/${encodeURIComponent(id)}`
   const current = (await call('GET', path) as RoutineJobBody | undefined)?.job
-  if (!current) throw new Error(`no trigger ${id}; trigger_list shows the ids`)
-  if (!current.check) throw new Error(`${id} ("${current.name ?? ''}") is a scheduled routine, not a trigger`)
+  if (!current) throw new OwnRefusalError('not_found', `no trigger ${id}; trigger_list shows the ids`, { status: 404 })
+  if (!current.check) throw badInput(`${id} ("${current.name ?? ''}") is a scheduled routine, not a trigger`)
   if (current.enabled === enabled) return { job: current, changed: false }
   const answer = await call('PATCH', path, { enabled })
   // Saved on this host while the server is away (a host's follower): its own words.
@@ -496,7 +497,7 @@ defineOp({
   handler: async (args, call) => {
     const { id, testId, ...check } = args
     const waitingOn = typeof testId === 'string' && testId.trim() ? testId.trim() : ''
-    if (!waitingOn && typeof check.run !== 'string') throw new Error('run is required (or testId, to read a run still going)')
+    if (!waitingOn && typeof check.run !== 'string') throw badInput('run is required (or testId, to read a run still going)')
     const body = await call('POST', '/routines/check-test', waitingOn ? { testId: waitingOn } : {
       check,
       ...(typeof id === 'string' && id ? { id } : {}),
@@ -671,7 +672,7 @@ defineOp({
     const id = String(args.id)
     const path = `/routines/${encodeURIComponent(id)}`
     const current = (await call('GET', path) as { job?: TriggerJob } | undefined)?.job
-    if (!current) throw new Error(`no trigger ${id}; trigger_list shows the ids`)
+    if (!current) throw new OwnRefusalError('not_found', `no trigger ${id}; trigger_list shows the ids`, { status: 404 })
     const { patch, given } = buildTriggerUpdatePatch(current, args as Record<string, unknown>)
     const answer = await call('PATCH', path, patch)
     // Changed on this host while the server is away (a host's follower): its own words.

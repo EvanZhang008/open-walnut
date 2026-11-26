@@ -103,6 +103,6 @@ describe('executeOp', () => {
   it('a call that carried only an empty wait_report says it changes nothing', async () => {
     vi.stubGlobal('fetch', async () => { throw new Error('must not be called') })
     const r = await executeOp('task_update', { id: 't1', wait_report: ' ' }, { apiBase: 'http://127.0.0.1:1', origin: LOCAL_ORIGIN })
-    expect(r).toMatchObject({ ok: false, message: 'task_update needs at least one field to change besides `id`.' })
+    expect(r).toMatchObject({ ok: false, invalidArgs: true, code: 'bad_input', message: expect.stringContaining('task_update needs at least one field to change besides `id`.') })
   })
 })

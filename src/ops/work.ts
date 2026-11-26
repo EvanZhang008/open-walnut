@@ -21,6 +21,7 @@ import { isoDateTime, LIST_MAX } from '../lib/zod-rules.js'
 import { OPEN_ITEMS_ANSWER } from './org-answer-shapes.js'
 import { TASK_DIR_VAR, stopTmpPathNote } from '../lib/tmp-draft-path.js';
 import { STATUS_REPORT_CHANNEL } from '../lib/internal-lines.js';
+import { OwnRefusalError, badInput } from './own-refusal.js';
 
 defineOp({
   name: 'task_start',
@@ -336,7 +337,7 @@ defineOp({
     const ids = task.session_ids;
     const sid = task.session_id || task.exec_session_id || (Array.isArray(ids) ? ids.at(-1) : undefined);
     if (!sid) {
-      if (task.last_start) throw new Error('This task has a launch attempt but no conversation yet. Read task_get for its execution result.');
+      if (task.last_start) throw new OwnRefusalError('no_conversation', 'This task has a launch attempt but no conversation yet. Read task_get for its execution result.', { status: 409 });
       if (!Array.isArray(ids) || ids.length) throw new Error('Task conversation state is unavailable; retry task_history.');
       return { taskId: task.id, execution: { state: 'not_started' }, messages: [] };
     }
@@ -782,7 +783,7 @@ defineOp({
   handler: async (args, call) => {
     const { name, ...body } = args;
     if (Object.values(body).every((v) => v === undefined)) {
-      throw new Error('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_effort, default_mode, isolated_workspace, workspace_source, claude_plugins_off');
+      throw badInput('project_metadata_update needs one of default_cwd, default_host, default_engine, default_model, default_effort, default_mode, isolated_workspace, workspace_source, claude_plugins_off');
     }
     return call('PUT', `/projects/${encodeURIComponent(String(name))}/metadata`, body);
   },
@@ -891,7 +892,7 @@ defineOp({
     const project = String(args.project ?? '').trim();
     // Refused HERE, before anything is written: the Inbox keeps no tracking note
     // (trackingNotePathFor has no path for it), and a note written first would be an orphan.
-    if (isInboxProject(project)) throw new Error('The Inbox keeps no tracking note: pass another project name.');
+    if (isInboxProject(project)) throw badInput('The Inbox keeps no tracking note: pass another project name.');
 
     const { readNote } = await import('./core.js');
     const { TRACKING_SKELETON, trackingNotePathFor } = await import('../core/tracking-note.js');
@@ -901,7 +902,7 @@ defineOp({
     // even when the derived path has since changed (a rename leaves the note put).
     const notePath = recorded || trackingNotePathFor(row.name);
     if (!notePath) {
-      throw new Error(
+      throw badInput(
         `Project "${row.name}" cannot have a tracking note: its name folds to nothing usable as a `
         + 'folder. Skip it — do not invent a path.',
       );

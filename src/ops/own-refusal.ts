@@ -35,5 +35,34 @@ export function ownRefusal<T extends Record<string, unknown>>(code: string, mess
  * the executor answers it with that code and `extra` (a 409, a bad argument), never as a thrown error.
  */
 export class OwnRefusalError extends Error {
-  constructor(readonly code: string, message: string, readonly extra: { invalidArgs?: true; status?: number } = {}) { super(opened(code, message)) }
+  /** The refusal's words alone, without the code's opening. */
+  readonly words: string
+  constructor(readonly code: string, message: string, readonly extra: { invalidArgs?: true; status?: number } = {}) {
+    super(opened(code, message))
+    this.words = message
+  }
+}
+
+/** The code of an argument an op's own handler refuses, the API's own code for one. */
+export const BAD_INPUT_CODE = 'bad_input'
+
+/**
+ * A handler refusing what it was passed (a missing argument, two that do not go together, a text
+ * that matches nothing): the caller's to fix, counted as a bad argument. A bare `throw new Error`
+ * in a handler reaches every client as `internal` and real use as a thrown error, the server's own
+ * fault (2026-11-25: four thread_update calls that passed merge_into with another field failed a
+ * usage watch that way). An id that names nothing, or a state that refuses the call, is an
+ * OwnRefusalError with its own code and status.
+ * Ratchet: tests/unit/ops/own-refusal-codes.test.ts.
+ */
+export function badInput(message: string): OwnRefusalError {
+  return new OwnRefusalError(BAD_INPUT_CODE, message, { invalidArgs: true })
+}
+
+/** A copy of `err` (its class, its own fields such as status and code, its stack) with other words. */
+export function reworded(err: Error, message: string): Error {
+  const copy = Object.assign(Object.create(Object.getPrototypeOf(err) as object) as Error, err)
+  Object.defineProperty(copy, 'message', { value: message, writable: true, configurable: true })
+  if (err.stack) Object.defineProperty(copy, 'stack', { value: err.stack.replace(err.message, () => message), writable: true, configurable: true })
+  return copy
 }

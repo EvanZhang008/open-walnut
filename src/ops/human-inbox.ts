@@ -34,6 +34,7 @@ import { awayAnswer, withOutcome } from './outcome.js'
 import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE } from '../core/org/thread-rules.js'
 import { LIST_MAX } from '../lib/zod-rules.js'
 import { fitPage, line, nextPageCall, objOf, pageBudget, pick, receiptBase } from './org-answer-shapes.js'
+import { OwnRefusalError, badInput } from './own-refusal.js'
 
 /** The sender's open decision letter asking the same thing, from the send's answer (duplicate-letter.ts). */
 function openAskOf(body: unknown): { letterId: string; subject: string; sentAt: string; hint: string } | undefined {
@@ -369,7 +370,7 @@ defineOp({
     const path = `/human-inbox/${encodeURIComponent(String(id))}`
     const body = await call('GET', path) as { letter?: LetterRow & { body?: string; bodyFormat?: string; bodyDeferred?: boolean; bodyBytes?: number; thread?: Array<Record<string, unknown>> } }
     const l = body?.letter
-    if (!l) throw new Error(`Letter not found: ${id}`)
+    if (!l) throw new OwnRefusalError('not_found', `Letter not found: ${id}`, { status: 404 })
     // A body over the inline cap (a digest with media) is read whole from its own route, up to
     // DEFERRED_READ_BYTES: its media goes with the markup, and the text left is what the user reads.
     let raw = typeof l.body === 'string' ? l.body : undefined
@@ -431,7 +432,7 @@ defineOp({
   handler: async ({ id, read, pinned, archived, settled, redact_credentials }, call) => {
     const sets = ([['read', read], ['pin', pinned], ['archive', archived]] as const).filter(([, v]) => typeof v === 'boolean')
     const reason = typeof settled === 'string' ? settled.trim() : ''
-    if (!sets.length && !reason && redact_credentials !== true) throw new Error('Name at least one of read, pinned, archived, settled, redact_credentials.')
+    if (!sets.length && !reason && redact_credentials !== true) throw badInput('Name at least one of read, pinned, archived, settled, redact_credentials.')
     let letter: unknown
     let redacted: number | undefined
     if (redact_credentials === true) {
@@ -492,7 +493,7 @@ defineOp({
     const path = `/human-inbox/${encodeURIComponent(String(id))}`
     const pick = typeof action_id === 'string' ? action_id.trim() : ''
     const words = typeof text === 'string' ? text.trim() : ''
-    if (!pick && !words) throw new Error('Name action_id (an option) or text (a reply).')
+    if (!pick && !words) throw badInput('Name action_id (an option) or text (a reply).')
     // Checked where the op is served (core/human-inbox/answer-approval.ts); passed through as given.
     const quoted = typeof user_words === 'string' ? { userWords: user_words } : {}
     const out = pick

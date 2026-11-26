@@ -7,6 +7,7 @@
 
 import type { HttpBinding } from './registry.js'
 import { addDays, isValidTz, localDate, localParts, systemTz, zonedMidnight } from '../core/health/day-key.js'
+import { badInput } from './own-refusal.js'
 
 type Call = (method: HttpBinding['method'], path: string, body?: unknown) => Promise<unknown>
 
@@ -276,7 +277,7 @@ export async function runDayReview(
     ? args.sections.split(',').map((s) => s.trim()).filter(Boolean)
     : [...DAY_REVIEW_SECTIONS]
   const unknown = asked.filter((s) => !(DAY_REVIEW_SECTIONS as readonly string[]).includes(s))
-  if (unknown.length) throw new Error(`unknown section(s): ${unknown.join(', ')} (use ${DAY_REVIEW_SECTIONS.join(', ')})`)
+  if (unknown.length) throw badInput(`unknown section(s): ${unknown.join(', ')} (use ${DAY_REVIEW_SECTIONS.join(', ')})`)
   const wanted = asked as Section[]
   const budget = opts.timeoutMs ?? DAY_REVIEW_TIMEOUT_MS
   const end = Date.now() + budget

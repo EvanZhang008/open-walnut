@@ -5,6 +5,7 @@ import { handOffLine, type HandOffResult } from '../core/org/thread-follow.js';
 import { NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { fitPage, line, nextPageCall, objOf, pageBudget, pageOf, pageWords, pick, receiptBase } from './org-answer-shapes.js';
+import { OwnRefusalError, badInput } from './own-refusal.js';
 
 /** Rows of org_get an agent reads when the call names no limit. */
 const ORG_ROWS_PAGE = 30;
@@ -109,7 +110,7 @@ defineOp({
       handedOverBy?: { id: string; title: string }; via?: { id?: string; title?: string; kind?: string; org_role?: string };
     };
     const id = contact?.task?.id;
-    if (!id) throw new Error(`No contact for "${String(to)}". Read org_get for the projects.`);
+    if (!id) throw new OwnRefusalError('not_found', `No contact for "${String(to)}". Read org_get for the projects.`, { status: 404 });
     // A lead that handed its project over: the message goes to the lead that took it, and the caller is told.
     const who = `${contact.task?.title ?? id} (${id}, ${contact.kind ?? 'task'})`
       + (contact.via && contact.via.id !== id
@@ -247,7 +248,7 @@ defineOp({
     override_user: z.boolean().optional().describe('The user asked for this change: your words count as the user\'s (they replace Walnut\'s default), and may replace or clear words the user wrote'),
   },
   handler: async ({ task_id, project, name, instructions, override_user }, call) => {
-    if (!task_id === !project) throw new Error('Name the node by task_id or by project, one of them.');
+    if (!task_id === !project) throw badInput('Name the node by task_id or by project, one of them.');
     const edit = {
       ...(name !== undefined ? { name } : {}), ...(instructions !== undefined ? { instructions } : {}),
       ...(override_user ? { override_user: true } : {}),
@@ -309,7 +310,7 @@ defineOp({
       const body = await call('GET', '/org/duties') as { duties?: Array<{ id: string; name: string }> };
       return withOutcome(body ?? {}, `${body?.duties?.length ?? 0} duties.`, 'Pass task_id, duty and on to switch one.');
     }
-    if (!task_id || typeof on !== 'boolean') throw new Error('Name the node (task_id) and pass on: true or false.');
+    if (!task_id || typeof on !== 'boolean') throw badInput('Name the node (task_id) and pass on: true or false.');
     const body = await call('PUT', `/org/nodes/${encodeURIComponent(String(task_id))}/duties/${encodeURIComponent(String(duty))}`, { on }) as { task?: { title?: string; org_name?: string } };
     const who = body?.task?.org_name ? `the ${body.task.org_name} VP` : body?.task?.title ?? 'the node';
     return withOutcome(body ?? {}, `${duty} is ${on ? 'on' : 'off'} for ${who}.`, on ? 'It runs from now on; no restart needed.' : 'It stops acting for this node now.');

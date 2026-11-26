@@ -20,7 +20,7 @@ import { defineOp } from './registry.js'
 import { withTaskRouting } from './task-routing-rows.js'
 import { DOC_ANSWER_MAX_CHARS, DOC_PART_INPUT, askedPart, clipText, pageOnce, pagedResult } from './doc-page.js'
 import { cutTextPath } from './answer.js'
-import { OwnRefusalError, SHORTENED_TEXT_CODE } from './own-refusal.js'
+import { OwnRefusalError, SHORTENED_TEXT_CODE, badInput } from './own-refusal.js'
 
 /** How long an agent's search waits for the meaning lane's query embedding. */
 export const SEARCH_SEMANTIC_WAIT_MS = 2500
@@ -466,12 +466,12 @@ function looksLikeNoteId(value: string): boolean {
 async function resolveNoteTarget(args: Record<string, unknown>, call: OpCall): Promise<string> {
   const id = typeof args.id === 'string' ? args.id.trim() : ''
   const path = typeof args.path === 'string' ? args.path.trim() : ''
-  if (!id && !path) throw new Error('pass path (vault-relative note path) or id (from note_search)')
+  if (!id && !path) throw badInput('pass path (vault-relative note path) or id (from note_search)')
   const ref = id || path
   if (!id && !looksLikeNoteId(path)) return path
   const resolved = await call('GET', `/notes/resolve?ref=${encodeURIComponent(ref)}`)
   const resolvedPath = (resolved as { path?: unknown }).path
-  if (typeof resolvedPath !== 'string' || !resolvedPath) throw new Error(`cannot resolve note reference: ${ref}`)
+  if (typeof resolvedPath !== 'string' || !resolvedPath) throw badInput(`cannot resolve note reference: ${ref}`)
   return resolvedPath
 }
 
@@ -572,9 +572,11 @@ defineOp({
         // as a dead end. It is really a missing argument: say which one.
         const message = err instanceof Error ? err.message : String(err)
         if (/already exists/i.test(message)) {
-          throw new Error(
+          throw new OwnRefusalError(
+            'conflict',
             `note exists; pass expectedHash from note_read to update ${String(path)} `
             + '(note_read → contentHash → note_write), or use note_edit for a partial change',
+            { status: 409 },
           )
         }
         throw err
@@ -620,13 +622,13 @@ defineOp({
     }
     const occurrences = note.content.split(oldStr).length - 1
     if (occurrences === 0) {
-      throw new Error(
+      throw badInput(
         `old_str not found in ${note.path} — it must match the note byte-for-byte `
         + '(whitespace and line breaks included). note_read the note and copy the exact text',
       )
     }
     if (occurrences > 1 && !replaceAll) {
-      throw new Error(
+      throw badInput(
         `old_str appears ${occurrences} times in ${note.path} — include enough surrounding text to `
         + 'make it unique, or pass replace_all: true',
       )
@@ -700,7 +702,7 @@ defineOp({
     const method = String(args.method) as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
     const path = String(args.path)
     if (!path.startsWith('/api/')) {
-      throw new Error('api passthrough only accepts paths starting with /api/')
+      throw badInput('api passthrough only accepts paths starting with /api/')
     }
     // A write here stores what it is given, like a receipt op, which the executor guards (answer.ts):
     // a body built from a shortened read would delete the rest of what it was cut from.

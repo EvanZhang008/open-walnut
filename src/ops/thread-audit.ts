@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
+import { badInput } from './own-refusal.js'
 
 interface Counts { found?: Record<string, number>; reported?: Record<string, number>; fixed?: Record<string, number>; calls?: number; callMs?: number }
 const sum = (r: Record<string, number> | undefined): number => Object.values(r ?? {}).reduce((a, b) => a + b, 0)
@@ -24,7 +25,7 @@ defineOp({
   },
   handler: async (args, call) => {
     if (args.run === true) {
-      if (typeof args.task !== 'string') throw new Error('run needs task: the node to check.')
+      if (typeof args.task !== 'string') throw badInput('run needs task: the node to check.')
       const r = await call('POST', '/thread-audit/run', { task: args.task }) as { ran?: boolean; why?: string; running?: boolean; found?: Record<string, number>; told?: unknown[]; fixed?: Record<string, number>; delivery?: string }
       if (r.running) return withOutcome(r, 'The check still runs; its counts show on thread_audit soon.', 'Read thread_audit in a minute.')
       if (!r.ran) return withOutcome(r, `Nothing checked: ${r.why === 'off' ? 'the experiment threads_audit is off' : r.why ?? 'no open threads'}.`, 'No further action is required.')

@@ -22,7 +22,7 @@ import { z } from 'zod';
 import type { OpCall } from './core.js';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
-import { OwnRefusalError, SHORTENED_TEXT_CODE } from './own-refusal.js';
+import { OwnRefusalError, SHORTENED_TEXT_CODE, badInput } from './own-refusal.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { BOARD_GET_BUDGET, BOARD_PART_NAMES, boardBudget, boardGetAnswer, boardWriteReceipt, defaultView, selectParts, type BoardPart } from './board-get-view.js';
 import { objOf, pick, receiptBase } from './org-answer-shapes.js';
@@ -81,7 +81,7 @@ export async function resolveBoardTask(args: Record<string, unknown>, call: OpCa
   if (given) return { taskId: given, shared: false };
   const me = await call('GET', '/me').then((b) => b as CallerMe, () => undefined);
   const id = me?.task?.id;
-  if (!id) throw new Error('No task of your own to find a board on: pass task (the leader\'s id).');
+  if (!id) throw badInput('No task of your own to find a board on: pass task (the leader\'s id).');
   const owner = await call('GET', boardPath(id, '/owner')).then((b) => b as BoardOwnerBody, () => undefined);
   const ownerId = typeof owner?.task_id === 'string' && owner.task_id ? owner.task_id : id;
   return { taskId: ownerId, shared: ownerId !== id };
@@ -218,7 +218,7 @@ defineOp({
     const full = { task_id: target.taskId, ...body } as Record<string, unknown>;
     const thread = typeof args.thread === 'string' && args.thread.trim() ? args.thread.trim() : undefined;
     const since = typeof args.since === 'string' && args.since.trim() ? args.since.trim() : undefined;
-    if (since && Number.isNaN(Date.parse(since))) throw new Error(`since must be an ISO time (e.g. 2026-11-10T07:00:00Z), not "${since}".`);
+    if (since && Number.isNaN(Date.parse(since))) throw badInput(`since must be an ISO time (e.g. 2026-11-10T07:00:00Z), not "${since}".`);
     const picked = selectParts(full, args.parts as BoardPart[] | undefined, thread, since);
     const view = picked ? null : defaultView(full, due);
     const result = picked ?? view!.body;

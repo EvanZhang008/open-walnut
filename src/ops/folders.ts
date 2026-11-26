@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { defineOp, type WalnutOp } from './registry.js';
 import { withOutcome } from './outcome.js';
 import { LIST_MAX } from '../lib/zod-rules.js';
+import { OwnRefusalError, badInput } from './own-refusal.js';
 
 /** A row of GET /api/tasks/groups (task-manager's FolderListing). */
 interface FolderRow {
@@ -90,7 +91,7 @@ defineOp({
       // The parent decides: a subfolder lives in its parent's project.
       const body = await call('GET', '/api/tasks/groups') as { groups?: FolderRow[] } | undefined;
       const parent = (body?.groups ?? []).find((g) => g.group_id === parent_id);
-      if (!parent) throw new Error(`folder_create: no folder with id ${String(parent_id)} (folder_list shows them).`);
+      if (!parent) throw new OwnRefusalError('not_found', `folder_create: no folder with id ${String(parent_id)} (folder_list shows them).`, { status: 404 });
       target = parent.project ?? '';
     }
     if (target === undefined) target = await callerProject(call);
@@ -123,11 +124,11 @@ defineOp({
   },
   handler: async ({ id, project, parent_id }, call) => {
     if ((project === undefined) === (parent_id === undefined)) {
-      throw new Error('folder_move: pass exactly one of project (another project) or parent_id (another folder, "" = top level).');
+      throw badInput('folder_move: pass exactly one of project (another project) or parent_id (another folder, "" = top level).');
     }
     if (parent_id !== undefined) {
       const parent = String(parent_id).trim();
-      if (parent && !FOLDER_ID.safeParse(parent).success) throw new Error('folder_move: parent_id must be a folder id (g_...) or "".');
+      if (parent && !FOLDER_ID.safeParse(parent).success) throw badInput('folder_move: parent_id must be a folder id (g_...) or "".');
       const nested = await call('PATCH', `/api/tasks/folders/${encodeURIComponent(String(id))}`, {
         parent_id: parent || null,
       }) as { group_id?: string; parent_id?: string } | undefined;

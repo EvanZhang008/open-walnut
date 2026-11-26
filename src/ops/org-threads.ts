@@ -17,6 +17,7 @@ import { ASK_OPTIONS_MAX } from '../core/user-status.js'
 import { READ_REFUSAL, THREAD_STATES, THREAD_TITLE_MAX } from '../core/org/threads-model.js'
 import { ACK_PLACES, PLACE_WHY_MAX } from '../core/org/thread-view.js'
 import { USER_KINDS, USER_KIND_WHY_MIN } from '../core/org/user-kind.js'
+import { OwnRefusalError, badInput, reworded } from './own-refusal.js'
 
 /**
  * What a thread op says about Threads. The rules for keeping them (what a card holds, when an
@@ -48,7 +49,7 @@ async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> 
   const id = typeof args.task === 'string' && args.task.trim()
     ? args.task.trim()
     : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
-  if (!id) throw new Error('No task of your own: pass task.')
+  if (!id) throw badInput('No task of your own: pass task.')
   return id
 }
 
@@ -141,15 +142,7 @@ function withCorrectedCall(op: string, args: Record<string, unknown>, keys: read
   const words = fix ? `${msg} The call that goes through: ${fix}`
     : status === 400 && !msg.includes(' takes: ') ? `${msg} ${op} takes: ${keys.join(', ')}.` : ''
   if (!words) throw err
-  throw renamed(err, words)
-}
-
-/** A copy of `err` (its class, its own fields, its stack) with other words. */
-function renamed(err: Error, message: string): Error {
-  const copy = Object.assign(Object.create(Object.getPrototypeOf(err) as object) as Error, err)
-  Object.defineProperty(copy, 'message', { value: message, writable: true, configurable: true })
-  if (err.stack) Object.defineProperty(copy, 'stack', { value: err.stack.replace(err.message, () => message), writable: true, configurable: true })
-  return copy
+  throw reworded(err, words)
 }
 
 /** The keys of a thread op, for a refusal that names them. */
@@ -293,7 +286,7 @@ defineOp({
     const t = body.thread
     const messages = (t.messages ?? []) as Array<{ id: string; answer?: unknown }>
     if (typeof args.message === 'string' && !messages.some((m) => m.id === args.message)) {
-      throw new Error(`No message ${args.message} in thread ${t.id}: thread_get {"id":"${t.id}"} lists its message ids.`)
+      throw new OwnRefusalError('no_message', `No message ${args.message} in thread ${t.id}: thread_get {"id":"${t.id}"} lists its message ids.`, { status: 404 })
     }
     const open = messages.filter((m) => !m.answer).length
     return withOutcome(
@@ -371,7 +364,7 @@ defineOp({
     const alone = given.filter((k) => k !== 'merge_into' && k !== 'user_words')
     if (typeof patch.merge_into === 'string' && alone.length) {
       const rest = Object.fromEntries(alone.map((k) => [k, patch[k]]))
-      throw new Error(`merge_into goes alone: this thread is gone after the merge, so ${Object.keys(rest).join(', ')} would be lost. `
+      throw badInput(`merge_into goes alone: this thread is gone after the merge, so ${Object.keys(rest).join(', ')} would be lost. `
         + `Two calls: thread_update ${JSON.stringify({ id: threadId, merge_into: patch.merge_into })}, then thread_update ${callArgs({ id: patch.merge_into, ...rest })}.`)
     }
     let body: PatchAnswer
