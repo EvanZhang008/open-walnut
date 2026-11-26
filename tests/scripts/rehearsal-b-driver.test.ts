@@ -27,6 +27,8 @@ afterEach(() => {
   for (const d of dirs.splice(0)) { try { execFileSync('chmod', ['-R', 'u+w', d]) } catch { /* gone */ } fs.rmSync(d, { recursive: true, force: true }) }
 })
 const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+/** A pid's start tick (/proc/<pid>/stat field 22), or null. */
+const tickOf = (pid: number): number | null => { try { const s = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); return Number(s.slice(s.lastIndexOf(')') + 2).split(' ')[19]) } catch { return null } }
 /** A child of this test ended (a signalled one stays a zombie until it is reaped: kill 0 still finds it). */
 const ended = (p: ChildProcess) => p.exitCode !== null || p.signalCode !== null
 const sh = (file: string, args: string[]) => {
@@ -138,6 +140,22 @@ describe('the ssh transport: only the master\'s socket, the same port on both ma
     await new Promise<void>((res) => echo.close(() => res()))
     await new Promise<void>((res) => svc.close(() => res()))
   })
+  it('unforward(P) cancels that one -L forward and closes its relay; the others stay', async () => {
+    const r = recorder()
+    const t = new SshTransport({ host: 'olddev', socket: '/s/m', bridge: { host: '127.0.0.2', container: '127.0.0.3' }, spawnSsh: r.spawnSsh })
+    const echo = net.createServer((s) => s.pipe(s))
+    await new Promise<void>((res) => echo.listen(0, '127.0.0.2', () => res()))
+    const P = (echo.address() as net.AddressInfo).port
+    await t.forward(P)
+    await t.unforward(P)
+    expect(r.calls.at(-1)).toEqual([...t.clientArgs(), '-O', 'cancel', '-L', `127.0.0.2:${P}:127.0.0.1:${P}`, 'olddev'])
+    const refused = await new Promise<boolean>((res) => { const c = net.connect(P, '127.0.0.1'); c.on('connect', () => { c.destroy(); res(false) }); c.on('error', () => res(true)) })
+    expect(refused).toBe(true)
+    // Closed once: close() has no forward left to cancel.
+    await t.close()
+    expect(r.calls.filter((c) => c.includes('cancel')).length).toBe(1)
+    await new Promise<void>((res) => echo.close(() => res()))
+  })
   it('a forward the master refuses is an error naming it', async () => {
     const t = new SshTransport({ host: 'olddev', socket: '/s/m', bridge: { host: '127.0.0.2', container: '127.0.0.3' }, spawnSsh: () => spawn('/bin/sh', ['-c', 'echo "Port forwarding failed" >&2; exit 255'], { stdio: ['pipe', 'pipe', 'pipe'] }) })
     await expect(t.forward(45999)).rejects.toThrow(/ssh -O forward -L 127.0.0.2:45999:127.0.0.1:45999 olddev: Port forwarding failed/)
@@ -211,6 +229,19 @@ describe('the agent over the fake transport (machine-agent.ts, machine-io.ts Age
       await io.close(5_000)
     }
   })
+  it('signals no pid it did not start that runs outside its root (stopPid)', async () => {
+    const root = tmp('agent-stop')
+    const io = startAgent(root, agentEnv(root))
+    await io.hello
+    const outside = sleeper(os.tmpdir())
+    await until(() => !!outside.pid && alive(outside.pid))
+    try {
+      expect(await io.op('stopPid', outside.pid!, 500)).toBe(false)
+      expect(ended(outside)).toBe(false)
+    } finally {
+      await io.close(5_000)
+    }
+  })
   it('refuses to run when a place of its env is outside its root, and the channel says so', async () => {
     const root = tmp('agent-refuse')
     const io = startAgent(root, { ...agentEnv(root), TMPDIR: os.tmpdir() })
@@ -254,25 +285,57 @@ describe('the other machine\'s scripts (real/*.sh) on folders and processes of t
     fs.mkdirSync(path.join(R, 'machine', 'work'), { recursive: true })
     const ours = sleeper(path.join(R, 'machine', 'work'))
     const outside = sleeper(base)
-    // A process the agent recorded but whose cwd and program are not under the root: named, left alone.
-    const recorded = sleeper(os.tmpdir())
-    fs.appendFileSync(path.join(R, 'run', 'pids.jsonl'), `${JSON.stringify({ pid: recorded.pid, what: 'test' })}\n`)
+    // A recorded pid that is another process now (its start tick differs): named, left alone, no reason to keep the root.
+    const reused = sleeper(os.tmpdir())
+    await until(() => !!reused.pid && tickOf(reused.pid) !== null)
+    fs.appendFileSync(path.join(R, 'run', 'pids.jsonl'), `${JSON.stringify({ pid: reused.pid, tick: tickOf(reused.pid!)! + 1, what: 'test' })}\n`)
     // A read-only standby copy: the root is made writable before it goes.
     fs.mkdirSync(path.join(R, 'machine', 'standby', 'copy'), { recursive: true })
     fs.writeFileSync(path.join(R, 'machine', 'standby', 'copy', 'f'), 'x')
     fs.chmodSync(path.join(R, 'machine', 'standby', 'copy', 'f'), 0o400)
     fs.chmodSync(path.join(R, 'machine', 'standby', 'copy'), 0o500)
-    await until(() => [ours, outside, recorded].every((p) => !!p.pid && alive(p.pid)))
+    await until(() => [ours, outside, reused].every((p) => !!p.pid && alive(p.pid)))
     const r = sh('cleanup.sh', [R])
     expect(r.code, r.out).toBe(0)
     expect(r.out).toContain(`TERM pid ${ours.pid} `)
-    expect(r.out).toContain(`LEFT ALONE (recorded, but its cwd and program are not under ${R}): pid ${recorded.pid} `)
+    expect(r.out).toContain(`LEFT ALONE (a recorded pid now another process's): pid ${reused.pid} `)
     expect(r.out).not.toContain(`pid ${outside.pid} `)
     await until(() => ended(ours))
     expect(ended(outside) || !alive(outside.pid!)).toBe(false)
-    expect(ended(recorded) || !alive(recorded.pid!)).toBe(false)
+    expect(ended(reused) || !alive(reused.pid!)).toBe(false)
     expect(fs.existsSync(R)).toBe(false)
   })
+  it('cleanup.sh keeps the root and names a recorded process still running as recorded but no longer under it (it never signals it)', async () => {
+    const base = tmp('clean-rec')
+    const R = path.join(base, 'b2b-real')
+    expect(sh('make-root.sh', [R, 'r']).code).toBe(0)
+    const recorded = sleeper(os.tmpdir())
+    await until(() => !!recorded.pid && tickOf(recorded.pid) !== null)
+    fs.appendFileSync(path.join(R, 'run', 'pids.jsonl'), `${JSON.stringify({ pid: recorded.pid, tick: tickOf(recorded.pid!), what: 'test' })}\n`)
+    const r = sh('cleanup.sh', [R])
+    expect(r.code, r.out).toBe(3)
+    expect(r.out).toContain(`LEFT ALONE (recorded and still running, but its cwd and program are not under ${R}): pid ${recorded.pid} `)
+    expect(r.out).not.toContain(`TERM pid ${recorded.pid} `)
+    expect(ended(recorded)).toBe(false)
+    expect(fs.existsSync(R)).toBe(true)
+  })
+  it('cleanup.sh named through a symlink still finds its processes (/proc gives resolved paths), and KILLs one that ignores TERM, after the same checks', async () => {
+    const base = tmp('clean-link')
+    const R = path.join(base, 'b2b-real')
+    expect(sh('make-root.sh', [R, 'r']).code).toBe(0)
+    const link = path.join(base, 'via-link')
+    fs.symlinkSync(R, link)
+    // TERM ignored (kept across exec): only the KILL after 20 s ends it.
+    const stubborn = spawn('/bin/sh', ['-c', "trap '' TERM; exec sleep 300"], { cwd: R, stdio: 'ignore', detached: true })
+    procs.push(stubborn)
+    await until(() => !!stubborn.pid && alive(stubborn.pid) && fs.readlinkSync(`/proc/${stubborn.pid}/exe`).endsWith('sleep'))
+    const r = sh('cleanup.sh', [link])
+    expect(r.code, r.out).toBe(0)
+    expect(r.out).toContain(`TERM pid ${stubborn.pid} `)
+    expect(r.out).toContain(`KILL pid ${stubborn.pid} `)
+    await until(() => ended(stubborn))
+    expect(fs.existsSync(R)).toBe(false)
+  }, 60_000)
   it('cleanup.sh leaves a process under the root that started before it alone, names it, and keeps the root', async () => {
     const base = tmp('clean-old')
     const R = path.join(base, 'b2b-real')

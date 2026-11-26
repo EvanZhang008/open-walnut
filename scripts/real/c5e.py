@@ -72,7 +72,7 @@ DOOR_PORT = 47912         # host loopback: the leader's door through ssh -R
 LEADER_PORT = 39456       # in the container
 LEADER_PROBE_PORT = 39457
 LEADER_NAME = 'c5e-leader'
-SSH_OPTS = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'LogLevel=ERROR',
+SSH_OPTS = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'CheckHostIP=no', '-o', 'UpdateHostKeys=no', '-o', 'LogLevel=ERROR',
             '-o', 'ServerAliveInterval=10', '-o', 'ServerAliveCountMax=3']
 MASTER = ['-o', 'ControlMaster=auto', '-o', 'ControlPath=/tmp/c5e-ssh-%C', '-o', 'ControlPersist=60m']
 

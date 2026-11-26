@@ -25,22 +25,56 @@ const kept = new Map<string, Kept>()
 const setupWitnesses = new Map<string, { walnutId: string | null; close(): Promise<void> }>()
 let nextHandle = 1
 
+/** A process's start in clock ticks since boot (/proc/<pid>/stat field 22), or null (gone, or no /proc). */
+export function startTick(pid: number): number | null {
+  try {
+    const s = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+    const t = Number(s.slice(s.lastIndexOf(')') + 2).split(' ')[19])
+    return Number.isFinite(t) ? t : null
+  } catch { return null }
+}
+
+/** Each process started here and its start tick: a pid is signalled only while it is still that process. */
+const startedHere = new Map<number, number | null>()
+
 /** Each process started here, as the cleanup reads it: one JSON line per start in $WALNUT_REHEARSAL_PIDS, when set. */
 function recordStart(what: string, pid: number | undefined, argv: string[]): void {
+  if (!pid) return
+  const tick = startTick(pid)
+  startedHere.set(pid, tick)
   const file = process.env.WALNUT_REHEARSAL_PIDS
-  if (!file || !pid) return
-  fs.appendFileSync(file, `${JSON.stringify({ pid, what, argv, at: new Date().toISOString() })}\n`, { mode: 0o600 })
+  if (!file) return
+  fs.appendFileSync(file, `${JSON.stringify({ pid, tick, what, argv, at: new Date().toISOString() })}\n`, { mode: 0o600 })
 }
 
 const alive = (pid: number): boolean => { if (!Number.isInteger(pid) || pid <= 1) return false; try { process.kill(pid, 0); return true } catch { return false } }
 
-/** SIGTERM, then SIGKILL after `graceMs`: one pid, never a group, never pid 1 or below or this process. */
+/** The agent's root (rehearsal (b)), resolved: a pid it signals runs there. Null in rehearsal (a). */
+const agentRoot = (() => { const r = process.env.WALNUT_REHEARSAL_ROOT; if (!r) return null; try { return fs.realpathSync(r) } catch { return path.resolve(r) } })()
+const underAgentRoot = (pid: number): boolean => {
+  if (!agentRoot) return true
+  for (const f of ['cwd', 'exe']) { try { const t = fs.readlinkSync(`/proc/${pid}/${f}`); if (t === agentRoot || t.startsWith(agentRoot + '/')) return true } catch { /* gone or not ours */ } }
+  return false
+}
+/** Still the process that was started here (the same start tick), and on the agent's machine under its root. */
+function stillOurs(pid: number): boolean {
+  if (!alive(pid)) return false
+  const known = startedHere.get(pid)
+  if (known !== undefined && known !== null && startTick(pid) !== known) return false
+  return underAgentRoot(pid)
+}
+
+/**
+ * SIGTERM, then SIGKILL after `graceMs`: one pid, never a group, never pid 1 or below or this process, and each
+ * signal only while that pid is still the process started here (its start tick; a pid gone and reused is left
+ * alone) and, on the other machine, runs under the agent's root.
+ */
 async function stopOne(pid: number, graceMs: number): Promise<boolean> {
   if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) throw new Error(`refused to signal pid ${pid}`)
-  if (!alive(pid)) return false
+  if (!stillOurs(pid)) return false
   try { process.kill(pid, 'SIGTERM') } catch { return false }
   for (let waited = 0; waited < graceMs && alive(pid); waited += 100) await new Promise((r) => setTimeout(r, 100))
-  if (alive(pid)) try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
+  if (stillOurs(pid)) try { process.kill(pid, 'SIGKILL') } catch { /* gone */ }
   return true
 }
 
@@ -251,7 +285,8 @@ export const OPS = {
    */
   listenersUnder: (root: string): Array<{ pid: number; addr: string; cmd: string }> => {
     if (process.platform !== 'linux') return []
-    const r = path.resolve(root)
+    // The resolved root: /proc gives a process's cwd and program resolved.
+    const r = (() => { try { return fs.realpathSync(root) } catch { return path.resolve(root) } })()
     const under = (p: string | null) => !!p && (p === r || p.startsWith(`${r}${path.sep}`))
     const byInode = new Map<string, string>()
     for (const [file, v6] of [['/proc/net/tcp', false], ['/proc/net/tcp6', true]] as const) {
@@ -353,10 +388,12 @@ export const OPS = {
   /** This machine's host replica serving its witness's direct door (witness-machines.ts startHostReplicaDoor): kept here, its handle. */
   startService: async (o: { base: string; machineDir: string; machineId: string; walnutId: string; witness: string; env?: Record<string, string> }): Promise<{ handle: string; port: number; pid: number }> => {
     const { startHostReplicaDoor } = await import('../../tests/helpers/witness-machines.js')
-    const r = await startHostReplicaDoor(o)
+    // On the other machine (rehearsal (b)) nothing signals a group: the replica alone, its children left to the cleanup.
+    const r = await startHostReplicaDoor({ ...o, ...(agentRoot ? { pidOnly: true } : {}) })
     recordStart('service', r.proc.pid, ['walnut', 'web', '--replica', '--dev'])
     const handle = `service-${nextHandle++}`
-    kept.set(handle, { pid: r.proc.pid!, stop: r.stop, log: r.log })
+    const pid = r.proc.pid!
+    kept.set(handle, { pid, stop: agentRoot ? async () => { await stopOne(pid, 10_000).catch(() => {}) } : r.stop, log: r.log })
     return { handle, port: r.port, pid: r.proc.pid! }
   },
   /**

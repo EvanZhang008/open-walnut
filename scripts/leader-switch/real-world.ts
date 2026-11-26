@@ -33,6 +33,7 @@ import { buildRemoteWorld, type BPlacement, type MachineDaemon, type RemoteWorld
 import { describeMachine, REPO } from './world.js'
 import { AgentIO, registerMachineRoot } from './machine-io.js'
 import { shq, type ShResult, type Transport } from './transport.js'
+import type { Readable } from 'node:stream'
 
 const REAL = path.join(REPO, 'scripts', 'leader-switch', 'real')
 const script = (name: string) => fs.readFileSync(path.join(REAL, name), 'utf8')
@@ -134,6 +135,8 @@ export interface RealWorld extends RemoteWorld {
   localAccess: () => string[]
   /** The ports B's processes listened on, sampled every minute and at the stop: how many samples, and each one not on loopback. */
   listeners: () => { samples: number; seen: number; open: string[] }
+  /** Every tunnel the run asked for that did not open (a port taken there or here). */
+  tunnelFailures: () => string[]
 }
 
 async function must(r: Promise<ShResult>, what: string): Promise<ShResult> {
@@ -142,10 +145,21 @@ async function must(r: Promise<ShResult>, what: string): Promise<ShResult> {
   return x
 }
 
-/** `tar -c` of `args` in REPO as a stream (its stderr kept for the message). */
-function tarOut(args: string[]) {
-  const p = spawn('tar', ['-c', '-C', REPO, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
-  return p.stdout
+/** A local producer's stdout as a stream, and its end: a failure (exit code, stderr read as it goes) is an error. */
+function produce(cmd: string, args: string[], cwd = REPO): { out: Readable; done: Promise<void> } {
+  const p = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+  let err = ''
+  p.stderr.setEncoding('utf8').on('data', (d: string) => { err = (err + d).slice(-4000) })
+  const done = new Promise<void>((resolve, reject) => {
+    p.on('error', reject)
+    p.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} ${args.slice(0, 3).join(' ')} exited ${code}: ${err.trim()}`))))
+  })
+  return { out: p.stdout, done }
+}
+/** One stream staged there: the unpacking there and the producing here both must end well. */
+async function stage(t: Transport, dest: string, src: { out: Readable; done: Promise<void> }, timeoutMs: number, what: string): Promise<void> {
+  const [r] = await Promise.all([must(t.sh(`tar -x -C ${shq(dest)}`, { input: src.out, timeoutMs }), what), src.done.catch((e: Error) => { throw new Error(`${what}: ${e.message}`) })])
+  void r
 }
 
 export async function makeRealWorld(root: string, opts: RealOptions): Promise<RealWorld> {
@@ -156,6 +170,12 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
   fs.mkdirSync(opts.evidence, { recursive: true })
   const evidence = (name: string, text: string) => fs.writeFileSync(path.join(opts.evidence, name), text)
   const commit = execFileSync('git', ['-C', REPO, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  // The tree, before anything there: on another machine only the commit as it is (a tracked change refuses the run;
+  // the CLI refused it already), staged as `git archive`; the fake transport's test of a tree with changes stages
+  // what is in it (every tracked and new file, as it is).
+  const changed = (untracked: 'no' | 'all') => execFileSync('git', ['-C', REPO, 'status', '--porcelain', `--untracked-files=${untracked}`], { encoding: 'utf8' }).trim() !== ''
+  if (!t.sharedLoopback && changed('no')) throw new RealRefused(`the tree has changes: ${t.label} runs only the commit ${commit} as it is; nothing was done there`)
+  const dirty = t.sharedLoopback && changed('all')
 
   // 1. What is there, read only.
   const pre = await must(t.sh(script('preflight.sh'), { args: [R], timeoutMs: 60_000 }), 'preflight there')
@@ -206,9 +226,17 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
     evidence('cleanup.txt', cleanupOut)
     log(`cleanup on ${t.label}: exit ${c.code}`)
     const after = await t.sh(script('snapshot.sh'), { args: [R, ...(opts.notProduction ?? [])], timeoutMs: 60_000 }).catch(() => null)
+    // What this account wrote there since the preflight, outside the machine's own Walnut dirs (read only; the fake's
+    // run lists this computer's files itself: --real-confined).
+    const since = Math.floor(Number(facts.now_ms) / 1000) - 1
+    if (!t.sharedLoopback && Number.isFinite(since)) {
+      const w = await t.sh(script('written-since.sh'), { args: [String(since)], timeoutMs: 400_000 }).catch(() => null)
+      evidence('written-since.txt', w ? `${w.out}${w.err ? `\n[stderr] ${w.err}` : ''}\n[exit ${w.code}]\n` : 'did not run\n')
+    }
     if (after) {
       evidence('procs-after.txt', after.out)
-      evidence('procs-diff.txt', diffLines(before.out, after.out))
+      // The services only: a session's CLI (`turn`) comes and goes with the machine's own work.
+      evidence('procs-diff.txt', diffLines(servicesOf(before.out).join('\n'), servicesOf(after.out).join('\n')))
     }
     await t.close({ master: true }).catch(() => {})
     guard?.stop()
@@ -218,17 +246,14 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
   // From here every read of B's files is the agent's (the fake transport: B's root is a folder here, watched).
   const guard = t.sharedLoopback ? watchLocalAccess(R) : null
   try {
-    // 4. The code of this commit, its build and its packages, and this Bun.
-    // The commit's tree (rehearsal (b) runs only a clean tree whose commit is on trunk: the CLI refuses any other). The
-    // fake transport's test of a tree with changes stages what is in it: every tracked and new file, as it is.
-    const dirty = execFileSync('git', ['-C', REPO, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' }).trim() !== ''
-    if (dirty && !t.sharedLoopback) throw new RealRefused(`the tree has changes: ${t.label} runs only the commit ${commit} as it is`)
-    const tree = dirty
-      ? spawn('sh', ['-c', 'git ls-files -z --cached --others --exclude-standard | xargs -0 sh -c \'for f; do [ -e "$f" ] && printf "%s\\0" "$f"; done\' sh | tar -c --null -T -'], { cwd: REPO, stdio: ['ignore', 'pipe', 'inherit'] }).stdout
-      : spawn('git', ['-C', REPO, 'archive', '--format=tar', commit], { stdio: ['ignore', 'pipe', 'inherit'] }).stdout
-    await must(t.sh(`tar -x -C ${shq(`${R}/code`)}`, { input: tree, timeoutMs: 600_000 }), 'staging the tree')
-    await must(t.sh(`tar -x -C ${shq(`${R}/code`)}`, { input: tarOut(['--exclude=*.map', `--exclude=dist/daemon-binaries/daemon-darwin-*`, `--exclude=dist/daemon-binaries/daemon-linux-arm64*`, 'dist']), timeoutMs: 900_000 }), 'staging dist')
-    await must(t.sh(`tar -x -C ${shq(`${R}/code`)}`, { input: tarOut(['--exclude=node_modules/.cache', '--exclude=node_modules/onnxruntime-node', '--exclude=node_modules/onnxruntime-web', '--exclude=node_modules/@huggingface', '--exclude=node_modules/playwright-core/.local-browsers', 'node_modules']), timeoutMs: 1_800_000 }), 'staging node_modules')
+    // 4. The code of this commit (or the fake's working tree, above), its build and its packages, and this Bun.
+    const code = `${R}/code`
+    await stage(t, code, dirty
+      ? produce('sh', ['-c', 'git ls-files -z --cached --others --exclude-standard | xargs -0 sh -c \'for f; do [ -e "$f" ] && printf "%s\\0" "$f"; done\' sh | tar -c --null -T -'])
+      : produce('git', ['-C', REPO, 'archive', '--format=tar', commit]), 600_000, 'staging the tree')
+    if (!fs.existsSync(path.join(REPO, 'dist', 'daemon-binaries'))) throw new Error(`no dist/daemon-binaries in ${REPO}: build first (bun run build, scripts/build-daemon.sh)`)
+    await stage(t, code, produce('tar', ['-c', '-C', REPO, '--exclude=*.map', `--exclude=dist/daemon-binaries/daemon-darwin-*`, `--exclude=dist/daemon-binaries/daemon-linux-arm64*`, 'dist']), 900_000, 'staging dist')
+    await stage(t, code, produce('tar', ['-c', '-C', REPO, '--exclude=node_modules/.cache', '--exclude=node_modules/onnxruntime-node', '--exclude=node_modules/onnxruntime-web', '--exclude=node_modules/@huggingface', '--exclude=node_modules/playwright-core/.local-browsers', 'node_modules']), 1_800_000, 'staging node_modules')
     await must(t.sh(`cat > ${shq(`${R}/bin/bun`)} && chmod 755 ${shq(`${R}/bin/bun`)} && ${shq(`${R}/bin/bun`)} --version`, { input: fs.createReadStream(process.execPath), timeoutMs: 300_000 }), 'staging bun')
     log(`staged ${dirty ? `the working tree on commit ${commit} (changed files as they are)` : `commit ${commit}`} in ${R}/code on ${t.label}`)
 
@@ -291,10 +316,25 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
 
     // The copy link follows B's daemon port as it moves (a server taking the daemon in process): read there every second.
     const followed = new Map<string, number>()
+    const tunnelFailures: string[] = []
     const forwarded = new Set<number>()
     // Each tunnel, as it is opened (the evidence names every port the run opened there).
     const tunnel = (line: string) => fs.appendFileSync(path.join(opts.evidence, 'tunnels.txt'), `${new Date().toISOString()} ${line}\n`)
-    const forward = async (port: number) => { if (forwarded.has(port)) return; forwarded.add(port); await t.forward(port); tunnel(`forward ${port}: this computer's 127.0.0.1:${port} to ${t.label}'s 127.0.0.1:${port} (nothing listens there for it)`) }
+    const forward = async (port: number) => {
+      if (forwarded.has(port)) return
+      forwarded.add(port)
+      try {
+        await t.forward(port)
+      } catch (err) {
+        // Not open: asked again next time, and named (real: every tunnel the run asked for opened).
+        forwarded.delete(port)
+        const why = `forward ${port}: ${err instanceof Error ? err.message : String(err)}`
+        tunnelFailures.push(why)
+        tunnel(`FAILED ${why}`)
+        throw err
+      }
+      tunnel(`forward ${port}: this computer's 127.0.0.1:${port} to ${t.label}'s 127.0.0.1:${port} (nothing listens there for it)`)
+    }
     const place: BPlacement = {
       kind: 'two-machines', label: t.label, wayC: false, b, io,
       basePath: agentEnv.PATH!,
@@ -305,7 +345,11 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
       routeHomeOfB: path.join(root, 'machines', 'hosts', b.id),
       // Each machine's own walnut program (its daemon's bin, machine-ops.ts writeBin): the paths differ between the two.
       walnut: ['walnut-rehearsal'],
-      forward, reverse: async (p) => { await t.reverse(p); tunnel(`reverse ${p}: ${t.label}'s 127.0.0.1:${p} (a listener there) to this computer's 127.0.0.1:${p}`) },
+      forward, reverse: async (p) => {
+        try { await t.reverse(p) } catch (err) { const why = `reverse ${p}: ${err instanceof Error ? err.message : String(err)}`; tunnelFailures.push(why); tunnel(`FAILED ${why}`); throw err }
+        tunnel(`reverse ${p}: ${t.label}'s 127.0.0.1:${p} (a listener there) to this computer's 127.0.0.1:${p}`)
+      },
+      unforward: async (p) => { if (!forwarded.delete(p)) return; await t.unforward(p); tunnel(`closed forward ${p}`) },
       daemonPort: (d: MachineDaemon) => {
         followed.set(d.dir, d.port)
         if (!follower) {
@@ -321,7 +365,7 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
       stop: stopThere,
     }
     const w = await buildRemoteWorld(root, opts, place)
-    return Object.assign(w, { facts, noFiller: judged.smallOnly, commit: dirty ? `${commit} with the working tree's changes` : commit, cleanupOut: () => cleanupOut, localAccess: () => guard?.hits() ?? [], listeners: () => ({ samples: listen.samples, seen: listen.seen.size, open: [...listen.open] }) })
+    return Object.assign(w, { facts, noFiller: judged.smallOnly, commit: dirty ? `${commit} with the working tree's changes` : commit, cleanupOut: () => cleanupOut, localAccess: () => guard?.hits() ?? [], listeners: () => ({ samples: listen.samples, seen: listen.seen.size, open: [...listen.open] }), tunnelFailures: () => [...tunnelFailures] })
   } catch (err) {
     await stopThere()
     throw err

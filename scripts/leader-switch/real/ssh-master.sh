@@ -35,7 +35,8 @@ case "$CMD" in
     fi
     mkdir -p "$(dirname "$SOCK")"
     chmod 700 "$(dirname "$SOCK")"
-    ssh -M -N -f -S "$SOCK" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes \
+    # CheckHostIP and UpdateHostKeys would write known_hosts entries even under StrictHostKeyChecking=yes: off.
+    ssh -M -N -f -S "$SOCK" -o BatchMode=yes -o StrictHostKeyChecking=yes -o CheckHostIP=no -o UpdateHostKeys=no -o ExitOnForwardFailure=yes \
       -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o LogLevel=ERROR "$HOST"
     ssh -S "$SOCK" -O check "$HOST"
     ;;

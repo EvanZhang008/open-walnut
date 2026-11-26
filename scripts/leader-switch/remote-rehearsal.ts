@@ -213,7 +213,6 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
   }
   opts.onWorld?.(w)
   Object.assign(times, w.times)
-  if (!w.wayC) notes.push(`${w.kind === 'two-machines' ? '(b)' : 'this run'} did not use way c: after the one-time setup of w-b (over a setup-only link to its machine, closed right after init), A reached w-b only through its door (w-b's host replica on ${w.label})`)
   // The other machine's disk allows no large home (real-world.ts judgeFacts): the small-data scenarios only.
   const fillerGb = w.noFiller ? 0 : opts.fillerGb
   if (w.noFiller) notes.push(`no --gb ${opts.fillerGb} filler: ${w.noFiller}`)
@@ -239,7 +238,8 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
     const allThree = await waitFor('the three witnesses to hold A', async () => (await Promise.all((['w-a', 'w-b', 'w-k'] as const).map((id) => recordAt(w.witnessRoot[id], walnutId, id)))).every((r) => r?.holder === w.a.id), 120_000).then(() => true).catch(() => false)
     // A host replica's witness is set up only over a link to its service: in rehearsal (a) way c's, in (b) a
     // setup-only link, closed now; from here on (b)'s A reaches w-b only through its door (way c is (a)'s).
-    const setupClosed = w.wayC ? true : await w.endSetupLink()
+    const setupClosed = w.wayC ? true : await w.endSetupLink().catch(() => false)
+    if (!w.wayC && setupClosed) notes.push(`${w.kind === 'two-machines' ? '(b)' : 'this run'} did not use way c: after the one-time setup of w-b (over a setup-only link to its machine, closed right after init), A reached w-b only through its door (w-b's host replica on ${w.label})`)
     if (!c.add(`boot: init sets up w-a and w-k from nothing, A leads, init again adds w-b ${w.wayC ? 'over A\'s link to B\'s service' : 'over a setup-only link to its machine, closed after it (no way c from here on)'}; all three hold A`, leads === true && init2.code === 0 && allThree && setupClosed,
       `init 1 exit ${init1.code}, init 2 exit ${init2.code}, setup link closed ${setupClosed}: ${last(init2.out, 4)}`)) return { checks: c, times, inProcessDaemon, notes }
     if (fillerGb) await writeFiller(w.a.home, fillerGb, log, opts.filler)

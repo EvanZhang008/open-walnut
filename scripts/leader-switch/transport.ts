@@ -35,6 +35,8 @@ export interface Transport {
   /** A /bin/sh script there that keeps running, its stdin and stdout piped to here (the agent). */
   spawn(script: string): ChildProcessWithoutNullStreams
   forward(port: number): Promise<void>
+  /** A forward(port) closed again: the master's forward cancelled and its relay closed. */
+  unforward(port: number): Promise<void>
   reverse(port: number): Promise<void>
   /** Every link closed; the master connection too when `master` (SshTransport). */
   close(o?: { master?: boolean }): Promise<void>
@@ -90,6 +92,7 @@ export class FakeTransport implements Transport {
   sh(script: string, o: { input?: Readable | Buffer | string; timeoutMs?: number; args?: string[] } = {}): Promise<ShResult> { return collect(this.run(script, o.args), o) }
   spawn(script: string): ChildProcessWithoutNullStreams { return this.run(script) }
   async forward(): Promise<void> {}
+  async unforward(): Promise<void> {}
   async reverse(): Promise<void> {}
   async close(): Promise<void> {}
 }
@@ -117,7 +120,7 @@ export interface SshOptions {
 export class SshTransport implements Transport {
   readonly sharedLoopback = false
   readonly label: string
-  private readonly relays: Array<{ close: () => Promise<void> }> = []
+  private readonly relays: Array<{ kind: 'L' | 'R'; port: number; close: () => Promise<void> }> = []
   private readonly forwards: string[][] = []
   private readonly bridge: { container: string; host: string }
   constructor(private readonly o: SshOptions) {
@@ -162,11 +165,19 @@ export class SshTransport implements Transport {
     const spec = ['-L', `${this.bridge.host}:${port}:127.0.0.1:${port}`]
     await this.control('forward', spec)
     this.forwards.push(spec)
-    this.relays.push(await startRelay('127.0.0.1', port, this.bridge.host, port))
+    this.relays.push({ kind: 'L', port, ...(await startRelay('127.0.0.1', port, this.bridge.host, port)) })
+  }
+
+  async unforward(port: number): Promise<void> {
+    const spec = ['-L', `${this.bridge.host}:${port}:127.0.0.1:${port}`]
+    const i = this.forwards.findIndex((f) => f.join(' ') === spec.join(' '))
+    if (i >= 0) { this.forwards.splice(i, 1); await this.control('cancel', spec) }
+    const j = this.relays.findIndex((r) => r.kind === 'L' && r.port === port)
+    if (j >= 0) await this.relays.splice(j, 1)[0]!.close()
   }
 
   async reverse(port: number): Promise<void> {
-    this.relays.push(await startRelay(this.bridge.container, port, '127.0.0.1', port))
+    this.relays.push({ kind: 'R', port, ...(await startRelay(this.bridge.container, port, '127.0.0.1', port)) })
     const spec = ['-R', `127.0.0.1:${port}:${this.bridge.container}:${port}`]
     await this.control('forward', spec)
     this.forwards.push(spec)

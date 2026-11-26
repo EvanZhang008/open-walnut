@@ -87,7 +87,7 @@ const freePort = () => new Promise<number>((resolve) => { const s = net.createSe
  * `machineDir`. Resolves with its public port once its door answers (for `witness`, a witness it holds no
  * record of yet). Shared by tests/e2e/leader-switch-no-link-e2e.test.ts and the cross-machine rehearsal.
  */
-export async function startHostReplicaDoor(o: { base: string; machineDir: string; machineId: string; walnutId: string; witness: string; env?: Record<string, string> }): Promise<{ port: number; proc: ChildProcess; log: () => string; stop: () => Promise<void> }> {
+export async function startHostReplicaDoor(o: { base: string; machineDir: string; machineId: string; walnutId: string; witness: string; env?: Record<string, string>; pidOnly?: boolean }): Promise<{ port: number; proc: ChildProcess; log: () => string; stop: () => Promise<void> }> {
   const home = path.join(o.base, 'home')
   const data = path.join(home, '.open-walnut-host', 'data')
   const run = path.join(home, '.open-walnut-host', 'run')
@@ -106,6 +106,9 @@ export async function startHostReplicaDoor(o: { base: string; machineDir: string
   }
   let out = ''
   const proc = spawn(process.execPath, [path.join(import.meta.dirname, '../../src/cli.ts'), 'web', '--replica', '--dev'], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  // Its whole process group (it was spawned detached as its own group), or with `pidOnly` (rehearsal (b): a
+  // machine where nothing signals a group) the process alone, its children left to that machine's cleanup.
+  const signal = (s: NodeJS.Signals) => process.kill(o.pidOnly ? proc.pid! : -proc.pid!, s)
   proc.stdout!.on('data', (x: Buffer) => { out = (out + x.toString()).slice(-200_000) })
   proc.stderr!.on('data', (x: Buffer) => { out = (out + x.toString()).slice(-200_000) })
   const deadline = Date.now() + 180_000
@@ -113,15 +116,14 @@ export async function startHostReplicaDoor(o: { base: string; machineDir: string
     if (proc.exitCode !== null) throw new Error(`the host replica exited (${proc.exitCode})\n${out.slice(-3000)}`)
     const r = await fetch(`http://127.0.0.1:${at}${WITNESS_DOOR_PATH}/challenge`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ v: 1, walnutId: o.walnutId, witness: o.witness, digest: 'a'.repeat(64), cnonce: 'b'.repeat(64) }) }).catch(() => null)
     if (r && r.status === 404 && ((await r.json().catch(() => ({}))) as { error?: string }).error === 'no_witness_here') break
-    if (Date.now() > deadline) { try { process.kill(-proc.pid!, 'SIGKILL') } catch { /* gone */ } throw new Error(`the host replica's witness door did not answer\n${out.slice(-3000)}`) }
+    if (Date.now() > deadline) { try { signal('SIGKILL') } catch { /* gone */ } throw new Error(`the host replica's witness door did not answer\n${out.slice(-3000)}`) }
     await new Promise((r) => setTimeout(r, 500))
   }
-  // Its whole process group (it was spawned detached as its own group).
   const stop = async () => {
     if (!proc.pid || proc.exitCode !== null) return
-    try { process.kill(-proc.pid, 'SIGTERM') } catch { return }
+    try { signal('SIGTERM') } catch { return }
     for (let i = 0; i < 100 && proc.exitCode === null; i++) await new Promise((r) => setTimeout(r, 100))
-    try { process.kill(-proc.pid, 'SIGKILL') } catch { /* gone */ }
+    if (proc.exitCode === null) try { signal('SIGKILL') } catch { /* gone */ }
   }
   return { port: at, proc, log: () => out, stop }
 }

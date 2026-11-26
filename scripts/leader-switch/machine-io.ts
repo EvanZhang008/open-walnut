@@ -92,15 +92,22 @@ export class AgentIO implements MachineIO {
     })
   }
 
-  /** Ask the agent to stop what it keeps and end; resolves once it exited (or after `ms`, when it is ended by a signal). */
+  /**
+   * Ask the agent to stop what it keeps and end. Bounded however the agent behaves: after `ms` its channel (the
+   * local ssh client, or the fake's shell) gets SIGTERM, 10 s later SIGKILL, and 15 s after `ms` this resolves
+   * anyway, so the machine's cleanup always runs next.
+   */
   async close(ms = 30_000): Promise<void> {
     if (this.ended) return
     const exited = new Promise<void>((r) => this.proc.once('exit', () => r()))
-    await this.op('stopAllKept').catch(() => {})
-    this.proc.stdin.end()
-    const t = setTimeout(() => { try { this.proc.kill('SIGTERM') } catch { /* gone */ } }, ms)
-    await exited
-    clearTimeout(t)
+    const kill = (sig: NodeJS.Signals) => { try { this.proc.kill(sig) } catch { /* gone */ } }
+    const timers = [setTimeout(() => kill('SIGTERM'), ms), setTimeout(() => kill('SIGKILL'), ms + 10_000)]
+    let cap: ReturnType<typeof setTimeout> | undefined
+    const capped = new Promise<void>((r) => { cap = setTimeout(r, ms + 15_000) })
+    await Promise.race([this.op('stopAllKept').catch(() => {}), exited, capped])
+    try { this.proc.stdin.end() } catch { /* gone */ }
+    await Promise.race([exited, capped])
+    for (const t of [...timers, cap]) clearTimeout(t)
   }
 }
 

@@ -32,6 +32,7 @@
  * Nothing here reads or writes outside `root` (and B's root): no ~/.open-walnut, no :3456, no real companion.
  */
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 import YAML from 'yaml'
 import { makeMachine, REPO, stopLeftovers, type Machine } from './world.js'
@@ -134,6 +135,8 @@ export interface BPlacement {
   walnut: string[]
   /** This computer's 127.0.0.1:P reaches B's 127.0.0.1:P (the same port), and B's reaches this computer's. */
   forward(port: number): Promise<void>
+  /** A forward closed again (the setup-only link once w-b is set up). */
+  unforward(port: number): Promise<void>
   reverse(port: number): Promise<void>
   /** The port B's daemon publishes now (daemon.port), as a link to it dials at each connect. */
   daemonPort(d: MachineDaemon): () => number
@@ -189,7 +192,7 @@ export async function makeRemoteWorld(root: string, opts: WorldOptions): Promise
     routeHomeOnB: (id) => path.join(root, 'machines', id.replace(/^machine-/, '')),
     routeHomeOfB: b.dir,
     walnut: [process.execPath, path.join(REPO, 'src', 'cli.ts')],
-    forward: async () => {}, reverse: async () => {},
+    forward: async () => {}, unforward: async () => {}, reverse: async () => {},
     daemonPort: localDaemonPort,
     times: {},
     stop: async () => {},
@@ -325,7 +328,8 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
     await seedPrimaryPairing(a.home, `127.0.0.1:${links.doorK.port}`, companion.tokens)
     const serviceB: { handle: string | null } = { handle: null }
     const all = Object.values(links).filter((p): p is SilentLinkProxy => !!p)
-    const ofMachine = { a: [links.copy, links.aToH, ...(links.aToBService ? [links.aToBService] : [])], b: [links.bToA, links.bToH] }
+    // Read at each cut: the setup-only link leaves once it is closed (endSetupLink), so no cut or mend touches it.
+    const ofMachine = { a: () => [links.copy, links.aToH, ...(links.aToBService ? [links.aToBService] : [])], b: () => [links.bToA, links.bToH] }
     const side = (x: Machine): MachineSide => {
       const call = (c: SideCall) => ioOf(x).op('side', x, c)
       return {
@@ -368,7 +372,7 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
         await stop()
         return { ok: false, log: r.log, logText, stop }
       },
-      cutMachine(k, mode) { for (const p of ofMachine[k]) p.setMode(mode) },
+      cutMachine(k, mode) { for (const p of ofMachine[k]()) p.setMode(mode) },
       witnessDown(id, down) {
         const mode = down ? 'drop-hold' : 'pass'
         if (id === 'w-a') links.doorA.setMode(mode)
@@ -386,18 +390,22 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
       },
       async endSetupLink() {
         if (!setupB) return false
-        const { handle } = setupB
+        const { handle, port } = setupB
         setupB = null
-        // The proxy stays (closed with the world), so its port is never another's, and now dials port 1, where no
-        // unprivileged process can listen: A's reach to it is refused at once and A's next way is tried. The
-        // scenarios no longer see it (no mend reopens it).
-        setupTarget = 1
+        // The proxy stays (closed with the world), so its port is never another's, and now dials a listener of this
+        // process that closes every connection at once: A's reach to it fails at once and A's next way is tried. The
+        // scenarios no longer see it (no cut or mend touches it). Then the tunnel to B and the door there go.
+        const refuser = net.createServer((sock) => sock.destroy())
+        await new Promise<void>((r) => refuser.listen(0, '127.0.0.1', () => r()))
+        stops.push(() => new Promise<void>((r) => refuser.close(() => r())))
+        setupTarget = (refuser.address() as net.AddressInfo).port
         links.aToBService = null
-        await place.io.op('stopKept', handle).catch(() => {})
+        await place.unforward(port)
+        await place.io.op('stopKept', handle)
         return true
       },
       async stop() {
-        await world.endSetupLink().catch(() => {})
+        await world.endSetupLink().catch(() => false)
         for (const x of [a, b]) await side(x).stopServer(10_000).catch(() => {})
         if (serviceB.handle) await place.io.op('stopKept', serviceB.handle).catch(() => {})
         await wmB?.close().catch(() => {})

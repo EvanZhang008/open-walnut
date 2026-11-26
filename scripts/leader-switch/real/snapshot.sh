@@ -5,14 +5,17 @@
 #   ssh <host> sh -s -- <root> [<also not production>...] < scripts/leader-switch/real/snapshot.sh
 #
 # One line per process, sorted: `<pid> <start tick> <kind> <command line>`. kind `turn` is a session's CLI
-# (claude, an ACP worker: they come and go with the machine's own sessions), `service` anything else (its Walnut
-# service, daemon, servers). A process whose cwd or program is under <root> is the rehearsal's and is left out, as
+# (claude, an ACP worker: they come and go with the machine's own sessions, and are not compared), `service` a
+# Walnut one (its service, daemon, servers: a command line that names walnut, or a daemon twin's program). Other
+# bun and node processes (an editor's servers, tools) come and go on a dev desk and are not listed. A process whose cwd or program is under <root> is the rehearsal's and is left out, as
 # is this shell and what it runs, and a process under any further folder named (the driver's own test, where the
 # "other machine" is this computer: its rehearsal processes are no production). The name match only picks what to
 # list; nothing is signalled from it.
 set -u
 ROOT=${1:-}
 ROOT=${ROOT%/}
+# The path /proc names (cwd and exe are resolved).
+[ -n "$ROOT" ] && [ -d "$ROOT" ] && ROOT=$(cd "$ROOT" && pwd -P)
 [ $# -gt 0 ] && shift
 ALSO="$*"
 ME=$$
@@ -40,7 +43,7 @@ for p in /proc/[0-9]*; do
   cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | cut -c1-300)
   case "$cmd" in
     *claude*|*acp*) kind=turn ;;
-    *walnut*|*bun*|*node*|*daemon*) kind=service ;;
+    *walnut*|*daemon-linux-*|*daemon-darwin-*) kind=service ;;
     *) continue ;;
   esac
   tick=$(echo "$rest" | awk '{print $20}')

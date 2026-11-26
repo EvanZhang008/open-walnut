@@ -132,7 +132,7 @@ async function realWorld(): Promise<{ make: import('./leader-switch/remote-rehea
   // The other machine's own evidence (its preflight, process snapshots, the agent's log, the cleanup's output): a
   // folder that outlives the dev container (`--real-evidence`), else beside the run.
   const evidence = path.resolve(flag('--real-evidence') ?? path.join(work, 'real'), path.basename(work))
-  console.log(`REAL  B on ${transport.label}, its root ${bRoot}; commit ${commit}${host ? ' (on trunk)' : ' (the driver\'s own test: any commit)'}; (b) did not use way c: after w-b's one-time setup over a setup-only link, A reaches w-b only through its door; evidence ${evidence}`)
+  console.log(`REAL  B on ${transport.label}, its root ${bRoot}; commit ${commit}${host ? ' (on trunk)' : ' (the driver\'s own test: any commit)'}; way c off: after w-b's one-time setup over a setup-only link, A is to reach w-b only through its door (the boot check holds it); evidence ${evidence}`)
   // `--real-confined`: the time before anything of B starts, and A's own places (each a folder of its own).
   const confined = has('--real-confined')
   const marker = path.join(work, 'confined-since')
@@ -165,12 +165,18 @@ async function realWorld(): Promise<{ make: import('./leader-switch/remote-rehea
     ending = true
     console.log(`ABORT  ${why}: stopping the world (cleanup there first)`)
     failed++
-    await Promise.race([world ? world.stop() : stopThere?.(), new Promise((r) => setTimeout(r, 300_000))]).catch(() => {})
+    // The other machine first (its agent, its cleanup, its snapshot, the ssh master), then A's side here.
+    const capped = (p: Promise<unknown> | undefined, ms: number) => Promise.race([p, new Promise((r) => setTimeout(r, ms))]).catch(() => {})
+    await capped(stopThere?.(), 300_000)
+    if (world) await capped(world.stop(), 120_000)
     const out = (() => { try { return fs.readFileSync(path.join(evidence, 'cleanup.txt'), 'utf8') } catch { return 'none ran (nothing was made there)' } })()
     console.log(`REAL  cleanup there:\n${out.trim()}`)
     makeWritable(work)
     process.exit(code)
   }
+  // An error nothing caught ends the run the same way: the other machine is cleaned up before this process goes.
+  process.on('uncaughtException', (err) => { console.error(err); void abort(`an uncaught error: ${err instanceof Error ? err.message : String(err)}`, 1) })
+  process.on('unhandledRejection', (err) => { console.error(err); void abort(`an unhandled rejection: ${err instanceof Error ? err.message : String(err)}`, 1) })
   process.on('SIGINT', () => { void abort('SIGINT', 130) })
   process.on('SIGTERM', () => { void abort('SIGTERM', 143) })
   return {
@@ -196,7 +202,10 @@ async function realWorld(): Promise<{ make: import('./leader-switch/remote-rehea
         print({ name: 'real-fake: the driver never read or wrote a file of B itself (each one through the agent, as over ssh)', ok: hits.length === 0, detail: hits.length ? hits.slice(0, 3).join(' | ') : 'none' })
       }
       const l = world.listeners()
-      print({ name: `real: every port the run's processes on ${transport.label} listened on was on its loopback`, ok: l.samples > 0 && l.open.length === 0, detail: `${l.samples} sample(s), ${l.seen} port(s)${l.open.length ? `; not on loopback: ${l.open.slice(0, 4).join('; ')}` : ''}` })
+      // At least B's daemon and its host replica (w-b's door) were seen listening: a sampler that saw nothing proves nothing.
+      print({ name: `real: every port the run's processes on ${transport.label} listened on was on its loopback (at least B's daemon and w-b's door seen)`, ok: l.samples > 0 && l.seen >= 2 && l.open.length === 0, detail: `${l.samples} sample(s), ${l.seen} port(s)${l.open.length ? `; not on loopback: ${l.open.slice(0, 4).join('; ')}` : ''}` })
+      const tf = world.tunnelFailures()
+      print({ name: `real: every tunnel the run asked for opened`, ok: tf.length === 0, detail: tf.length ? tf.slice(0, 4).join(' | ') : 'all (tunnels.txt)' })
       const diff = (() => { try { return fs.readFileSync(path.join(evidence, 'procs-diff.txt'), 'utf8').trim() } catch { return 'no snapshot after' } })()
       print({ name: `real: ${transport.label}'s production processes are the same before and after the run`, ok: diff === '(the same)', detail: diff.split('\n').slice(0, 6).join(' | ') })
       if (confined) {
