@@ -16,6 +16,8 @@
  *   whole app look broken.
  */
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
+import type { PluginRouteReply, PluginRouteRequest } from '../../core/plugins/plugin-route-adapter.js'
+import { personAct } from './agent-caller.js'
 import type { MailApprovals } from './approvals.js'
 import {
   errorReply,
@@ -69,6 +71,15 @@ const DEFAULT_PAGE = 50
 const OPEN_DRAFT_STATES = [
   'composing', 'pending_approval', 'approved', 'sending', 'failed', 'unknown',
 ] as const
+
+/** What an agent's Unsubscribe click is told: it asked, as mail_unsubscribe_request does. */
+const AGENT_ASKED_UNSUBSCRIBE = 'Only the person leaves a list: Walnut sent them a letter asking, and nothing was unsubscribed or sent. '
+  + 'Do not ask again for this message; their answer acts, and the outcome is reported in that letter.'
+const AGENT_UNSUBSCRIBED_UNASKED = 'Approvals are off, so Walnut ran the unsubscribe now with no letter.'
+/** What an agent's Send click is told: it asked, as mail_request_send does. */
+const AGENT_ASKED_SEND = 'Only the person sends mail: Walnut sent them a letter showing this draft, and nothing was sent. '
+  + 'Tell them you drafted it and asked them to approve it; do not ask again for this revision.'
+const AGENT_SENT_UNASKED = 'Approvals are off, so Walnut sent this draft now with no letter.'
 
 /** The one degraded answer shape every write here uses when its budget runs out. */
 function slowReply(message: string, draft?: unknown) {
@@ -137,7 +148,24 @@ export function registerMailWriteRoutes(
    * console has a sentence to print either way, and a client that had to catch an HTTP error to read
    * it would show "something went wrong" instead of what actually happened.
    */
-  walnut.http.route('post', '/messages/:accountId/:messageId/unsubscribe', async (request) => {
+  // Anyone but the person (an agent through the `api` op, a script) asks instead, as
+  // mail_unsubscribe_request does: their click is what authorises the ladder (agent-caller.ts).
+  const askToUnsubscribe = async (request: PluginRouteRequest): Promise<PluginRouteReply> => {
+    if (primaryOnly()) return PRIMARY_ONLY
+    const [accountId, messageId] = segmentsAfter(request, '/messages/')
+    if (!accountId || !messageId) {
+      return { status: 400, json: { error: 'invalid', message: 'an account id and a message id are required' } }
+    }
+    try {
+      const asked = await bounded(walnut, unsubscribe.requestFromAgent(accountId, messageId), 'unsubscribe request')
+      if (!asked) return slowReply('The unsubscribe letter is still being prepared.')
+      return { json: { ok: true, asked: !asked.done, ...asked, walnut_note: asked.done ? AGENT_UNSUBSCRIBED_UNASKED : AGENT_ASKED_UNSUBSCRIBE } }
+    } catch (error) {
+      return errorReply(walnut, error)
+    }
+  }
+
+  walnut.http.route('post', '/messages/:accountId/:messageId/unsubscribe', personAct(async (request) => {
     if (primaryOnly()) return PRIMARY_ONLY
     const [accountId, messageId] = segmentsAfter(request, '/messages/')
     if (!accountId || !messageId) {
@@ -192,9 +220,9 @@ export function registerMailWriteRoutes(
     } catch (error) {
       return errorReply(walnut, error)
     }
-  })
+  }, askToUnsubscribe))
 
-  walnut.http.route('post', '/drafts/:draftId/request-send', async (request) => {
+  const requestSend = async (request: PluginRouteRequest): Promise<PluginRouteReply> => {
     if (primaryOnly()) return PRIMARY_ONLY
     const [draftId] = segmentsAfter(request, '/drafts/')
     const body = await readBody(request)
@@ -209,9 +237,12 @@ export function registerMailWriteRoutes(
     } catch (error) {
       return errorReply(walnut, error)
     }
-  })
+  }
+  walnut.http.route('post', '/drafts/:draftId/request-send', requestSend)
 
-  walnut.http.route('post', '/drafts/:draftId/send', async (request) => {
+  // The console's Send is the person's click. Anyone else gets what mail_request_send does: a letter
+  // asking the person, or with approvals off the send itself (MailApprovals.requestSend).
+  walnut.http.route('post', '/drafts/:draftId/send', personAct(async (request) => {
     if (primaryOnly()) return PRIMARY_ONLY
     const [draftId] = segmentsAfter(request, '/drafts/')
     const body = await readBody(request)
@@ -242,7 +273,13 @@ export function registerMailWriteRoutes(
     } catch (error) {
       return errorReply(walnut, error)
     }
-  })
+  }, async (request) => {
+    // Walnut's own words to the agent ride outside the framed data (agent-caller.ts WALNUT_NOTE_FIELD).
+    const asked = await requestSend(request)
+    if ((asked.status ?? 200) >= 300 || !asked.json || typeof asked.json !== 'object') return asked
+    const sent = !!(asked.json as { sent?: unknown }).sent
+    return { ...asked, json: { ...(asked.json as Record<string, unknown>), walnut_note: sent ? AGENT_SENT_UNASKED : AGENT_ASKED_SEND } }
+  }))
 
   walnut.http.route('post', '/sends/:sendId/retry', async (request) => {
     if (primaryOnly()) return PRIMARY_ONLY

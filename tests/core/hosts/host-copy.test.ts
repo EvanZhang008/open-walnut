@@ -615,7 +615,7 @@ describe('the CLI picks the copy_id (host-exec-run-id.ts)', () => {
       `  walnut tools call host_copy_result '{"copy_id":"hc-abcd-1234","wait_ms":10000}'`,
       'walnut: (if that read says unknown_copy, the copy never reached the Walnut server: call host_copy again)',
     ])
-    expect(awayLines('host_copy', args)).toEqual(['walnut: host_copy did not reach the Walnut server, so nothing was copied; call it again once the server answers.'])
+    expect(awayLines('host_copy', args)[0]).toBe('walnut: host_copy did not reach the Walnut server, so nothing was copied; call it again once the server answers.')
     // A server whose host_copy has no copy_id yet refuses it before anything runs.
     const old = { name: 'host_copy', input: { from: z.string(), to: z.string(), to_host: z.string().optional() } } as unknown as WalnutOp
     const parsed = parseOpArgs(old, { from: '~/a', to: '~/b', copy_id: 'hc-1234' })

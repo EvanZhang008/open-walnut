@@ -72,6 +72,11 @@ function parseFlagArgs(
   return null
 }
 
+/** A session Walnut runs, whose host daemon is the way to its server's plugin ops (fetchHubOps). */
+function inManagedSession(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !!env.WALNUT_AGENT_SOCKET?.trim() && !!env.WALNUT_SESSION_ID?.trim()
+}
+
 export async function runTools(argv: string[], globals: GlobalOptions): Promise<void> {
   const { listOps, getOp, getOpOwner, executeOp } = await import('../ops/index.js')
   // --json before the subcommand, between call and the op, or after the JSON argument.
@@ -116,7 +121,13 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
     // its host daemon. No daemon or no answer: core ops alone, as before.
     const known = new Set(listOps({ includeDeprecated: true }).map((o) => o.name))
     const { fetchHubOps } = await import('../providers/wn-cli.js')
-    for (const hub of await fetchHubOps() ?? []) {
+    const hubOps = await fetchHubOps()
+    // A session whose daemon got no catalog: say the plugin ops are unknown, not absent (issue #23).
+    if (hubOps === null && inManagedSession()) {
+      const { catalogAwayLines } = await import('../providers/host-exec-run-id.js')
+      console.error(catalogAwayLines().join('\n'))
+    }
+    for (const hub of hubOps ?? []) {
       if (known.has(hub.name) || (readonly && !hub.readonly)) continue
       rows.push({
         name: hub.name,
@@ -153,12 +164,17 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
     if (!op) {
       // A plugin op: the server holds its schema, this session's daemon asks it.
       const { fetchHubOps } = await import('../providers/wn-cli.js')
-      const hub = (await fetchHubOps(process.env, name))?.find((row) => row.name === name)
+      const hubOps = await fetchHubOps(process.env, name)
+      const hub = hubOps?.find((row) => row.name === name)
       if (hub) {
         console.log(formatOpHelp(hub))
         return true
       }
       console.error(`Unknown op: ${name}. Run \`walnut tools list\`.`)
+      if (hubOps === null && inManagedSession()) {
+        const { catalogAwayLines } = await import('../providers/host-exec-run-id.js')
+        console.error(catalogAwayLines().join('\n'))
+      }
       process.exitCode = 1
       return false
     }

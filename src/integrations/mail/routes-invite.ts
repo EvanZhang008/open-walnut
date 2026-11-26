@@ -7,6 +7,7 @@
  * its own, so a 202 never loses an answer: the reader asks GET again a moment later and sees it.
  */
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
+import { personActOrApprovalsOff, type ApprovalsSwitch } from './agent-caller.js'
 import { errorReply, PRIMARY_ONLY, readBody, segmentsAfter, withBudget } from './contract.js'
 import type { MailInvites } from './invites.js'
 
@@ -27,9 +28,22 @@ function late(walnut: WalnutServerPluginApi, what: string) {
   }
 }
 
+/** An agent's answer to an invite while approvals ask: no op asks the person about one. */
+const AGENT_RSVP_REFUSED = {
+  status: 403,
+  json: {
+    // Nested, so the api op shows an agent the sentence and not only the code (ops/executor.ts).
+    error: {
+      code: 'human-approval-required',
+      message: 'Answering a meeting invite sends a reply in the user\'s name to its organizer, so only the person answers it, '
+        + 'in the Mail app. Tell them what the invite says and that it waits for their answer. Nothing was sent.',
+    },
+  },
+}
+
 export function registerMailInviteRoutes(
   walnut: WalnutServerPluginApi,
-  deps: { invites: MailInvites },
+  deps: { invites: MailInvites; approvalsSwitch?: ApprovalsSwitch },
 ): void {
   const { invites } = deps
 
@@ -61,7 +75,7 @@ export function registerMailInviteRoutes(
    *   409 { error: 'in-flight' | 'not-an-invite' | 'unsupported', message }
    *   400 { error: 'invalid', message }
    */
-  walnut.http.route('post', '/messages/:accountId/:messageId/invite', async (request) => {
+  walnut.http.route('post', '/messages/:accountId/:messageId/invite', personActOrApprovalsOff(async (request) => {
     if (walnut.replica) return PRIMARY_ONLY
     const [accountId, messageId] = segmentsAfter(request, '/messages/')
     if (!accountId || !messageId) {
@@ -86,5 +100,5 @@ export function registerMailInviteRoutes(
     } catch (error) {
       return errorReply(walnut, error)
     }
-  })
+  }, deps.approvalsSwitch, { gate: 'mailSend', what: 'Answered a meeting invite' }, AGENT_RSVP_REFUSED))
 }

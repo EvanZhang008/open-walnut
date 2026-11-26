@@ -55,9 +55,13 @@ const JOB_OPS = new Set(['host_exec_read', 'host_exec_stop', 'host_exec_list'])
 /**
  * What a caller is told when its call never left: the server could not be reached (`hub_unreachable`),
  * or this host's daemon socket refused the connection (`missed` names it). Nothing ran, and jobs
- * started before still run.
+ * started before still run. Every op's answer ends with the detour line.
  */
 export function awayLines(name: string, args: Record<string, unknown>, missed = 'the Walnut server'): string[] {
+  return [...runAwayLines(name, args, missed), detourLine(name)]
+}
+
+function runAwayLines(name: string, args: Record<string, unknown>, missed: string): string[] {
   const host = String(args.host ?? 'that host')
   const short = missed.replace(' Walnut ', ' ')
   if (Object.hasOwn(RUN_OPS, name) && RUN_OPS[name].copy) return [`walnut: ${name} did not reach ${missed}, so nothing was copied; call it again once ${short} answers.`]
@@ -65,6 +69,27 @@ export function awayLines(name: string, args: Record<string, unknown>, missed = 
   if (!JOB_OPS.has(name)) return []
   const log = typeof args.job_id === 'string' ? ` (host-exec/${args.job_id}.log)` : ''
   return [`walnut: a job host_exec already started on ${host} keeps running meanwhile, and its log stays in your task's directory there${log}; read it once ${short} answers.`]
+}
+
+/**
+ * The one line that keeps an agent off Walnut's files while an op is out of reach (2026-11-26,
+ * issue #23: an agent whose mail ops answered hub_unreachable read the mail cache with shell, and
+ * the mail it read came with no untrusted-data frame). Said where the agent decides it.
+ */
+export function detourLine(name: string): string {
+  return `walnut: do not get what ${name} gives another way meanwhile (Walnut's database, cache or data files, curl to its HTTP routes): `
+    + 'that skips its checks, and mail or other outside text would reach you without its untrusted-data frame. If it stays unreachable, tell the user so.'
+}
+
+/**
+ * When a session's daemon got no op list from its Walnut server: plugin ops (mail, calendar) live
+ * there only, so their absence from a list says nothing about whether they exist.
+ */
+export function catalogAwayLines(): string[] {
+  return [
+    "walnut: this session's Walnut server did not answer, so a plugin's ops (mail, calendar and others) are missing from this list, not absent: their account may well be set up.",
+    detourLine('a plugin op'),
+  ]
 }
 
 /** A socket error from before the request was written (nothing listens there): the call never left. */

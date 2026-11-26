@@ -336,4 +336,6 @@ export interface MailSortWriteDeps {
   sort: import('./sort-engine.js').MailSortEngine
   /** "Keep out of the inbox" moves; absent in tests that do not reach them. */
   filters?: Pick<import('./mail-filter-moves.js').MailFilterMover, 'queue' | 'runNow' | 'canArchive' | 'canFile'>
+  /** The approvals switch, for a person's act an agent may run only while approvals are off. Absent: it asks. */
+  approvalsSwitch?: import('./agent-caller.js').ApprovalsSwitch
 }

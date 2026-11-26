@@ -1,4 +1,5 @@
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
+import { agentAwareRoutes, isAgentCaller, personAct, type ApprovalsSwitch } from './agent-caller.js'
 import type { MailAccounts } from './accounts.js'
 import type { MailApprovals } from './approvals.js'
 import {
@@ -151,8 +152,12 @@ export function registerMailRoutes(
     sort: MailSortEngine
     events: MailEvents
     filters?: MailFilterMover
+    /** The approvals switch, for a person's act no op asks about (agent-caller.ts). Absent: it asks. */
+    approvalsSwitch?: ApprovalsSwitch
   },
 ): void {
+  // Every route below answers an agent caller framed, and its person's acts ask (agent-caller.ts).
+  walnut = agentAwareRoutes(walnut)
   const {
     store, service, accounts, providers, sync, drafts, approvals, sends, digest,
     unsubscribe, sort,
@@ -207,7 +212,9 @@ export function registerMailRoutes(
     }
   })
 
-  walnut.http.route('delete', '/accounts/:accountId', async (request) => {
+  // Removing an account deletes its stored password, its cache and its mail-to-task links: the
+  // person's own step (credentials, deleting data), whatever the approvals switch says.
+  walnut.http.route('delete', '/accounts/:accountId', personAct(async (request) => {
     if (primaryOnly()) return PRIMARY_ONLY
     const [accountId] = segmentsAfter(request, '/accounts/')
     if (!accountId) return { status: 400, json: { error: 'invalid', message: 'an account id is required' } }
@@ -220,7 +227,16 @@ export function registerMailRoutes(
     } catch (error) {
       return errorReply(walnut, error)
     }
-  })
+  }, async () => ({
+    status: 403,
+    json: {
+      // Nested, so the api op shows an agent the sentence and not only the code (ops/executor.ts).
+      error: {
+        code: 'human-approval-required',
+        message: 'Removing a mail account deletes its stored password and its cached mail, so only the person removes one, in the Mail app. Nothing was removed.',
+      },
+    },
+  })))
 
   walnut.http.route('get', '/mailboxes', async (request) => {
     if (primaryOnly()) return PRIMARY_ONLY
@@ -266,7 +282,7 @@ export function registerMailRoutes(
     // `?retry=1` is the only way a refused body is asked for again. Without it a message over
     // the cap, or one the server no longer has, would be re-downloaded on every single open.
     const retry = firstQuery(request.query.retry) === '1'
-    const cacheOnly = !!request.headers['x-walnut-caller-sid'] || request.headers['x-walnut-caller-kind']?.trim().toLowerCase() === 'automation'
+    const cacheOnly = isAgentCaller(request)
     try {
       // `body.html` is RAW. The console sanitizes it; see the file comment.
       //
@@ -365,7 +381,7 @@ export function registerMailRoutes(
           ...(firstQuery(request.query.account) ? { accountId: firstQuery(request.query.account)! } : {}),
           q,
           limit: intQuery(request.query.limit, DEFAULT_PAGE, MAX_PAGE),
-          cacheOnly: !!request.headers['x-walnut-caller-sid'] || request.headers['x-walnut-caller-kind']?.trim().toLowerCase() === 'automation',
+          cacheOnly: isAgentCaller(request),
         }),
       }
     } catch (error) {
@@ -447,7 +463,7 @@ export function registerMailRoutes(
 
   registerMailWriteRoutes(walnut, { service, drafts, approvals, sends, unsubscribe })
   // Meeting invites: the calendar read and the answer (an RSVP the organizer sees).
-  registerMailInviteRoutes(walnut, { invites: new MailInvites({ service, log: walnut.log }) })
+  registerMailInviteRoutes(walnut, { invites: new MailInvites({ service, log: walnut.log }), ...(deps.approvalsSwitch ? { approvalsSwitch: deps.approvalsSwitch } : {}) })
   registerMailAttachmentRoutes(walnut, { attachments: new MailAttachments({ service }) })
   // Inbox sorting: reads (groups, senders, rules) and writes (bulk read, batch unsubscribe, rules).
   registerMailSortRoutes(walnut, { store, sort: deps.sort, providers, ...(deps.filters ? { filters: deps.filters } : {}) })
@@ -455,6 +471,7 @@ export function registerMailRoutes(
   registerMailSortWriteRoutes(walnut, {
     walnut, store, service, providers, unsubscribe, events: deps.events, sort: deps.sort,
     ...(deps.filters ? { filters: deps.filters } : {}),
+    ...(deps.approvalsSwitch ? { approvalsSwitch: deps.approvalsSwitch } : {}),
   })
 
   walnut.http.route('get', '/health', async () => {

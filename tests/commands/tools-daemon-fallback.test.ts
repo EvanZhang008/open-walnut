@@ -15,6 +15,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { runTools } from '../../src/commands/tools.js'
+import { detourLine } from '../../src/providers/host-exec-run-id.js'
 
 let dir: string
 let sock: string
@@ -178,7 +179,8 @@ describe('walnut tools call with the server down', () => {
     await runTools(['call', 'task_get', '{"id":"mtask-1"}'], { json: true })
     expect(received).toHaveLength(1)
     expect(err).toBe('')
-    expect(JSON.parse(out)).toEqual({ ok: false, error: { code: 'hub_unreachable', message } })
+    // The away notes ride the one error: here the line that keeps the agent off Walnut's files (issue #23).
+    expect(JSON.parse(out)).toEqual({ ok: false, error: { code: 'hub_unreachable', message: `${message}\n${detourLine('task_get')}` } })
     expect(process.exitCode).toBe(5)
   })
 

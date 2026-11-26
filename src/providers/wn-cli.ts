@@ -41,7 +41,7 @@ import {
 } from './trigger-check-core.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, inGroup, type ToolGroupRow, type ToolRow } from '../ops/op-help.js'
 import { failureOnStdout, gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
-import { awayLines, callerRunId, dropRunId, lostRunLines, namedOnSignal, neverSent, refusedRunId } from './host-exec-run-id.js'
+import { awayLines, callerRunId, catalogAwayLines, dropRunId, lostRunLines, namedOnSignal, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { NO_ANSWER_CODES, hubAnswered, noAnswerSpoolFile, spoolNoAnswer, tellSpooledNoAnswers } from '../lib/no-answer-report.js'
 import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
 import { PROGRAM_CLIENT, cliAnswerText } from '../lib/tool-answer-size.js'
@@ -1164,7 +1164,10 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     })
   }
   if (!resp.ok) {
-    process.stderr.write(formatErrorLines(resp.error).join('\n') + '\n')
+    // No catalog came back: a plugin's ops are unknown here, not absent (catalogAwayLines).
+    const noCatalog = (parsed.kind === 'tools.list' || parsed.kind === 'tools.help')
+      && (resp.error.code === 'hub_unreachable' || resp.error.code === 'hub_timeout')
+    process.stderr.write([...formatErrorLines(resp.error), ...(noCatalog ? catalogAwayLines() : [])].join('\n') + '\n')
     return errorToExitCode(resp.error.code)
   }
 

@@ -22,7 +22,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
-import { awayLines, callerRunId, dropRunId, lostRunLines, neverSent, refusedRunId } from '../../../src/providers/host-exec-run-id.js'
+import { awayLines, callerRunId, catalogAwayLines, detourLine, dropRunId, lostRunLines, neverSent, refusedRunId } from '../../../src/providers/host-exec-run-id.js'
 import { runWalnutCli } from '../../../src/providers/wn-cli.js'
 import { createWalnutMcpHandler } from '../../../src/providers/walnut-mcp-stdio.js'
 import { runTools } from '../../../src/commands/tools.js'
@@ -134,10 +134,12 @@ describe('the rule', () => {
   })
 
   it('a server out of reach ran nothing; a job started before still runs', () => {
-    expect(awayLines('host_exec', { host: 'studio-mac' })).toEqual(['walnut: host_exec did not reach the Walnut server, so nothing ran on studio-mac; call it again once the server answers.'])
+    expect(awayLines('host_exec', { host: 'studio-mac' })).toEqual(['walnut: host_exec did not reach the Walnut server, so nothing ran on studio-mac; call it again once the server answers.', detourLine('host_exec')])
     expect(awayLines('host_exec_read', { host: 'studio-mac', job_id: 'hx-1' })[0]).toContain('keeps running meanwhile, and its log stays in your task\'s directory there (host-exec/hx-1.log)')
-    expect(awayLines('task_get', {})).toEqual([])
-    expect(awayLines('host_exec', { host: 'studio-mac' }, "this host's Walnut daemon")).toEqual(["walnut: host_exec did not reach this host's Walnut daemon, so nothing ran on studio-mac; call it again once this host's daemon answers."])
+    expect(awayLines('task_get', {})).toEqual([detourLine('task_get')])
+    expect(awayLines('host_exec', { host: 'studio-mac' }, "this host's Walnut daemon")).toEqual(["walnut: host_exec did not reach this host's Walnut daemon, so nothing ran on studio-mac; call it again once this host's daemon answers.", detourLine('host_exec')])
+    // 2026-11-26, issue #23: every op that could not be reached keeps the agent off Walnut's files.
+    expect(awayLines('mail_list', {}).at(-1)).toMatch(/do not get what mail_list gives another way.*database, cache or data files.*untrusted-data frame/)
   })
 
   it('only a socket refused before the write is a call that never left', () => {
@@ -305,5 +307,14 @@ describe('the lost-run lines name the op the call made (2026-11-05 code review 1
   it('host_exec_pinned says host_exec_pinned', () => {
     expect(lostRunLines('host_exec_pinned', { host: 'h', grant_id: 'xg-0000', command: 'true' }, 'hx-abcd-1234')[0])
       .toBe('walnut: host_exec_pinned may have started on h as job hx-abcd-1234: do not run it again. Read it first:')
+  })
+})
+
+describe('a session whose op list did not come back', () => {
+  it('says plugin ops are unknown, not absent, and keeps the agent off Walnut\'s files', () => {
+    const lines = catalogAwayLines()
+    expect(lines[0]).toContain('missing from this list, not absent')
+    expect(lines[0]).toContain('mail')
+    expect(lines[1]).toBe(detourLine('a plugin op'))
   })
 })

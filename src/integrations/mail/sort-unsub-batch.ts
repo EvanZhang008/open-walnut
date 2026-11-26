@@ -11,6 +11,7 @@
  */
 import crypto from 'node:crypto'
 import { doorsClosed, NOT_LEADER_MESSAGE } from '../../core/leader/switch/doors.js'
+import { personActOrApprovalsOff } from './agent-caller.js'
 import { PRIMARY_ONLY, readBody, segmentsAfter } from './contract.js'
 import type { MailUnsubBatchEvent } from './events.js'
 import type { MailSortWriteDeps } from './sort-types.js'
@@ -179,9 +180,22 @@ function viewOf(batch: UnsubBatch) {
   }
 }
 
+/** An agent's batch while approvals ask: the per-list op asks the person instead. */
+const AGENT_BATCH_REFUSED = {
+  status: 403,
+  json: {
+    // Nested, so the api op shows an agent the sentence and not only the code (ops/executor.ts).
+    error: {
+      code: 'human-approval-required',
+      message: 'Only the person starts a batch of unsubscribes. Ask for each list with mail_unsubscribe_request '
+        + '{"account","message"}: the person gets a letter per list, and their answer acts. Nothing was unsubscribed.',
+    },
+  },
+}
+
 export function registerUnsubBatchRoutes(
   walnut: MailSortWriteDeps['walnut'],
-  deps: Pick<MailSortWriteDeps, 'unsubscribe' | 'events'>,
+  deps: Pick<MailSortWriteDeps, 'unsubscribe' | 'events' | 'approvalsSwitch'>,
 ): MailUnsubBatches {
   const batches = new MailUnsubBatches({
     // Exactly three arguments: the console's own authority, never a letter's. A mailto rung answers
@@ -195,7 +209,9 @@ export function registerUnsubBatchRoutes(
   })
   const unknown = { status: 404, json: { error: 'unknown-batch', message: 'Walnut no longer has this list of unsubscribes.' } }
 
-  walnut.http.route('post', '/unsubscribe/batch', async (request) => {
+  // The batch runs the ladder on the console's authority, so it is the person's click. An agent asks
+  // per list (mail_unsubscribe_request), unless approvals are off.
+  walnut.http.route('post', '/unsubscribe/batch', personActOrApprovalsOff(async (request) => {
     if (walnut.replica) return PRIMARY_ONLY
     // A server without the write permission (leader switch) would refuse every item one by one.
     if (doorsClosed()) return { status: 503, json: { error: 'not_leader', message: NOT_LEADER_MESSAGE } }
@@ -206,7 +222,7 @@ export function registerUnsubBatchRoutes(
     const batch = batches.start(items)
     walnut.log.info('mail unsubscribe batch started', { batchId: batch.batchId, items: items.length })
     return { status: 202, json: { batchId: batch.batchId, total: items.length } }
-  })
+  }, deps.approvalsSwitch, { gate: 'mailUnsubscribe', what: 'Started a batch of unsubscribes' }, AGENT_BATCH_REFUSED))
 
   walnut.http.route('get', '/unsubscribe/batch/:batchId', async (request) => {
     if (walnut.replica) return PRIMARY_ONLY

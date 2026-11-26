@@ -437,6 +437,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   registerMailRoutes(walnut, {
     store, service, accounts, providers, sync, drafts, approvals, sends, digest,
     unsubscribe, sort, events, filters,
+    approvalsSwitch: { asksPerson: () => asksPerson(), recordUnasked: (gate, what) => recordUnasked(gate, { what }) },
   })
 
   // The phantom-provider sweep. A provider plugin normally disposes its own registration, and

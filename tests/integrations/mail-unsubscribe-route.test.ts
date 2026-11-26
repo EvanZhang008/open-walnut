@@ -683,3 +683,42 @@ describe('a page that accepts and never answers', () => {
     release('ok');
   }, 60_000);
 });
+
+describe('an agent caller (a session through the api op, a script)', () => {
+  const AGENT = { 'content-type': 'application/json', 'x-walnut-caller-sid': 'agent-session-unsub' };
+
+  it('asks the person instead of running the ladder: a letter, no request to the list, an answer framed as data', async () => {
+    routes.set('/u/one-click', { status: 200, body: 'ok' });
+    const response = await fetch(mailUrl(`/messages/${encodeURIComponent(ACCOUNT)}/${encodeURIComponent(ONE_CLICK)}/unsubscribe`), {
+      method: 'POST', headers: AGENT, body: '{}',
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as { external_content: { trust: string; data: { ok: boolean; asked: boolean; letterId: string } }; walnut_note: string };
+    expect(body.external_content.trust).toBe('untrusted');
+    expect(body.external_content.data).toMatchObject({ ok: true, asked: true });
+    expect(body.external_content.data.letterId).toBeTruthy();
+    // Walnut's own words stay outside the data, so "do not ask again" is not read as a stranger's.
+    expect(body.walnut_note).toContain('Only the person leaves a list');
+    expect(seen).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it('cannot start a batch while approvals ask, and the batch opens nothing', async () => {
+    routes.set('/u/one-click', { status: 200, body: 'ok' });
+    const response = await fetch(mailUrl('/unsubscribe/batch'), {
+      method: 'POST', headers: AGENT,
+      body: JSON.stringify({ items: [{ accountId: ACCOUNT, messageId: ONE_CLICK, method: 'one-click' }] }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: 'human-approval-required', message: expect.stringContaining('mail_unsubscribe_request') } });
+    // Refused before any batch exists, so nothing can run later either.
+    expect(seen).toEqual([]);
+  });
+
+  it('the console\'s own click still runs the ladder (no Walnut caller header)', async () => {
+    routes.set('/u/one-click', { status: 200, body: 'ok' });
+    const answered = await unsubscribe(ONE_CLICK);
+    expect(answered.body).toMatchObject({ ok: true, status: 'done' });
+    expect(seen).toHaveLength(1);
+  });
+});

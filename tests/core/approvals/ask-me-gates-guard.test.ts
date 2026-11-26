@@ -42,6 +42,10 @@ const GATES: Record<string, Gate> = {
   'src/core/hosts/host-exec-grant.ts': { asks: 1, reads: 'self' },
   'src/integrations/mail/approvals.ts': { asks: 1, reads: 'self' },
   'src/integrations/mail/unsubscribe.ts': { asks: 1, reads: 'self' },
+  // An agent's invite answer or batch of unsubscribes through the routes (mail/agent-caller.ts personActOrApprovalsOff).
+  'src/integrations/mail/routes-invite.ts': { asks: 1, readBy: 'src/integrations/mail/index.ts', why: 'the switch it is given is asksPerson, and a step that goes ahead with it off is recorded with recordUnasked' },
+  'src/integrations/mail/sort-unsub-batch.ts': { asks: 1, readBy: 'src/integrations/mail/index.ts', why: 'the same switch, from the same place' },
+  'src/integrations/mail/routes.ts': { asks: 1, kept: 'removing a mail account deletes its stored password, its cache and its links: credentials and deleting data stay the person\'s whatever the switch says, and an agent is refused at once' },
   'src/core/approvals/ask-me.ts': { asks: 1, kept: 'the off path itself (records an approved approval nobody was asked)' },
   'src/core/plugins/plugin-letters.ts': { asks: 1, kept: 'a plugin\'s letters.send; the plugin reads letters.asksPerson() itself' },
   'src/integrations/mail/digest.ts': { asks: 1, kept: 'the mail digest the person set up: a report, not an ask' },
