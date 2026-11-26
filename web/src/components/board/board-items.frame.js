@@ -645,8 +645,8 @@
         var on = o.key === shown;
         return '<button type="button" class="wn-choice-opt' + (on ? ' wn-on' : '') + (o.key === rec ? ' wn-rec' : '')
           + (on && self.wnSending ? ' wn-sending' : '') + '" data-option="' + esc(o.key) + '" aria-pressed="' + (on ? 'true' : 'false') + '"'
-          + (busy ? ' disabled' : '') + '><span class="wn-choice-n">' + (i + 1) + '.</span><span class="wn-choice-label">'
-          + esc(o.label) + '</span>' + (o.key === rec ? '<span class="wn-choice-rec">Recommended</span>' : '') + '</button>';
+          + (busy ? ' disabled' : '') + '><span class="wn-choice-n">' + (i + 1) + '.</span><span class="wn-choice-label"><span class="wn-choice-words">'
+          + esc(o.label) + '</span>' + (o.key === rec ? '<span class="wn-choice-rec">Recommended</span>' : '') + '</span></button>';
       }).join(''));
       if (focused !== null) {
         var again = this.wnOpts.querySelector('[data-option="' + cssId(focused) + '"]');

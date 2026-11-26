@@ -265,3 +265,42 @@ test("the notification center's rules list keeps each choice's words in its midd
     expect(Math.abs(g.above - g.below), `panel row ${i + 1}: words ${g.above.toFixed(1)} px under the top, ${g.below.toFixed(1)} px over the bottom`).toBeLessThanOrEqual(2)
   }
 })
+
+/**
+ * Each kind of recommended row, drawn by the page's own CSS at the width of the Home rail's ask
+ * card (174 px, 2026-11-26: a short label was squeezed into four lines beside its mark): the words
+ * keep the row's width (at most two lines) and the mark is not beside a column of them.
+ */
+test('a narrow recommended row keeps its words whole and puts the mark under them', async ({ page }) => {
+  await isolateUiPrefs(page)
+  await page.goto('/')
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
+  const label = 'Renewed it on the dev box'
+  const rows = await page.evaluate((words) => {
+    const host = document.createElement('div')
+    host.id = 'pw-narrow-rows'
+    host.style.cssText = 'position:fixed;left:0;top:0;width:174px;padding:8px;display:flex;flex-direction:column;gap:8px;z-index:99999;background:var(--bg)'
+    host.innerHTML = `
+      <div class="ask-card"><div class="ask-card-answer"><div class="org-answer-options" style="display:flex;flex-wrap:wrap">
+        <button type="button" class="btn btn-sm btn-primary" data-recommended="true" data-kind="ask-card">${words}</button></div></div></div>
+      <div class="org-answer-options" style="display:flex;flex-wrap:wrap">
+        <button type="button" class="btn btn-sm btn-primary" data-recommended="true" data-kind="inline" style="width:100%">${words}</button></div>
+      <div class="qp-options"><button type="button" class="qp-option" data-recommended="true" data-kind="qp" style="width:100%">
+        <span class="option-label" data-recommended="true">${words}</span></button></div>
+      <div class="nfc-answer-opts nfc-answer-opts--rows"><button type="button" class="nfc-answer-opt" data-recommended="true" data-kind="nfc">
+        <span class="option-label" data-recommended="true">${words}</span></button></div>`
+    document.body.appendChild(host)
+    const out = [...host.querySelectorAll<HTMLElement>('[data-kind]')].map((b) => {
+      const textNode = [...b.querySelectorAll('*'), b].flatMap((n) => [...n.childNodes]).find((c) => c.nodeType === 3 && c.textContent!.trim())!
+      const range = document.createRange()
+      range.selectNodeContents(textNode)
+      const tops = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)))
+      return { kind: b.dataset.kind!, lines: tops.size, width: Math.round(b.getBoundingClientRect().width) }
+    })
+    return out
+  }, label)
+  await shot(page.locator('#pw-narrow-rows'), `narrow-rows${process.env.SHOT_TAG ?? ''}`)
+  await page.evaluate(() => document.getElementById('pw-narrow-rows')?.remove())
+  expect(rows).toHaveLength(4)
+  for (const r of rows) expect(r.lines, `${r.kind} row (${r.width} px): "${label}" in ${r.lines} lines`).toBeLessThanOrEqual(2)
+})

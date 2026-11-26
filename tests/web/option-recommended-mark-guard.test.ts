@@ -50,6 +50,16 @@ export function rawLabels(src: string): string[] {
   return hits;
 }
 
+function walkCss(dir: string, out: string[] = []): string[] {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === 'node_modules' || e.name === 'dist') continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walkCss(p, out);
+    else if (e.name.endsWith('.css')) out.push(p);
+  }
+  return out;
+}
+
 const renderers = () => walk(WEB_SRC).filter((f) => QUESTION_DATA.test(fs.readFileSync(f, 'utf8')));
 
 describe('a question option row says Recommended once, at its right end', () => {
@@ -100,5 +110,19 @@ describe('a question option row says Recommended once, at its right end', () => 
     const fill = /:is\(\.qp-option, \.nfc-answer-opt\)\[data-recommended\] \{([^}]*)\}/.exec(css)
     expect(fill?.[1]).toMatch(/background: color-mix\(in srgb, var\(--accent\)/)
     expect(fill?.[1]).toMatch(/color: var\(--on-accent\)/)
+  })
+
+  it('every recommended mark goes under the words when the row is too narrow for both', () => {
+    // 2026-11-26, the Home rail's ask card: a short label squeezed into four lines beside "Recommended".
+    const css = walkCss(WEB_SRC).map((f) => fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')).join('\n')
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1]!.trim(), body: m[2]! }))
+    const marks = new Set(rules.filter((r) => /\[data-recommended\]::after$/.test(r.sel)).map((r) => r.sel.replace(/::after$/, '')))
+    expect(marks.size).toBeGreaterThanOrEqual(3)
+    for (const row of marks) {
+      expect(rules.some((r) => r.sel.split(',').map((x) => x.trim()).includes(row) && /flex-wrap:\s*wrap/.test(r.body)), `${row} { flex-wrap: wrap }`).toBe(true)
+    }
+    const board = fs.readFileSync(path.join(WEB_SRC, 'components/board/board-runtime.css.ts'), 'utf8')
+    expect(board).toMatch(/\.wn-choice-label \{[^}]*flex-wrap: wrap/)
+    expect(fs.readFileSync(path.join(WEB_SRC, 'components/board/board-items.frame.js'), 'utf8')).toMatch(/<span class="wn-choice-label"><span class="wn-choice-words">/)
   })
 });

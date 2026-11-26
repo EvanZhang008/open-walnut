@@ -6,7 +6,8 @@
 .org-answer-inline > .org-answer-options, .org-answer-inline > .org-answer-multi { display: contents; }
 .org-answer-inline:empty { display: none; }
 .org-answer-options .btn { max-width: 100%; white-space: normal; text-align: left; }
-.org-answer-options .btn[data-recommended]::after { content: 'Recommended'; margin-left: 6px; font-size: 0.75em; opacity: 0.8; font-weight: 500; }
+.org-answer-options .btn[data-recommended] { flex-wrap: wrap; }
+.org-answer-options .btn[data-recommended]::after { content: 'Recommended'; margin-left: auto; font-size: 0.75em; opacity: 0.8; font-weight: 500; }
 .org-answer-check { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: var(--font-size-sm); cursor: pointer; }
 .org-answer-check.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
 /* The words box is the shared AnswerBox (styles/answer-box.css). */

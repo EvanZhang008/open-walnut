@@ -133,6 +133,9 @@
   font-size: var(--font-size-sm); font-weight: 400; color: var(--fg-muted);
 }
 .ask-card-answer .org-answer-options .btn.btn-primary[data-detail]::before { color: inherit; opacity: 0.82; }
+/* A narrow card: the words keep the row's width and the mark goes under them at the right, never
+   squeezing the words into a column beside it (2026-11-26, the Home rail: four lines of a short label). */
+.ask-card-answer .org-answer-options .btn[data-recommended] { flex-wrap: wrap; }
 .ask-card-answer .org-answer-options .btn[data-recommended]::after { order: 2; flex: none; margin-left: auto; font-size: var(--font-size-xs); font-weight: 400; color: inherit; opacity: 0.82; }
 /* Several may be picked: the same rows, a box to tick in each, the picked ones edged in blue. */
 .ask-card .org-answer-check { min-height: 34px; padding: 4px 12px; border: none; border-radius: var(--radius-sm); font-size: var(--font-size-md); font-weight: 500; gap: 8px; cursor: pointer; }

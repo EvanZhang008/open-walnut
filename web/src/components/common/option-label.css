@@ -1,6 +1,7 @@
 /* A question's option row (OptionLabel): its words, then "Recommended" at the row's right end on the
    recommended choice, the same mark the Threads card's choices carry (inline-answer.css). */
-.option-label[data-recommended] { display: flex; align-items: baseline; gap: 8px; align-self: stretch; }
+/* Too narrow for both: the words keep the width, the mark goes under them at the right. */
+.option-label[data-recommended] { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; align-self: stretch; }
 .option-label[data-recommended]::after {
   content: 'Recommended'; flex: none; margin-left: auto;
   font-size: var(--font-size-xs); font-weight: 400; color: inherit; opacity: 0.82;
