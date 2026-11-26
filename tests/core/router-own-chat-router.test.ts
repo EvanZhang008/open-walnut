@@ -154,6 +154,17 @@ describe('a WeChat account gets a router of its own', () => {
     expect(sourceTakes(entry, ['muted'])).toBe(false)
   })
 
+  it('a second WeChat account joins the same router on the same starting filter', async () => {
+    const home = await homeWith([PERSONAL])
+    const f = fakes(home)
+    await routerIntake('wechat', WECHAT, [], f.deps)
+    const other = 'account-1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e'
+    expect(await routerIntake('wechat', other, [msg(5, ['muted'])], f.deps)).toMatchObject({ taken: true, areaId: 'wechat', entered: 0, filtered: 1 })
+    const area = (await readRouterAreas(home)).areas.find((one) => one.id === 'wechat')!
+    expect(area.sources.map((one) => [one.account, one.include])).toEqual([[WECHAT, ['dm', 'group']], [other, ['dm', 'group']]])
+    expect(f.created).toHaveLength(1)
+  })
+
   it('a second arrival uses the router it made, and makes nothing more', async () => {
     const home = await homeWith([PERSONAL])
     const f = fakes(home)

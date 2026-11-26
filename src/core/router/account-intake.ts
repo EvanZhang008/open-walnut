@@ -188,7 +188,11 @@ async function ensureOne(kind: RouterSourceKind, account: string, deps: AccountR
     const area = current.areas.find((one) => one.id === areaId);
     // The area went away meanwhile: nothing is bound, the next arrival asks again.
     if (!area) return current;
-    if (!area.sources.some((one) => one.kind === kind && one.account === account)) area.sources.push({ kind, account });
+    // A kind with a router of its own starts each account on its default filter, the first one or a later one.
+    const include = OWN_ROUTER_AREAS[kind]?.include;
+    if (!area.sources.some((one) => one.kind === kind && one.account === account)) {
+      area.sources.push({ kind, account, ...(include ? { include: [...include], includeAt: now } : {}) });
+    }
     current.accountBindings = [...(current.accountBindings ?? []), { kind, account, areaId, boundAt: now }];
     return current;
   });
