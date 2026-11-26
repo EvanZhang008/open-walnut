@@ -513,6 +513,46 @@ source job says the old leader died before its final batch, and rolls back. An o
 stop is unchanged: it writes its release first and sends no batch. The one-machine flow uses the
 same path (the CLI's own final batch after the stop is gone).
 
+### Sessions in the data home
+
+Main, Ask Walnut, the routines, trigger deliveries that fall back to the home, console subagent runs and every fork of
+these run their CLI with the data home as its folder. Such a CLI writes into the home, so it cannot stay on the old
+machine once the leader moves: the old home must not change after the final mark. The class is chosen by folder
+(`home-sessions.ts`): every row of the leader's own daemon whose folder is the home or under it, by folder (`/a/b`
+holds `/a/b/c`, never `/a/b-c`). A VP or lead runs in its own task folder and is not in it.
+
+- **Stop, first step of the switch stop** (before the server goes down, the marker already says `switching`): each row
+  gets its plan (`leaderSwitch`: move, or end with why); a running turn is stamped as a restart loss (cause
+  `leader_switch`); each live CLI is stopped through this machine's own runtime, `stop {reason: 'leader_switch',
+  stopRequestId, home}`, which turns its cron supervision off under that id and answers once the process group is gone
+  (an ACP worker by its own strict stop). Nothing is force killed: a CLI that does not end within its budget (at most
+  30 s) fails the stop, named. A scan of this account's processes whose folder is in the home (server side: `/proc`, or
+  `lsof` on macOS) fails the stop on a session CLI still there and names anything else. This is the one exception to
+  "a switch stop keeps CLIs like a deploy stop".
+- **Starts refused** from then on: the daemon twins' `start` and `acpStart` refuse a folder in a marked home
+  (`HOME_HANDED_OVER`, naming the machine the lead went to); routine placement does not pick the old leader's
+  handed-over home on that machine (`moved-home.ts handedOverHomeOnHost`). Restart recovery and the message queue
+  leave a session the switch holds (`session-hold.ts`).
+- **Records** (the engine's own: transcripts, subagent transcripts, large tool results, the folder's memory, the task
+  list) travel with the standby copy into `<standby dir>/carry` ([Standby copy](./standby-copy.md), a carry), never
+  into the new machine's engine dir before the commit. The final batch sends them until unchanged after the home's,
+  and the final mark names that batch; the new leader refuses to promote without it.
+- **Promotion** moves each row (archived ones too) to the same place in the new home on the new leader's own daemon,
+  or ends it on the old machine with why (another engine, a machine runtime folder, a folder name longer than Claude
+  Code names a folder by).
+- **After the commit** the new leader places the records under the new folder name (never overwriting: a byte prefix
+  left by an earlier switch is set aside as `.before-<switch>`, another transcript ends that session), releases the
+  held messages, starts a supervised idle session idle (its CLI rebuilds its session crons) and resumes the
+  interrupted turns. The session's next message carries one notice: its folder moved from the old machine's X to
+  the new one's Y.
+- **Rollback:** the marker goes first, then the old leader turns supervision on again under the same id, releases the
+  held messages and resumes the turns in place (at its boot, or in the running server after its take-back).
+- **Preflight** says how many move and which end, with why, in the switch's step log.
+
+Not carried: `file-history/<sid>/` (checkpoints keyed by the old machine's absolute paths: rewinding an edit made before
+the switch does not work after it), `session-env/`, debug logs. A process that is no session (a `host_exec` command, a
+trigger check script, a terminal) is not stopped; what it writes in the old home after the final batch stays there.
+
 ### Switch notes
 
 Each job writes a note at its steps (`handed-over`, `waiting-mark`, `stopped`, `committed`,
@@ -1942,6 +1982,8 @@ witness, above).
 
 ## Not built yet
 
+- **Sessions in the data home: no check of the new machine's Claude Code version.** A session moves to the new
+  leader's Claude Code whatever its version ([Sessions in the data home](#sessions-in-the-data-home)).
 - **A switch back right after a switch waits for the whole copy back.** The new leader's copy to the old machine starts
   as a new one, so `--back` is refused as not caught up until the whole home has reached the old machine: 20 GB on an
   unslowed link took 12 to 13 minutes for 20.5 GB git does not take, 16 to 20 minutes for a home whose filler git tracks

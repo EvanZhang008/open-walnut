@@ -11,6 +11,7 @@
  *   --job source|target   the job itself (what the command starts)
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { lockHolder, readMarker, summarize, switchLockFile } from './records.js'
@@ -67,12 +68,25 @@ function machineEnv(self: MachinePlace | undefined, env: NodeJS.ProcessEnv): Nod
   return e
 }
 
+/**
+ * The folder a job runs in: this one, unless it is a data home or under one (the command run by a session working in
+ * the home): then the account's home folder, so the job and the servers it starts keep no folder of a data home busy
+ * (the switch stop's scan names every process working in the home).
+ */
+function jobCwd(homes: readonly string[]): string {
+  const here = process.cwd()
+  const inside = homes.some((h) => { const rel = path.relative(path.resolve(h), here); return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel)) })
+  return inside ? os.homedir() : here
+}
+
 /** A job spawned detached, its output appended to `log`; resolves with how it exited, when this process still lives to see it. */
 function spawnJob(args: string[], env: NodeJS.ProcessEnv, log: string): { pid: number | null; exit: Promise<{ code: number | null; signal: string | null }> } {
   fs.mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 })
   const fd = fs.openSync(log, 'a', 0o600)
   const cmd = serverCommand(args)
-  const child = spawn(cmd[0]!, cmd.slice(1), { env, detached: true, stdio: ['ignore', fd, fd] })
+  const homeAt = args.indexOf('--home')
+  const homes = [env.OPEN_WALNUT_HOME, homeAt >= 0 ? args[homeAt + 1] : undefined].filter((h): h is string => !!h)
+  const child = spawn(cmd[0]!, cmd.slice(1), { env, detached: true, stdio: ['ignore', fd, fd], cwd: jobCwd(homes) })
   fs.closeSync(fd)
   const exit = new Promise<{ code: number | null; signal: string | null }>((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })))
   child.unref()

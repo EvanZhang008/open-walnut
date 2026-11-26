@@ -262,6 +262,15 @@ describe('the host it moves to must have what the run needs (unknown is a no)', 
     expect(await hostBlocker(CLOUD, work, triage(), {}, shut.deps)).toBe('it is closed to work from other hosts')
   })
 
+  it('the old leader\'s handed-over data home on its machine takes no work: it says to run on the new leader', async () => {
+    const f = fleet({ __local__: { full: true }, [CLOUD]: {} })
+    const work = { daemon: [], tags: [] } as unknown as Parameters<typeof hostBlocker>[1]
+    const seen: string[] = []
+    const deps = { ...f.deps, handedOverHome: async (host: string, there: string) => { seen.push(`${host} ${there}`); return 'its Walnut folder is the data home this Walnut\'s leader moved away from' } }
+    expect(await hostBlocker(CLOUD, work, triage(), {}, deps)).toMatch(/leader moved away from/)
+    expect(seen).toEqual([`${CLOUD} ${CLOUD_HOME}/.open-walnut`])
+  })
+
   it('a host that lacks one is passed over for the next that has everything', async () => {
     const f = fleet({ __local__: { full: true }, [CLOUD]: { caps: [] }, box2: {} }, { order: [CLOUD, 'box2'] })
     const got = await run(triage(), f.deps)

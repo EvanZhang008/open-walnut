@@ -238,3 +238,30 @@ describe('the promotion (moveSessionHosts with the home)', () => {
     expect(rowsOf(home)[sid(1)].payload.leaderSwitch).toMatchObject({ plan: 'end', why: 'planned end' })
   })
 })
+
+describe('the old leader\'s handed-over home as a host folder (moved-home.ts handedOverHomeOnHost)', () => {
+  it('names it only on the machine the lead last moved from, and only for that home', async () => {
+    const { handedOverHomeOnHost } = await import('../../../../src/core/leader/switch/moved-home.js')
+    const YAML = (await import('yaml')).default
+    const home = path.join(root, 'new-home')
+    fs.mkdirSync(path.join(home, 'local', 'leader-switch'), { recursive: true })
+    fs.writeFileSync(path.join(home, 'config.yaml'), YAML.stringify({
+      experimental: { switchable_leader: true },
+      leader_switch: {
+        witnesses: [{ id: 'w1', dir: '/w/1' }, { id: 'w2', dir: '/w/2' }, { id: 'w3', dir: '/w/3' }],
+        machines: [{ id: 'machine-a', home: '/a/.open-walnut', standby_dir: '/a/standby', port: 1, host_key: 'dev-a' }, { id: 'machine-b', home, standby_dir: '/b/standby', port: 2, host_key: 'dev-b' }],
+      },
+    }))
+    const write = (name: string, v: unknown) => fs.writeFileSync(path.join(home, 'local', 'leader-switch', name), JSON.stringify(v))
+    write('promoted.json', { switchId: 'S1', state: 'promoted', from: '/a/.open-walnut', at: '' })
+    write('history.json', [{ switchId: 'S1', from: 'machine-a', to: 'machine-b', committedAt: '', record: 3 }])
+    // Not committed yet ('promoted'): nothing said.
+    expect(await handedOverHomeOnHost(home, 'dev-a', '/a/.open-walnut')).toBeNull()
+    write('promoted.json', { switchId: 'S1', state: 'led', from: '/a/.open-walnut', at: '' })
+    expect(await handedOverHomeOnHost(home, 'dev-a', '/a/.open-walnut/')).toMatch(/moved away from \(switch S1 to machine-b\)/)
+    expect(await handedOverHomeOnHost(home, 'machine-a', '/a/.open-walnut')).toMatch(/moved away from/)
+    // Another host with the same path, or another folder on that machine: no refusal.
+    expect(await handedOverHomeOnHost(home, 'dev-h', '/a/.open-walnut')).toBeNull()
+    expect(await handedOverHomeOnHost(home, 'dev-a', '/a/other')).toBeNull()
+  })
+})

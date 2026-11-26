@@ -16,6 +16,10 @@ experiment `switchable_leader` (off by default).
   the batch is void.
 - **The target keeps complete batches only.** It switches to a new batch in one step after
   checking every byte; a crash at any point leaves the previous batch whole.
+- **A second place can ride along (a carry).** A batch walks a place (`scan.ts` `CopyPlace`, default the home's
+  manifest exactly as above). The leader switch uses one for the engine records of the sessions in the data home: a
+  carry batch of the engine's dir follows each complete batch into `<standby dir>/carry`, a target of its own; its
+  failure is only logged, and the switch stop's final batch sends it until unchanged ([leader-switch.md](./leader-switch.md#sessions-in-the-data-home)).
 - **Direct edits of the copy are found and undone (A3).** The copy is read-only on disk. A
   verify pass saves any file changed there under `drift/<time>/`, puts the batch's version
   back, and reports it once to Walnut Health.

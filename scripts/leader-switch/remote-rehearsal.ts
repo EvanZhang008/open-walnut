@@ -1343,13 +1343,29 @@ async function sessionOn(w: RemoteWorld, m: Machine, sid: string): Promise<Recor
   return r?.status === 200 ? (r.json?.session ?? r.json) as Record<string, any> : null
 }
 
-/** A message to a session on `m` answered there once ("echo: <message>"), within 2 min. */
-async function turnAnswered(w: RemoteWorld, m: Machine, taskId: string, sid: string, message: string): Promise<{ ok: boolean; why: string }> {
+/**
+ * The mock CLI's answers in a session's history on `m` that hold `words` ("echo: <what it read>", the notices Walnut
+ * put in front of the words included: a restart notice, the notice of a moved folder).
+ */
+async function echoesWith(w: RemoteWorld, m: Machine, sid: string, words: string): Promise<string[]> {
+  const r = await w.api(m, 'GET', `/api/v1/sessions/${sid}/history`).catch(() => null)
+  const out = new Set<string>()
+  const walk = (x: unknown): void => {
+    if (typeof x === 'string') { if (x.startsWith('echo: ') && x.includes(words)) out.add(x); return }
+    if (Array.isArray(x)) { for (const y of x) walk(y); return }
+    if (x && typeof x === 'object') for (const v of Object.values(x)) walk(v)
+  }
+  walk(r?.json)
+  return [...out]
+}
+
+/** A message to a session on `m` answered there once (an echo that holds it), within 2 min; the answer's text. */
+async function turnAnswered(w: RemoteWorld, m: Machine, taskId: string, sid: string, message: string): Promise<{ ok: boolean; why: string; echo: string }> {
   const t = await sessionTurn(w, m, { taskId, sid, message })
-  if (!t.ok) return { ok: false, why: t.why ?? 'not sent' }
-  const ok = await waitFor(`the answer to "${message}" on ${m.id}`, async () => ((await answersOn(w, m, sid)).get(`echo: ${message}`) ?? 0) > 0, 120_000).then(() => true).catch(() => false)
-  const n = (await answersOn(w, m, sid)).get(`echo: ${message}`) ?? 0
-  return { ok: ok && n === 1, why: `answered ${n} time(s)` }
+  if (!t.ok) return { ok: false, why: t.why ?? 'not sent', echo: '' }
+  const ok = await waitFor(`the answer to "${message}" on ${m.id}`, async () => (await echoesWith(w, m, sid, message)).length > 0, 120_000).then(() => true).catch(() => false)
+  const echoes = await echoesWith(w, m, sid, message)
+  return { ok: ok && echoes.length === 1, why: `answered ${echoes.length} time(s)`, echo: echoes[0] ?? '' }
 }
 
 /** The transcript of `sid` in machine `m`'s Claude Code dir, in the folder Claude Code names for `cwd`. */
@@ -1447,7 +1463,8 @@ async function homeSessions(x: Ctx): Promise<void> {
   x.times[`${label}: the final batch of their records`] = lines.carry ? `${lines.carry.ms} ms (batch ${lines.carry.batch}, ${lines.carry.batches} batch(es))` : 'no line'
   c.add(`${label}: the old leader stopped its sessions in the data home (the turn, the idle ones, the switch's own) and sent their records before its mark`, !!lines.stop && (lines.stop.stopped?.turn ?? 0) >= 2 && !!lines.carry, JSON.stringify(lines).slice(0, 400))
   const left = await w.io(L).op('processesIn', [L.home])
-  c.add(`${label}: no process works in ${L.id}'s old home after the switch`, left.length === 0, JSON.stringify(left.slice(0, 5)))
+  c.add(`${label}: no process works in ${L.id}'s old home after the switch (not even the switch's own job, which the session's command started there)`, left.length === 0 && (lines.stop?.others ?? []).length === 0,
+    `now ${JSON.stringify(left.slice(0, 5))}; at the stop ${JSON.stringify(lines.stop?.others ?? null)}`)
   const kept0 = await snapshot(L.home)
   for (const [sid, taskId, name, said] of [[idle.sid, tIdle, 'idle', 'ROUND home idle on A'], [turn.sid, tTurn, 'turn', 'ROUND home after rollback turn'], [cmd.sid, tCmd, 'cmd', 'please hold until']] as const) {
     const row = await waitFor(`the ${name} session on ${O.id}`, async () => {
@@ -1465,6 +1482,9 @@ async function homeSessions(x: Ctx): Promise<void> {
     const onOld = await w.io(L).op('exists', transcriptIn(L, L.home, sid)) ? (await text(transcriptIn(L, L.home, sid)))?.includes(`ROUND home on B ${name}`) : false
     c.add(`${label}: the ${name} session goes on on ${O.id}, the same id, its earlier turns in its history`, a.ok && (await text(file))?.includes(`ROUND home on B ${name}`) === true && (await text(file))?.includes(said) === true && !onOld,
       `${a.why}; on the old machine's transcript too: ${onOld}`)
+    // Its first message there says once where its folder went (folder-gone.ts, kind leader-switch).
+    const told = a.echo.includes(`moved from ${L.id} to ${O.id}`) && a.echo.includes(`${L.home} on ${L.id} is now ${O.home} on ${O.id}`)
+    c.add(`${label}: the ${name} session's first message on ${O.id} tells it its folder moved from ${L.id}'s ${L.home} to ${O.id}'s ${O.home}`, told, a.echo.slice(0, 400))
   }
   const kept = compareKept(kept0, await snapshot(L.home))
   c.add(`${label}: the old home stays as it was while the moved sessions work on ${O.id}`, kept.ok, describeKept(kept, 8, L.home))
