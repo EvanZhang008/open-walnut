@@ -256,15 +256,15 @@
 
 .settings-container .settings-pane-inner {
   max-width: var(--settings-pane-column, 680px);
-  animation: settings-pane-in 120ms ease-out both;
 }
 
-/* Starts half visible: the new pane reads in its first painted frame, the fade
-   only softens the swap (F30: from 0 the pane looked empty for ~80ms). */
-@keyframes settings-pane-in {
-  from { opacity: 0.5; }
-  to { opacity: 1; }
-}
+/* No fade on the swap (2026-11-26). In the Mac app's WebKit, a block whose opacity animation or
+   transition ran to its end, inside a scroller that is not a stacking context (this pane), over a
+   nested scroller that overflows (a SegmentedControl, .wn-seg), leaks its layers in the app process
+   when it is removed: about 6 layers and their surfaces per removal, kept until the app quits, a
+   blank page included. This block is keyed per pane (SettingsPage.tsx), so every pane change and
+   every leave removed one: on a test Mac 90 visits to Settings left 543 layers, none without the
+   fade. F30's half-visible start mattered only while the fade ran. */
 
 .settings-container .settings-pane [id] {
   scroll-margin-top: 52px;

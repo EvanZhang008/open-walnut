@@ -259,9 +259,9 @@
   display: contents;
 }
 
-.settings-disclosure-content:not([hidden]) > * {
-  animation: settings-fade-in 120ms ease-out backwards;
-}
+/* No fade on the rows a disclosure shows (2026-11-26): they sit in the Settings pane's scroller and
+   can hold a SegmentedControl, the shape that leaks layers in the Mac app's WebKit once a finished
+   fade's block goes away (settings-nav.css, tests/web/webkit-fade-layer-leak.test.ts). */
 
 .settings-row-error {
   margin: -4px 0 0;
