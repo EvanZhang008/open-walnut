@@ -26,6 +26,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { copyConfigSections } from '../helpers/temp-home.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { newSessionMatcher, waitForWsEvent } from '../helpers/ws-event-wait.js'
+import { REMOTE_DAEMON_DIR_SH } from '../helpers/remote-daemon-dir-sh.js'
 
 const execFileAsync = promisify(execFile)
 const LIVE_HOST = process.env.WALNUT_LIVE_HOST
@@ -127,7 +128,7 @@ describeIf(`Live daemon: kill Claude (${LIVE_HOST})`, () => {
           '-o', 'BatchMode=yes',
           '-o', 'StrictHostKeyChecking=no',
           LIVE_SSH_HOST!,
-          'cat /tmp/open-walnut/sessions.json 2>/dev/null || echo "{}"',
+          `${REMOTE_DAEMON_DIR_SH}; cat "$d/sessions.json" 2>/dev/null || echo "{}"`,
         ])
         try {
           const reg = JSON.parse(dump.trim()) as { sessions?: Record<string, { pid?: number }> }

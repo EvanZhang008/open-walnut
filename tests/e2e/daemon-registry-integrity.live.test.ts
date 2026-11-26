@@ -3,7 +3,7 @@
  *
  * Validates P2 write-ahead registry against the real filesystem:
  *   1. Start a remote session
- *   2. `ssh cat /tmp/open-walnut/sessions.json` → has entry with pid, startTime,
+ *   2. `ssh cat <daemon dir>/sessions.json` → has entry with pid, startTime,
  *      pipePath, jsonlPath
  *   3. Kill -9 the claude CLI on the host
  *   4. Wait for daemon's reap (orphan-poll-dead)
@@ -27,6 +27,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { copyConfigSections } from '../helpers/temp-home.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { newSessionMatcher, waitForWsEvent } from '../helpers/ws-event-wait.js'
+import { REMOTE_DAEMON_DIR_SH } from '../helpers/remote-daemon-dir-sh.js'
 
 const execFileAsync = promisify(execFile)
 const LIVE_HOST = process.env.WALNUT_LIVE_HOST
@@ -122,7 +123,7 @@ describeIf(`Live daemon: registry integrity (${LIVE_HOST})`, () => {
       '-o', 'BatchMode=yes',
       '-o', 'StrictHostKeyChecking=no',
       LIVE_SSH_HOST!,
-      'cat /tmp/open-walnut/sessions.json',
+      `${REMOTE_DAEMON_DIR_SH}; cat "$d/sessions.json"`,
     ])
     const parsed = JSON.parse(dump.trim()) as { version: number; sessions: Record<string, unknown> }
     expect(parsed.version).toBe(1)
@@ -162,7 +163,7 @@ describeIf(`Live daemon: registry integrity (${LIVE_HOST})`, () => {
       '-o', 'BatchMode=yes',
       '-o', 'StrictHostKeyChecking=no',
       LIVE_SSH_HOST!,
-      'cat /tmp/open-walnut/sessions.json',
+      `${REMOTE_DAEMON_DIR_SH}; cat "$d/sessions.json"`,
     ])
     const parsedAfter = JSON.parse(dumpAfter.trim()) as { sessions: Record<string, unknown> }
     expect(parsedAfter.sessions[sid!]).toBeUndefined()

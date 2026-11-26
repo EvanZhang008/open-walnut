@@ -250,7 +250,7 @@ describeIf(`remote-host onboarding (ssh alias: ${SSH_ALIAS})`, () => {
       'for t in gcc cc clang node npm dtach; do command -v "$t" >/dev/null 2>&1 && echo "has=$t"; done',
       '[ -e "$HOME/.bun" ] && echo has=bun-dir',
       '[ -e "$HOME/.local/bin/walnut-dtach" ] && echo has=walnut-dtach',
-      '[ -e /tmp/open-walnut/daemon.pid ] && echo has=daemon',
+      'for d in /tmp/open-walnut "$HOME/.cache/open-walnut"; do [ -e "$d/daemon.pid" ] && echo has=daemon; done',
       'true',
     ].join('; '))
     log(`fixture facts:\n${facts}`)
@@ -322,7 +322,11 @@ describeIf(`remote-host onboarding (ssh alias: ${SSH_ALIAS})`, () => {
 
     // The host gets the compiled daemon (a prebuilt binary, else the walnut file in its slot),
     // so connect installs no runtime: no Bun appears on the box.
-    const proc = remote('pid=$(cat /tmp/open-walnut/daemon.pid) && ps -o args= -p "$pid"; [ -e "$HOME/.bun" ] && echo has=bun-dir; true')
+    // A host nothing ran on keeps the daemon's files in its home dir, which no temp cleanup empties
+    // (remote-daemon-dir.ts). They are read where the connection says they are, never by a fixed path.
+    const daemonDir = conn!.remoteDaemonDir
+    expect(daemonDir).toBe(`${remoteHome}/.cache/open-walnut`)
+    const proc = remote(`pid=$(cat '${daemonDir}/daemon.pid') && ps -o args= -p "$pid"; [ -e "$HOME/.bun" ] && echo has=bun-dir; true`)
     log(`a. daemon process: ${proc}`)
     expect(proc, 'the daemon should run as the compiled `.../daemon-linux-<arch>`').toMatch(/\/daemon-linux-\w+/)
     expect(proc).not.toContain('has=bun-dir')

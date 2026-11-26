@@ -62,7 +62,7 @@ export WALNUT_LIVE_SSH_HOST="$SSH_HOST"
 # Cleanup between files ensures a clean remote daemon for each suite.
 cleanup_remote() {
   ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=3 "$SSH_HOST" \
-    'kill -9 $(cat /tmp/open-walnut/daemon.pid 2>/dev/null) 2>/dev/null; rm -f /tmp/open-walnut/sessions.json' \
+    'for d in /tmp/open-walnut "$HOME/.cache/open-walnut"; do kill -9 $(cat "$d/daemon.pid" 2>/dev/null) 2>/dev/null; rm -f "$d/sessions.json"; done' \
     >/dev/null 2>&1 || true
 }
 

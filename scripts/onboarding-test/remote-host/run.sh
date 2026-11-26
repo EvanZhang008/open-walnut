@@ -180,6 +180,7 @@ set -e
 
 if [ "$test_status" != 0 ]; then
   echo "remote-host: live test failed; daemon-side logs from the container follow" >&2
-  docker exec "$CONTAINER_ID" sh -c 'ls -la /tmp/open-walnut 2>&1; for f in /tmp/open-walnut/daemon-start.log /tmp/open-walnut/daemon-d-*.log; do [ -f "$f" ] && { echo "== $f"; tail -n 60 "$f"; }; done' >&2 || true
+  # docker exec runs as root: the daemon's dir is in the fixture user's home (alice), or the shared temp dir.
+  docker exec "$CONTAINER_ID" sh -c 'for d in /home/alice/.cache/open-walnut /tmp/open-walnut; do ls -la "$d" 2>&1; for f in "$d"/daemon-start.log "$d"/daemon-d-*.log; do [ -f "$f" ] && { echo "== $f"; tail -n 60 "$f"; }; done; done' >&2 || true
 fi
 exit "$test_status"
