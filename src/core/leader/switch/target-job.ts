@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { getVersion } from '../../version.js'
-import { verifyStandby, StandbyTarget, standbyStatus } from '../../standby/index.js'
+import { batchUnderWay, verifyStandby, StandbyTarget, standbyStatus, type BatchUnderWay } from '../../standby/index.js'
 import { majorityOf, type PermitRecord } from '../permit/types.js'
 import { appendHistory, lockHolder, promotedFile, readMarker, readPromoted, summarize, takeJobLock, writePromoted } from './records.js'
 import { demoteTrialHome, moveRoots, promoteCopy } from './promote.js'
@@ -61,6 +61,29 @@ const RECENT_BATCH_S = 5 * 60
 export function sinceLanded(s: { ageSeconds: number | null; committedAt: string | null }, now = Date.now()): number {
   if (s.committedAt) return Math.max(0, Math.round((now - Date.parse(s.committedAt)) / 1000))
   return s.ageSeconds ?? Infinity
+}
+
+/** A batch under way at the copy that moved this recently is running, however long it has taken. */
+export const UNDER_WAY_MOVED_S = 120
+
+const secsSince = (iso: string, now: number) => Math.max(0, Math.round((now - Date.parse(iso)) / 1000))
+
+/**
+ * The copy's batches stopped coming, or one is still on its way: what the candidate's check says when the last
+ * batch landed more than RECENT_BATCH_S ago, or null when it is recent. The copy's own disk tells the two apart
+ * (standby/under-way.ts): a batch that is sending is "not caught up yet, its standby runs" (a slow link, the batch
+ * after a batch of the whole home: wait), one that sends nothing is "is the standby running?" (the 2026-11-25
+ * rehearsal: a 20 Mbit/s batch ran past 300 s, and the check called it not running).
+ */
+export function staleCopyProblem(status: { ageSeconds: number | null; committedAt: string | null }, underWay: BatchUnderWay | null, now = Date.now()): string | null {
+  const landed = sinceLanded(status, now)
+  if (landed <= RECENT_BATCH_S) return null
+  const head = `the standby copy's last batch landed ${landed} s ago (more than ${RECENT_BATCH_S} s)`
+  if (!underWay) return `${head}, and no batch is under way here (nothing received since it landed): is the standby running on the leader?`
+  const moved = secsSince(underWay.lastAt, now)
+  const got = `${underWay.chunks} chunk(s), ${(underWay.bytes / 1_048_576).toFixed(1)} MB received${underWay.applying ? ', its apply running' : ''}, the last ${moved} s ago`
+  if (moved <= UNDER_WAY_MOVED_S) return `${head}, so the copy is not caught up yet, but its standby runs: a batch has been under way here for ${secsSince(underWay.since, now)} s (since ${underWay.since}; ${got}). A batch over a slow link, or the one after a batch of the whole home, takes this long: wait for it to land, then try again`
+  return `${head}, and the batch that began here at ${underWay.since} has not moved for ${moved} s (${got}): is the standby running on the leader, and does its link to this machine carry?`
 }
 
 export function targetLockFile(standbyDir: string, switchId: string): string {
@@ -135,7 +158,10 @@ async function runCheck(o: TargetJobOptions, env: NodeJS.ProcessEnv, out: (line:
     // The copy: complete and recent (its batches still come). The old leader's server verified it just before.
     const status = await standbyStatus(o.standbyDir)
     if (status.batch === null) problems.push(`the standby copy ${o.standbyDir} holds no complete batch yet`)
-    else if (sinceLanded(status) > RECENT_BATCH_S) problems.push(`the standby copy's last batch landed ${sinceLanded(status)} s ago (more than ${RECENT_BATCH_S} s): is the standby running? (Right after a batch of the whole home its runner can still be finishing it for minutes: wait for its next batch, then try again.)`)
+    else {
+      const stale = staleCopyProblem(status, sinceLanded(status) > RECENT_BATCH_S ? await batchUnderWay(o.standbyDir, status.committedAt ?? status.takenAt) : null)
+      if (stale) problems.push(stale)
+    }
     const free = freeBytes(self.home)
     const need = Math.max(1024 ** 3, status.bytes * 0.2)
     if (free !== null && free < need) problems.push(`only ${(free / 1024 ** 3).toFixed(1)} GB free where the new home goes; ${(need / 1024 ** 3).toFixed(1)} GB needed`)

@@ -29,7 +29,7 @@ export type ApplyStatus =
 
 /** The status file of job `jobId` in the target's `.incoming/`. */
 export const statusFileName = (jobId: string): string => `apply-${jobId}.status.json`
-const STATUS_FILE = /^apply-[A-Za-z0-9_-]+\.status\.json$/
+export const STATUS_FILE = /^apply-[A-Za-z0-9_-]+\.status\.json$/
 
 export async function writeStatus(file: string, status: ApplyStatus): Promise<void> {
   await writeDurable(file, JSON.stringify(status), 0o600)

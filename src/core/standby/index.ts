@@ -15,6 +15,7 @@ import type { StandbyTransport } from './types.js'
 export { takeBatch, type BatchOutcome, type BatchStats } from './batch.js'
 export { verifyStandby, reportPendingDrift, type DriftReport, type VerifyResult } from './verify.js'
 export { StandbyTarget } from './target.js'
+export { batchUnderWay, type BatchUnderWay } from './under-way.js'
 export type { BatchFile, BatchManifest, StandbyState, StandbyTransport } from './types.js'
 
 /** A target directory on this machine, as a transport. */

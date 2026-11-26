@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { snapshotTo, standbyStatus } from '../../../../src/core/standby/index.js'
-import { sinceLanded } from '../../../../src/core/leader/switch/target-job.js'
+import { UNDER_WAY_MOVED_S, sinceLanded, staleCopyProblem } from '../../../../src/core/leader/switch/target-job.js'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -48,5 +48,39 @@ describe('when the standby copy last landed', () => {
   it('an older state with no landing time: the batch\'s moment, as before; no batch: never recent', () => {
     expect(sinceLanded({ ageSeconds: 400, committedAt: null })).toBe(400)
     expect(sinceLanded({ ageSeconds: null, committedAt: null })).toBe(Infinity)
+  })
+
+  // The 2026-11-25 rehearsal (runs/gb20-measure-tracked.log): the switch back at 20 Mbit/s, its standby batch still
+  // sending after 300 s, was refused as "the last batch landed 617 s ago: is the standby running?".
+  const now = Date.parse('2026-11-25T20:30:00Z')
+  const stale = { ageSeconds: 1300, committedAt: new Date(now - 617_000).toISOString() }
+  const ago = (s: number) => new Date(now - s * 1000).toISOString()
+
+  it('a recent batch: no problem, whatever is under way', () => {
+    expect(staleCopyProblem({ ageSeconds: 40, committedAt: ago(10) }, null, now)).toBeNull()
+    expect(staleCopyProblem({ ageSeconds: 40, committedAt: ago(10) }, { since: ago(5), lastAt: ago(1), chunks: 3, bytes: 3 << 20, applying: false }, now)).toBeNull()
+  })
+
+  it('an old batch and nothing under way: is the standby running on the leader?', () => {
+    const p = staleCopyProblem(stale, null, now)
+    expect(p).toMatch(/landed 617 s ago \(more than 300 s\), and no batch is under way here/)
+    expect(p).toMatch(/is the standby running on the leader\?/)
+    expect(p).not.toMatch(/its standby runs/)
+  })
+
+  it('an old batch and one under way that still moves: not caught up yet, its standby runs (wait), never "is it running?"', () => {
+    const p = staleCopyProblem(stale, { since: ago(560), lastAt: ago(2), chunks: 1630, bytes: 1630 << 20, applying: false }, now)
+    expect(p).toMatch(/not caught up yet, but its standby runs: a batch has been under way here for 560 s/)
+    expect(p).toMatch(/1630 chunk\(s\), 1630\.0 MB received, the last 2 s ago/)
+    expect(p).toMatch(/wait for it to land, then try again/)
+    expect(p).not.toMatch(/is the standby running/)
+    // Its apply on this machine, after the last chunk: still moving by the apply's heartbeat.
+    expect(staleCopyProblem(stale, { since: ago(560), lastAt: ago(8), chunks: 1630, bytes: 1630 << 20, applying: true }, now)).toMatch(/its apply running/)
+  })
+
+  it('an old batch and one that stopped moving: names when it began, and asks for the standby and its link', () => {
+    const p = staleCopyProblem(stale, { since: ago(560), lastAt: ago(UNDER_WAY_MOVED_S + 1), chunks: 40, bytes: 40 << 20, applying: false }, now)
+    expect(p).toMatch(new RegExp(`the batch that began here at ${ago(560).replace(/[.]/g, '\\.')} has not moved for ${UNDER_WAY_MOVED_S + 1} s`))
+    expect(p).toMatch(/is the standby running on the leader, and does its link to this machine carry\?/)
   })
 })
