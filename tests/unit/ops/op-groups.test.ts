@@ -66,15 +66,15 @@ describe('op groups', () => {
     const keeper = listedNames('thread_keeper')
     const org = listedNames('org')
     const all = coreOps().filter((o) => !o.deprecated).length
-    // Counted from the table on 2026-11-22: 77, 83 and 118 of 192 core ops.
+    // Counted from the table on 2026-11-26: 89, 96 and 126 of 200 core ops.
     expect(worker.length).toBeGreaterThanOrEqual(60)
-    expect(worker.length).toBeLessThanOrEqual(85)
-    expect(org.length).toBeLessThanOrEqual(125)
+    expect(worker.length).toBeLessThanOrEqual(92)
+    expect(org.length).toBeLessThanOrEqual(130)
     expect(worker.length * 2).toBeLessThan(all)
-    for (const n of ['task_get', 'task_send', 'task_create', 'search', 'api', 'host_exec', 'host_mcp_call', 'host_http', 'trigger_create', 'subagent_run', 'board_post', 'note_read', 'agent_memory_write', 'thread_list', 'human_inbox_send']) {
+    for (const n of ['task_get', 'task_send', 'task_create', 'search', 'api', 'host_exec', 'host_mcp_call', 'host_http', 'trigger_create', 'subagent_run', 'board_post', 'note_read', 'agent_memory_write', 'thread_list', 'human_inbox_send', 'human_inbox_reply', 'human_inbox_mark', 'password_use', 'password_wait']) {
       expect(worker, n).toContain(n)
     }
-    for (const n of ['thread_update', 'org_get', 'brief_write', 'human_inbox_reply', 'task_move', 'topic_post', 'approval_list', 'password_list', 'router_route', 'time_report']) {
+    for (const n of ['thread_update', 'org_get', 'brief_write', 'task_move', 'topic_post', 'approval_list', 'password_list', 'router_route', 'time_report']) {
       expect(worker, n).not.toContain(n)
     }
     // Each role lists what the one below it does.
@@ -85,7 +85,7 @@ describe('op groups', () => {
     for (const n of ['org_get', 'org_send', 'org_report', 'brief_write', 'brief_read', 'human_inbox_reply', 'task_move', 'task_restart', 'memory_write', 'agent_skill_write', 'health_monitor', 'thread_update']) {
       expect(org, n).toContain(n)
     }
-    for (const n of ['topic_post', 'approval_list', 'password_use', 'router_route', 'triage_rule_set', 'time_report', 'mcp_call', 'hint_set', 'folder_create']) {
+    for (const n of ['topic_post', 'approval_list', 'password_list', 'router_route', 'triage_rule_set', 'time_report', 'mcp_call', 'hint_set', 'folder_create']) {
       expect(org, n).not.toContain(n)
     }
     // Every role's own picks are real ops.

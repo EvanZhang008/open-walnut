@@ -162,17 +162,17 @@ export function resolveWalnutMcpServers(
  * call: 131 tools measured 223,563 characters (about 56k tokens) on OpenCode, which a
  * local model evaluates in full on each turn (2026-11-01: an Ask took 95 to 172 s on a
  * 30B model). 'core' lists the most used ones plus tool_help and tool_call, which reach
- * every other (src/mcp/tools.ts CORE_TOOL_NAMES), on every ACP engine but Codex (OpenCode,
- * Goose, Gemini, a custom adapter). Codex keeps the full list: it runs a
- * hosted model with a cached prompt, and its Main and lead lanes use the org tools most.
+ * every other (src/mcp/tools.ts CORE_TOOL_NAMES), on every ACP engine (Codex, OpenCode, Goose,
+ * Gemini, a custom adapter). Codex listed everything until 2026-11-26: 200 tools measured
+ * 395,619 bytes on every model call against 62,522 for the core list, and a cached prompt still
+ * fills the model's window. Config `session.acp_walnut_tools: 'all'` lists everything again.
  */
 export function walnutMcpToolSet(
-  engineId: string,
+  _engineId: string,
   session?: { acp_walnut_tools?: unknown } | null,
 ): 'core' | 'all' {
   const set = session?.acp_walnut_tools
-  if (set === 'core' || set === 'all') return set
-  return engineId === 'codex' ? 'all' : 'core'
+  return set === 'all' ? 'all' : 'core'
 }
 
 /** The env switch `walnut mcp` reads as `--core` (src/commands/mcp.ts). */

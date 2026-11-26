@@ -28,16 +28,16 @@ describe('the hub mount\'s listing role', () => {
     expect(await mountListingRole({ WALNUT_MCP_ROLE: 'worker' })).toBe('worker')
   })
 
-  it('is none (every tool listed) with the experiment off or unset, no role, an unknown role, or no config', async () => {
+  it('is none (every tool listed) with the experiment off, no role, an unknown role or an unreadable config; unset or no config is the default, on', async () => {
     writeConfig('experimental:\n  mcp_tools_by_role: false\n')
     expect(await mountListingRole({ WALNUT_MCP_ROLE: 'org' })).toBeUndefined()
     writeConfig('user:\n  name: Ada\n')
-    expect(await mountListingRole({ WALNUT_MCP_ROLE: 'org' })).toBeUndefined()
+    expect(await mountListingRole({ WALNUT_MCP_ROLE: 'org' })).toBe('org')
     writeConfig('experimental:\n  mcp_tools_by_role: true\n')
     expect(await mountListingRole({})).toBeUndefined()
     expect(await mountListingRole({ WALNUT_MCP_ROLE: 'router' })).toBeUndefined()
     fs.rmSync(CONFIG_FILE, { force: true })
-    expect(await mountListingRole({ WALNUT_MCP_ROLE: 'org' })).toBeUndefined()
+    expect(await mountListingRole({ WALNUT_MCP_ROLE: 'org' })).toBe('org')
     writeConfig(': not yaml : [')
     expect(await mountListingRole({ WALNUT_MCP_ROLE: 'org' })).toBeUndefined()
   })

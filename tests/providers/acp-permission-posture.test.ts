@@ -135,6 +135,16 @@ describe('isWalnutOwnRequest', () => {
     expect(isWalnutOwnRequest({ kind: 'execute', input: { serverName: 'walnut', schema: {} }, meta: mcp })).toBe(false)
     expect(isWalnutOwnRequest({ kind: 'execute', input: { server: 'walnut', tool: 'host_exec', arguments: {} }, meta: mcp })).toBe(false)
     expect(isWalnutOwnRequest({ title: 'mcp.walnut.trigger_create', meta: mcp })).toBe(false)
+    // The core list's gateway tools: tool_help only describes, tool_call is the op its name gives.
+    expect(isWalnutOwnRequest({ kind: 'execute', input: { server: 'walnut', tool: 'tool_help', arguments: { group: 'board' } }, meta: mcp })).toBe(true)
+    expect(isWalnutOwnRequest({ kind: 'execute', input: { server: 'walnut', tool: 'tool_call', arguments: { name: 'board_post', args: { text: 'x' } } }, meta: mcp })).toBe(true)
+    expect(isWalnutOwnRequest({ kind: 'execute', input: { server: 'walnut', tool: 'tool_call', arguments: { name: 'host_list' } }, meta: mcp })).toBe(true)
+    expect(isWalnutOwnRequest({ kind: 'execute', input: { server: 'walnut', tool: 'tool_call', arguments: { name: 'host_exec', args: { host: 'h', command: 'ls' } } }, meta: mcp })).toBe(false)
+    expect(isWalnutOwnRequest({ kind: 'execute', input: { server: 'walnut', tool: 'tool_call', arguments: { name: 'secret_list' } }, meta: mcp })).toBe(false)
+    expect(isWalnutOwnRequest({ kind: 'execute', input: { server: 'walnut', tool: 'tool_call', arguments: {} }, meta: mcp })).toBe(false)
+    expect(isWalnutOwnRequest({ kind: 'execute', input: { server: 'walnut', tool: 'tool_call' }, meta: mcp })).toBe(false)
+    expect(isWalnutOwnRequest({ title: 'mcp.walnut.tool_call', input: { name: 'brief_write', args: {} }, meta: mcp })).toBe(true)
+    expect(isWalnutOwnRequest({ title: 'mcp.walnut.tool_call', meta: mcp })).toBe(false)
     // Not marked as an MCP tool approval: a title or an input proves nothing.
     expect(isWalnutOwnRequest({ kind: 'other', title: 'mcp__walnut__task_send' })).toBe(false)
     expect(isWalnutOwnRequest({ kind: 'execute', input: { server: 'walnut', tool: 'task_send' } })).toBe(false)

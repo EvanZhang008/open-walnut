@@ -25,7 +25,8 @@ export async function runMcp(options: McpCliOptions = {}): Promise<void> {
  * The role this mount lists tools for: WALNUT_MCP_ROLE (core/sessions/profiles.ts walnutMcpProfile
  * sets it for Main and the asks), only while the experiment mcp_tools_by_role is on. Read from
  * config.yaml at start, not from the session record, so turning the switch off reaches a session at
- * its next mount start. Anything unreadable lists everything, as before.
+ * its next mount start. On by default: a config with no choice, or no config yet, is on; a stored
+ * false is off; a config that cannot be read lists everything.
  */
 export async function mountListingRole(env: NodeJS.ProcessEnv): Promise<import('../ops/op-groups.js').ListingRole | undefined> {
   const { listingRoleOf, ROLE_LISTING_EXPERIMENT, WALNUT_MCP_ROLE_ENV } = await import('../ops/op-groups.js')
@@ -35,7 +36,10 @@ export async function mountListingRole(env: NodeJS.ProcessEnv): Promise<import('
     const [{ CONFIG_FILE }, { readConfigSnapshot }, { experimentalEnabled }] = await Promise.all([
       import('../constants.js'), import('../core/config-file-io.js'), import('../core/experimental.js'),
     ])
-    const doc = (await readConfigSnapshot(CONFIG_FILE)).doc
+    const snapshot = await readConfigSnapshot(CONFIG_FILE)
+    // A config that is there but cannot be read may hold the user's "off": list everything.
+    if (!snapshot.doc && snapshot.state !== 'missing') return undefined
+    const doc = snapshot.doc
     const flags = doc?.experimental && typeof doc.experimental === 'object' ? doc.experimental as Record<string, boolean> : undefined
     return experimentalEnabled(flags, ROLE_LISTING_EXPERIMENT) ? role : undefined
   } catch {

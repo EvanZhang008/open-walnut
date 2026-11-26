@@ -389,7 +389,7 @@ export const EXPERIMENTAL_FEATURES = [
     name: 'Fewer Walnut tools listed per role',
     description: 'A Claude Code session lists only the Walnut tools its role uses: a task lists its work tools (tasks, notes, memory, hosts, watches, subagents, the browser and Boards) and the tools of the plugin it comes from, and Main, the VPs and Ask Walnut also list Threads, the Brief, the inbox, the org and the tools of every plugin. Every other tool still runs through the walnut CLI, and the walnut tools list command shows them all by group. It applies when a session next starts its Walnut tools. Off: every session lists every tool, as before.',
     summary: 'A Claude Code session lists only the Walnut tools its role uses. The others still run from the walnut command.',
-    default: false,
+    default: true,
   },
   {
     id: 'replica_takeover',

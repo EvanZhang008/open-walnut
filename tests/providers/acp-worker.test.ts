@@ -685,10 +685,11 @@ describe('MCP server mounts', () => {
     ])
   })
 
-  it('walnutMcpToolSet: core on every engine but Codex, and config wins', () => {
+  it('walnutMcpToolSet: core on every engine, Codex included, and config wins', () => {
     expect(walnutMcpToolSet('opencode', undefined)).toBe('core')
     expect(walnutMcpToolSet('goose', {})).toBe('core')
-    expect(walnutMcpToolSet('codex', undefined)).toBe('all')
+    expect(walnutMcpToolSet('codex', undefined)).toBe('core')
+    expect(walnutMcpToolSet('codex', { acp_walnut_tools: 'all' })).toBe('all')
     expect(walnutMcpToolSet('opencode', { acp_walnut_tools: 'all' })).toBe('all')
     expect(walnutMcpToolSet('codex', { acp_walnut_tools: 'core' })).toBe('core')
     expect(walnutMcpToolSet('opencode', { acp_walnut_tools: 'bogus' })).toBe('core')

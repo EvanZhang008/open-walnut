@@ -169,6 +169,20 @@ export function walnutOpAnswered(op: unknown): boolean {
   return getOpOwner(op) === 'core' && getOp(op)?.tags.readonly === true && !WALNUT_READ_OPS_THAT_ASK.has(op)
 }
 
+/**
+ * True when Walnut answers a request for this tool of its own MCP mount. The core list's two
+ * gateway tools (src/mcp/tools.ts registerOpGateway) are judged by what they do: tool_help only
+ * describes tools, and tool_call runs the op its `name` argument gives, so it is that op's answer
+ * (a call whose op cannot be read asks). Without this every op outside the core list asked the
+ * user on each call, on every engine that lists the core tools.
+ */
+export function walnutToolAnswered(tool: unknown, args: unknown): boolean {
+  if (tool === 'tool_help') return true
+  if (tool !== 'tool_call') return walnutOpAnswered(tool)
+  const name = typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>).name : undefined
+  return walnutOpAnswered(name)
+}
+
 /** The command a request runs, from the field its adapter reports it in faithfully. */
 function requestCommand(ask: AcpPermissionAsk): unknown {
   const codex = ask.meta?.codex as { params?: { command?: unknown } } | undefined
@@ -188,11 +202,11 @@ export function isWalnutOwnRequest(ask: AcpPermissionAsk): boolean {
   }
   if (ask.meta?.is_mcp_tool_approval !== true) return false
   const input = ask.input
-  if (input && input.server === 'walnut') return walnutOpAnswered(input.tool)
+  if (input && input.server === 'walnut') return walnutToolAnswered(input.tool, input.arguments)
   if (typeof ask.title !== 'string') return false
   for (const re of WALNUT_MCP_TITLES) {
     const m = re.exec(ask.title)
-    if (m) return walnutOpAnswered(m[1])
+    if (m) return walnutToolAnswered(m[1], input?.arguments ?? input)
   }
   return false
 }

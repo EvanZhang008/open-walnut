@@ -161,7 +161,10 @@ const WORKER_GROUPS = ['tasks', 'lookup', 'memory', 'notes', 'hosts', 'triggers'
 
 /**
  * What each role lists: whole groups, plus single ops every session's own instructions name
- * (the charter names thread_list, the MCP instructions human_inbox_send).
+ * (the charter names thread_list). Every role lists the inbox: a task that sends a letter also
+ * reads, marks and answers it (5 days of real sessions, 2026-11-26: of 13,581 Walnut MCP calls by
+ * tasks, 45 were to tools this table did not list for them, 17 of those human_inbox_ ones; Main and
+ * the VPs made 2,096 calls, none to a tool they do not list).
  *
  * Plugin ops (`allPlugins`): a plugin is one the user installed and turned on for himself, and
  * Main, the VPs and his asks are where his requests about it land ("check my mail", "what is on my
@@ -170,10 +173,13 @@ const WORKER_GROUPS = ['tasks', 'lookup', 'memory', 'notes', 'hosts', 'triggers'
  * plugin's tools only when its task comes from that plugin (Task.source, the plugin that syncs its
  * project: ToolListing.plugins); any other plugin op it reaches through the CLI.
  */
+/** A sign-in in the user's browser (the browser group every role lists): the walnut-passwords skill names them. */
+const SIGN_IN_OPS = ['password_use', 'password_wait'] as const
+
 export const ROLE_LISTINGS: Readonly<Record<ListingRole, { groups: readonly string[]; ops: readonly string[]; allPlugins: boolean }>> = {
-  worker: { groups: WORKER_GROUPS, ops: ['thread_list', 'human_inbox_send'], allPlugins: false },
-  thread_keeper: { groups: [...WORKER_GROUPS, 'threads'], ops: ['human_inbox_send'], allPlugins: false },
-  org: { groups: [...WORKER_GROUPS, 'threads', 'inbox', 'brief', 'org', 'task_admin', 'alarms'], ops: [], allPlugins: true },
+  worker: { groups: [...WORKER_GROUPS, 'inbox'], ops: ['thread_list', ...SIGN_IN_OPS], allPlugins: false },
+  thread_keeper: { groups: [...WORKER_GROUPS, 'threads', 'inbox'], ops: SIGN_IN_OPS, allPlugins: false },
+  org: { groups: [...WORKER_GROUPS, 'threads', 'inbox', 'brief', 'org', 'task_admin', 'alarms'], ops: SIGN_IN_OPS, allPlugins: true },
 }
 
 /** What one session lists: its role, and the plugins its task uses (a worker lists only those plugins' ops). */

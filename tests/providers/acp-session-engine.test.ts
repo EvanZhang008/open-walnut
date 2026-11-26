@@ -88,16 +88,16 @@ describe('AcpSession walnut mount tool list', () => {
     return servers.map((server) => server.env.some((entry) => entry.name === 'WALNUT_MCP_CORE' && entry.value === '1'))
   }
 
-  it('an OpenCode lane or ask gets the core list, a Codex one the full list', async () => {
+  it('a lane or ask gets the core list on every engine, Codex included', async () => {
     expect(await coreOf('opencode', mount)).toEqual([true])
     expect(await coreOf('goose', mount)).toEqual([true])
-    expect(await coreOf('codex', mount)).toEqual([false])
+    expect(await coreOf('codex', mount)).toEqual([true])
   })
 
   it('the opt-in mount follows the same rule, and config acp_walnut_tools wins', async () => {
     await updateConfig({ session: { acp_walnut_mcp: true } } as never)
     expect(await coreOf('opencode')).toEqual([true])
-    expect(await coreOf('codex')).toEqual([false])
+    expect(await coreOf('codex')).toEqual([true])
     await updateConfig({ session: { acp_walnut_mcp: true, acp_walnut_tools: 'all' } } as never)
     expect(await coreOf('opencode', mount)).toEqual([false])
     await updateConfig({ session: { acp_walnut_mcp: true, acp_walnut_tools: 'core' } } as never)

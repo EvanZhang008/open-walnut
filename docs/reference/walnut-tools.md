@@ -42,11 +42,12 @@ Where the groups show:
 
 ## What a session lists (experiment `mcp_tools_by_role`)
 
-Off by default (Settings, Experimental). On, a Claude Code session lists only its role's groups:
+On by default since 2026-11-26 (Settings, Experimental turns it off: every session then lists every
+tool, as before). A Claude Code session lists only its role's groups:
 
 | Role | Who | Lists |
 |---|---|---|
-| worker | an ordinary task session | tasks, lookup, memory, notes, hosts (with a host's MCP servers and HTTP), triggers, subagents, browser, board, plus `thread_list` and `human_inbox_send`; the tools of the plugin its task comes from |
+| worker | an ordinary task session | tasks, lookup, memory, notes, hosts (with a host's MCP servers and HTTP), triggers, subagents, browser, board, inbox, plus `thread_list`; the tools of the plugin its task comes from |
 | thread_keeper | a task that keeps Threads (not an org node) | the worker's, and threads |
 | org | Main, a VP, an Ask of the Personal AI | the worker groups and threads, inbox, brief, org, task_admin, alarms, and every plugin's tools |
 | router | a router session | its own four ops, as before (`src/core/router/gateway-policy.ts`) |
@@ -57,8 +58,18 @@ lists a plugin's tools only when its task comes from that plugin (`Task.source`,
 syncs its project); no prompt names plugin tools, so there is no narrower signal. Any other plugin
 tool a worker reaches with `walnut tools call`.
 
-Counted from the table on 2026-11-22: of 192 core ops a worker lists 77, a thread keeper 83, an org
-node 118 (117 on another host, which refuses one local-only op), plus the plugin tools above.
+Counted from the table on 2026-11-26: of 200 core ops a worker lists 89, a thread keeper 96, an org
+node 126 (fewer on another host, which is never given a local-only op), plus the plugin tools above.
+Every role lists `password_use` and `password_wait`, which a sign-in in the browser needs.
+
+Checked against real use before it went on by default (5 days of sessions on two hosts, 507
+sessions, 16,476 Walnut MCP calls): tasks made 13,581 calls, 45 of them (0.3%) to core tools the
+table did not list for them, 17 of those `human_inbox_` tools, which every role lists since; Main
+and the VPs made 2,096 calls, none to a tool they do not list.
+
+An engine with no on-demand tool loading (Codex and every other ACP engine) does not use roles:
+its mount lists the core tools plus `tool_help` and `tool_call` (`session.acp_walnut_tools: 'all'`
+lists everything; 395,619 bytes of definitions against 62,522 on 2026-11-26).
 
 Guard: `tests/core/sessions/tool-listing-role.test.ts` builds every always-loaded prompt block
 (`src/core/sessions/prompt-blocks.ts`) and renders every built-in message hint
