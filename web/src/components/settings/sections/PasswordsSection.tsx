@@ -201,7 +201,7 @@ export function PasswordsSection({ config, onSave }: Props) {
           <SettingsRow
             label="Sign in with Bitwarden while locked"
             htmlFor="pw-bw-locked"
-            help={needUnlock ?? 'While Passwords is locked, an agent\'s browser sign-in fills the login from Bitwarden (the bw CLI on this computer), never showing it to the agent. Items you set to Never or mark sensitive stay kept from agents; Lock all stops it until you unlock again.'}
+            help={needUnlock ?? 'While locked, agents sign in with your Bitwarden logins without seeing them. Never and sensitive items are skipped.'}
             control={<ToggleSwitch id="pw-bw-locked" data-testid="pw-bw-locked" checked={bwLocked === true} disabled={!unlocked || bwLocked === null || busy === 'bw-locked'}
               onChange={(on) => void run('bw-locked', async () => {
                 setBwLocked((await vaultApi.setBitwardenWhileLocked(on)).bitwardenWhileLocked === true)
