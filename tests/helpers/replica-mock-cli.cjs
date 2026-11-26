@@ -22,7 +22,7 @@
  * mode): "echo: answered <their answer>" once the answer comes, else "echo: not answered".
  * "please hold until <absolute path>" keeps the turn running until that file exists (a
  * test reads the running turn, then releases it): "echo: released <path>"; "...writing <rel>" also appends a line
- * to <rel> under its cwd every 200 ms while held (a tool at work in its folder). An interrupt
+ * to <rel> under its cwd every 200 ms (or "...every <n> ms") while held (a tool at work in its folder). An interrupt
  * control request (Walnut's Stop) ends such a held turn at once: "echo: interrupted".
  * "...then exec <script> into <file>" runs the script as this CLI's child once released (a
  * `walnut` call made inside the session) and writes its exit code and output to the file.
@@ -182,10 +182,10 @@ function runNext() {
   }
   // "please hold until <path> writing <rel>": held as below while it appends a line to <rel> under its cwd every
   // 200 ms (a tool at work in its folder), until released or interrupted: "echo: released <path>".
-  const holdWrite = /please hold until (\/\S+) writing (\S+)/i.exec(words)
+  const holdWrite = /please hold until (\/\S+) writing (\S+)(?: every (\d+) ms)?/i.exec(words)
   if (holdWrite) {
     const target = path.join(process.cwd(), holdWrite[2])
-    const writer = setInterval(() => { try { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.appendFileSync(target, `${new Date().toISOString()} ${sid}\n`) } catch { /* gone */ } }, 200)
+    const writer = setInterval(() => { try { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.appendFileSync(target, `${new Date().toISOString()} ${sid}\n`) } catch { /* gone */ } }, Number(holdWrite[3] ?? 200))
     holdUntil(holdWrite[1], `echo: released ${holdWrite[1]}`)
     const held = stopHeld
     stopHeld = () => { clearInterval(writer); held() }
