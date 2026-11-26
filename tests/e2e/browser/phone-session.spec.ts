@@ -326,17 +326,23 @@ test('a long last turn opens at its start; 20 calls are one row; the jump pill c
   expect(Math.abs(box.width - box.height)).toBeLessThanOrEqual(1)
   await expect(jump).toHaveText('')
   await expect(page.getByRole('button', { name: 'Jump to latest' })).toHaveCount(0)
-  // Twenty consecutive calls: ONE row of 44 px, opens and closes.
-  const run = scroller.locator('.tool-run-toggle', { hasText: '20 tool calls' })
-  await expect(run).toHaveCount(1)
+  // Twenty consecutive calls: ONE row of 44 px, opens and closes. Since 07c1de1caa and
+  // 4f78c62f7a a turn's steps fold behind its one "Worked for" line, so that line is the row:
+  // shut, none of the twenty calls is drawn; opened, they are its twenty rows; shut, gone again.
+  const fold = scroller.locator('[data-testid="turn-fold"]')
+  await expect(fold).toHaveCount(1)
+  const run = fold.locator(':scope > .tool-run-toggle')
+  await expect(run.locator('.tool-run-label')).toHaveText('Ran 20 tools')
+  await expect(scroller.locator('.chat-tool-block')).toHaveCount(0)
   expect((await run.boundingBox())!.height).toBeGreaterThanOrEqual(44)
   await run.click()
-  await expect(scroller.locator('.tool-run-body').first()).toBeVisible()
+  await expect(fold.locator(':scope > .process-fold-body .chat-tool-block-bash')).toHaveCount(20)
   await run.click()
-  await expect(scroller.locator('.tool-run-body')).toHaveCount(0)
+  await expect(fold.locator(':scope > .process-fold-body')).toHaveCount(0)
+  await expect(scroller.locator('.chat-tool-block')).toHaveCount(0)
   await page.screenshot({ path: `${SHOTS}/c69-turn-start-${test.info().project.name}.png` })
 
-  // Three rows arrive while reading above: the view holds, the pill counts them.
+  // Three notes arrive while reading above: the view holds, the pill counts them.
   await scroller.evaluate((el) => { el.dispatchEvent(new WheelEvent('wheel', { deltaY: -40 })); el.scrollTop = Math.max(0, el.scrollTop - 200) })
   await page.waitForTimeout(300)
   const before = await scroller.evaluate((el) => el.scrollTop)
@@ -345,8 +351,14 @@ test('a long last turn opens at its start; 20 calls are one row; the jump pill c
   }
   await inject(page, 'session:batch-completed', { sessionId: SID })
   await expect(scroller.locator('[data-message-id="new-3"]')).toBeAttached({ timeout: 15_000 })
-  await expect(jump).toHaveAttribute('aria-label', 'Scroll to bottom, 3 new')
-  await expect(jump.locator('.scroll-to-bottom-badge')).toHaveText('3')
+  // The pill counts the message rows the timeline draws below (969ef473ae). Since 07c1de1caa
+  // a turn's short words before its answer fold with its steps, so the first two notes are one
+  // shut "2 updates" fold line and the third is the one message row that arrived.
+  await expect(fold).toHaveCount(2)
+  await expect(fold.nth(1).locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText('2 updates')
+  await expect(fold.nth(1).locator('[data-message-id="new-3"]')).toHaveCount(0)
+  await expect(jump).toHaveAttribute('aria-label', 'Scroll to bottom, 1 new')
+  await expect(jump.locator('.scroll-to-bottom-badge')).toHaveText('1')
   expect(Math.abs((await scroller.evaluate((el) => el.scrollTop)) - before)).toBeLessThanOrEqual(1)
   await jump.click()
   await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(80)
