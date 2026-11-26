@@ -21,6 +21,12 @@
 .page-header-text { flex: 1 1 auto; min-width: 0; }
 /* The key's middle on the title's middle: a 34 px key beside a 26 px title line. */
 .page-header > .btn { flex: none; white-space: nowrap; margin-block: -4px; }
+/* A phone: every New key takes a finger (44 px), as every control there does, wherever it sits
+   (a page head, Mail's folder head); beside a title it keeps its middle on the title's. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .btn.new-key { min-height: 44px; }
+  .app-shell-navigation .page-header > .btn.new-key { margin-block: -10px; }
+}
 
 /* The title of a whole page (Routines, Agents, Apps, a Settings pane, a plugin's page). */
 .page-title {

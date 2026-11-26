@@ -292,7 +292,7 @@
   font-size: var(--font-size-md);
   cursor: pointer;
 }
-.apps-detail-line { margin: 3px 0 10px; color: var(--fg-muted); font-size: 14px; }
+.apps-detail-line { margin: 4px 0 10px; } /* a .page-subtitle (page-head.css) */
 .apps-detail-warning { margin: 8px 0 0; color: color-mix(in srgb, var(--warning) 75%, var(--fg)); }
 .apps-detail-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .apps-detail-title h1 + .apps-detail-actions { margin-top: 10px; }

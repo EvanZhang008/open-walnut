@@ -20,9 +20,11 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, subtitle, action, className }: PageHeaderProps) {
   return (
-    <div className={className ? `page-header ${className}` : 'page-header'} data-fit-header="">
+    // No header-fit attributes: the key never folds, so the title wraps beside it instead of
+    // cutting (standard "Text that does not fit": titles wrap, only metadata cuts).
+    <div className={className ? `page-header ${className}` : 'page-header'}>
       <div className="page-header-text">
-        <h1 className="page-title" data-fit-title="">{title}</h1>
+        <h1 className="page-title">{title}</h1>
         {subtitle && <p className="page-subtitle">{subtitle}</p>}
       </div>
       {action}
@@ -42,14 +44,15 @@ interface NewKeyProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'chi
 /**
  * The key that makes a new thing: the main key (`.btn.btn-primary`), a drawn plus and its words
  * in sentence case. A key that opens a form shows `aria-pressed` while the form is open (the
- * family's on look, grey), so a second press closes it.
+ * family's on look), so a second press closes it; a key whose form takes its place leaves the
+ * head while the form is open (Agents, Commands).
  */
 export function NewKey({ label, icon, labelClassName, className, type, ...rest }: NewKeyProps) {
   const on = rest['aria-pressed'] === true || rest['aria-pressed'] === 'true';
   return (
     <button
       type={type ?? 'button'}
-      className={`btn${on ? '' : ' btn-primary'}${className ? ` ${className}` : ''}`}
+      className={`btn${on ? '' : ' btn-primary'} new-key${className ? ` ${className}` : ''}`}
       aria-label={labelClassName ? label : undefined}
       {...rest}
     >

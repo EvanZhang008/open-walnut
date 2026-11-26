@@ -181,13 +181,9 @@
   border-radius: var(--radius-xs);
 }
 
-.settings-pane-desc.settings-card-desc,
+/* A pane's line under its title is the page subtitle (page-head.css); here only its measure. */
 .settings-pane-desc {
-  margin: 2px 0 0;
   max-width: 60ch;
-  font-size: var(--font-size-md);
-  line-height: 18px;
-  color: var(--fg-secondary);
 }
 
 .settings-pane-header-trailing {

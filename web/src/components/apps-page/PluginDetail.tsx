@@ -330,7 +330,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
           )}
           <h1 className="page-title">{row.name}</h1>
           {/* A tagline only when the description says more than its first sentence (About has it all). */}
-          {tagline && <p className="apps-detail-line">{tagline}</p>}
+          {tagline && <p className="page-subtitle apps-detail-line">{tagline}</p>}
           <div className="apps-detail-actions">
             {row.installed && (row.toggleable ? (
               <label className="apps-onoff">
@@ -372,7 +372,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back, fo
           {warning && <p className="apps-detail-warning" title={failed && reason ? plainText(reason) : undefined}>{warning}</p>}
           {store.toggleError[row.id] && <p className="apps-detail-warning" role="alert">{couldntSave(store.toggleError[row.id])}</p>}
           {!row.installed && row.dependencyPlan?.length ? (
-            <p className="apps-detail-line"><PluginAlsoNeeds rowId={row.id} plan={row.dependencyPlan} blockedBy={row.blockedBy} nameFor={store.nameOf} /></p>
+            <p className="page-subtitle apps-detail-line"><PluginAlsoNeeds rowId={row.id} plan={row.dependencyPlan} blockedBy={row.blockedBy} nameFor={store.nameOf} /></p>
           ) : null}
         </div>
       </header>

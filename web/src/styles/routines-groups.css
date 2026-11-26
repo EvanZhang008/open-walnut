@@ -430,7 +430,8 @@
     right: 0;
     margin: 0;
   }
-  .app-shell-navigation .routines-page-head > .btn {
+  /* Level with the count: none of the page head's pull toward a title (page-head.css). */
+  .app-shell-navigation .routines-view > .routines-page-head > .btn.new-key {
     margin-block: 0;
   }
   .app-shell-navigation .routines-view:has(> .routines-page-head > .btn) > .routines-toolbar {

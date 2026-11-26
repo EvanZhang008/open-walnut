@@ -286,7 +286,7 @@ export function BuiltinDetail({ entryKey, onBack }: { entryKey: string; onBack: 
         <EntryIcon entry={entry} size={72} />
         <div className="apps-detail-title">
           <h1 className="page-title">{entry.title}</h1>
-          <p className="apps-detail-line">{entry.line}</p>
+          <p className="page-subtitle apps-detail-line">{entry.line}</p>
           <div className="apps-detail-actions">
             <SettingsButton variant="primary" onClick={() => navigate(entry.openPath)} data-testid={`apps-builtin-open-${entry.id}`}>Open</SettingsButton>
           </div>

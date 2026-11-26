@@ -126,7 +126,7 @@
 /* A folder column dragged narrow keeps the button whole: the label goes, the icon stays (the name is
    in `aria-label` and `title`). Queried on the head, not the pane, so the pane gets no containment.
    The default column under 1360px (204px, a 183px head) keeps the label: the key is the family's
-   tight key (.btn-tight, 7 px sides) and the icon keys narrow, so the head needs 180px. A container query cannot restyle
+   tight key (.btn-tight, 6 px sides) and the icon keys narrow, so the head needs 180px. A container query cannot restyle
    the container itself, so the head's own gap stays and the buttons give the room. */
 .mail-accounts-pane > .mail-pane-head { container-type: inline-size; }
 @container (max-width: 205px) {

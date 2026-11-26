@@ -80,7 +80,7 @@ function PaneHeader({ title, description, actions }: { title: string; descriptio
         <h2 className="page-title settings-pane-title" id={`${paneId}-title`} tabIndex={-1}>
           {meta?.title ?? title}
         </h2>
-        {hasContent(desc) && <p className="settings-pane-desc settings-card-desc">{desc}</p>}
+        {hasContent(desc) && <p className="page-subtitle settings-pane-desc">{desc}</p>}
       </div>
       <div className="settings-pane-header-trailing">
         <SettingsSavedIndicator placement="header" />
