@@ -38,11 +38,11 @@ const NOT_YET = 'Not fitted yet'
 /** The answer a tap on the report's ask sends: the ask quoted (with its question mark), then the label. */
 const TAPPED = askAnswerText({ summary: ASK, kind: 'single', options: [{ id: 'fitted', label: FITTED }, { id: 'not_yet', label: NOT_YET }] }, { picked: ['fitted'] })
 
-/** A thread holding the task's decision letter for the same matter, in other words, waiting on him. */
+/** A thread holding the task's decision letter for the same matter: its question is the report's ask with less detail, waiting on him. */
 function letterThread(f: ThreadsFile, sec = 0): { f: ThreadsFile; id: string } {
   const one = chat(f, 'keep an eye on the red bike repair', sec)
   const id = one.thread.id
-  let next = updateThread(one.file, id, { title: 'Red bike repair: is the cable fitted', reply: 'Waiting to hear whether the cable is on.', state: 'needs', user_kind: 'user_fact', user_kind_why: 'only he knows what the shop did' } as never, 'human', at(sec + 5)).file
+  let next = updateThread(one.file, id, { title: 'Red bike repair: is the cable fitted', ask: 'Has the shop fitted the brake cable yet?', reply: 'Waiting to hear whether the cable is on.', state: 'needs', user_kind: 'user_fact', user_kind_why: 'only he knows what the shop did' } as never, 'human', at(sec + 5)).file
   next = { ...next, threads: next.threads.map((t) => (t.id === id ? { ...t, letter: { id: 'lt-bike-cable', task: TASK, options: [{ id: 'fitted', label: FITTED }, { id: 'not_yet', label: NOT_YET }] } } : t)) }
   return { f: next, id }
 }
@@ -94,7 +94,7 @@ describe('a card answer is never a question of his', () => {
 })
 
 describe('cardAnswerThread: the answer finds the thread that asked', () => {
-  it('his pick is one of the options of the letter a thread holds: that thread, though the ask is in other words', () => {
+  it('the thread asks the quoted question with less detail and his pick is its letter\'s option: that thread', () => {
     const { f, id } = letterThread(emptyThreads(TASK))
     expect(cardAnswerThread(f.threads, TAPPED)?.id).toBe(id)
     // The label first, his own words after it.
@@ -109,14 +109,46 @@ describe('cardAnswerThread: the answer finds the thread that asked', () => {
     expect(cardAnswerThread(f.threads, typed)?.id).toBe(one.thread.id)
   })
 
-  it('a bare yes fits only a thread that asks the quoted question', () => {
+  it('a bare yes fits only a thread that asks the quoted question in the same words', () => {
     const one = chat(emptyThreads(TASK), 'prune the plum', 0)
     const options = [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }]
     const f = updateThread(one.file, one.thread.id, { state: 'needs', reply: 'Prune the old plum this week?', options, user_kind: 'user_own', user_kind_why: 'his tree' } as never, 'human', at(5)).file
-    const other = askAnswerText({ summary: 'Order two more bags of mulch for the herb bed?', kind: 'yes_no' }, { picked: ['yes'] })
-    expect(cardAnswerThread(f.threads, other)).toBeNull()
-    const reworded = askAnswerText({ summary: 'Shall I prune the old plum this week?', kind: 'yes_no' }, { picked: ['yes'] })
-    expect(cardAnswerThread(f.threads, reworded)?.id).toBe(one.thread.id)
+    const yes = (summary: string) => askAnswerText({ summary, kind: 'yes_no' }, { picked: ['yes'] })
+    expect(cardAnswerThread(f.threads, yes('Order two more bags of mulch for the herb bed?'))).toBeNull()
+    // A question with detail added, or about one more thing, is not proof enough for a bare yes.
+    expect(cardAnswerThread(f.threads, yes('Prune the old plum and the pear this week?'))).toBeNull()
+    expect(cardAnswerThread(f.threads, yes('Prune the old plum by the gate this week, before the frost?'))).toBeNull()
+    // The same content words, in another order or with filler, are the same question.
+    expect(cardAnswerThread(f.threads, yes('Prune the old plum this week?'))?.id).toBe(one.thread.id)
+    expect(cardAnswerThread(f.threads, yes('Shall I go ahead and prune that old plum this week?'))?.id).toBe(one.thread.id)
+  })
+
+  // Review 2026-11-26: a pick alone answered the letter of ANOTHER decision of the same task.
+  it('an option alone is never proof: the same label on another decision finds no thread', () => {
+    const letterOf = (title: string, labels: string[]) => {
+      const one = chat(emptyThreads(TASK), 'look after the garden', 0)
+      const f = updateThread(one.file, one.thread.id, { title, reply: title, state: 'needs', user_kind: 'user_own', user_kind_why: 'his garden' } as never, 'human', at(5)).file
+      return f.threads.map((t) => ({ ...t, letter: { id: 'lt-garden', task: TASK, options: labels.map((label, i) => ({ id: `o${i}`, label })) } }))
+    }
+    const pick = (summary: string, labels: string[], i: number, words?: string) => askAnswerText({ summary, kind: 'single', options: labels.map((label, n) => ({ id: `o${n}`, label })) }, { picked: [`o${i}`], ...(words ? { words } : {}) })
+    const cases: Array<[string, OrgThread[], string]> = [
+      ['a generic label', letterOf('Publish the garden blog post draft to the website', ['Approve', 'Reject']), pick('Upgrade the potting shed lock to the new model this weekend?', ['Approve', 'Reject'], 0)],
+      ['a later', letterOf('Send the seed order reminder to the nursery', ['Now', 'Later']), pick('Renew the allotment lease for another year?', ['Now', 'Later'], 1)],
+      ['a yes with words of its own', letterOf('Plant out the second row of beans', ['Yes, plant them', 'Wait']), pick('Move the compost heap behind the shed now?', ['Yes, plant them', 'Wait'], 0)],
+      ['a yes on two targets', letterOf('Water the new hedge on the north side?', ['Yes', 'No']), askAnswerText({ summary: 'Water the tomato beds on the south side?', kind: 'yes_no' }, { picked: ['yes'] })],
+      ['a yes sharing one word', letterOf('Cut back the old ivy on the wall?', ['Yes', 'No']), askAnswerText({ summary: 'Cut the grass by the gate?', kind: 'yes_no' }, { picked: ['yes'] })],
+      ['two picks, one of them its option', letterOf('Which bed gets the compost', ['North bed', 'South bed']), askAnswerText({ summary: 'Which beds get mulch?', kind: 'multi', options: [{ id: 'a', label: 'North bed' }, { id: 'b', label: 'Herb bed' }] }, { picked: ['a', 'b'] })],
+    ]
+    for (const [name, threads, text] of cases) expect(cardAnswerThread(threads, text), name).toBeNull()
+  })
+
+  it('the thread that asks the quoted question comes before one that only shares his pick', () => {
+    const { f, id: letter } = letterThread(emptyThreads(TASK))
+    // Another thread holds the report's own ask, word for word, and is not in needs.
+    const two = chat(f, 'and the blue bike too', 7200)
+    const threads = two.file.threads.map((t) => (t.id === two.thread.id ? { ...t, state: 'working' as const, reportAsk: { id: 'ask-abc123', at: at(7300), ask: ASK } } : t))
+    expect(cardAnswerThread(threads, TAPPED)?.id).toBe(two.thread.id)
+    expect(two.thread.id).not.toBe(letter)
   })
 
   it('no thread asks it, a closed or moved one, or two that fit: no thread', () => {

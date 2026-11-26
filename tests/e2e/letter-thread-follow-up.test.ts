@@ -193,12 +193,12 @@ describe('his words on a thread holding a letter answer the letter', () => {
     await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('Start with the pears') && !m.includes('[Letter reply]'))).toBe(true), { timeout: 10_000, interval: 200 })
   })
 
-  it('his answer from a card names no thread: the console\'s send answers the letter whose option he picked', async () => {
-    const letter = await decide('Send the orchard newsletter?', true, ['Send it today', 'Hold it a week'])
+  it('his answer from a card names no thread: the console\'s send answers the letter that asks the same, whose option he picked', async () => {
+    const letter = await decide('Send the orchard newsletter to the members?', true, ['Send it today', 'Hold it a week'])
     const threads = (await readThreads(vp.taskId)).threads.length
     const before = queued.get(vp.sid)?.length ?? 0
-    // The task's own ask in other words, quoted with its question mark, then the label he tapped.
-    const r = await rpc('session:send', { sessionId: vp.sid, message: 'Answer to "The newsletter is ready to go out, shall I?": Send it today', userUuid: randomUUID() })
+    // The task's own ask with more detail, quoted with its question mark, then the label he tapped.
+    const r = await rpc('session:send', { sessionId: vp.sid, message: 'Answer to "The photos are in: shall I send the orchard newsletter to all the members now?": Send it today', userUuid: randomUUID() })
     expect(r.ok, r.error).toBe(true)
     expect(r.result?.answeredLetter).toMatchObject({ id: letter, threadId: letterThreadId(letter) })
     await expectAnsweredByWords(letter, 'Send it today', before)
@@ -208,9 +208,9 @@ describe('his words on a thread holding a letter answer the letter', () => {
   })
 
   it('his answer from a card on the phone does the same, and a card answer no thread asks stays a chat message', async () => {
-    const letter = await decide('Order the winter mulch?', true, ['Order ten bags', 'Skip this year'])
+    const letter = await decide('Order the winter mulch for the vegetable beds?', true, ['Order ten bags', 'Skip this year'])
     const before = queued.get(vp.sid)?.length ?? 0
-    const r = await api<{ answeredLetter?: { id: string } }>('POST', `/sessions/${vp.sid}/messages`, { text: 'Answer to "Mulch for the winter beds?": Order ten bags', messageId: 'qm-card-answer-1' })
+    const r = await api<{ answeredLetter?: { id: string } }>('POST', `/sessions/${vp.sid}/messages`, { text: 'Answer to "Shall I order the winter mulch for the vegetable beds before the first frost?": Order ten bags', messageId: 'qm-card-answer-1' })
     expect(r.status).toBe(202)
     expect(r.json.answeredLetter?.id).toBe(letter)
     await expectAnsweredByWords(letter, 'Order ten bags', before)
@@ -219,6 +219,13 @@ describe('his words on a thread holding a letter answer the letter', () => {
     expect(plain.ok, plain.error).toBe(true)
     expect(plain.result?.answeredLetter).toBeUndefined()
     await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('the east gate') && !m.includes('[Letter reply]'))).toBe(true), { timeout: 10_000, interval: 200 })
+    // The same label on another decision is no proof (review 2026-11-26): the letter of this decision stays open.
+    const other = await decide('Buy the new wheelbarrow for the orchard crew?', true, ['Order ten bags', 'Skip this year'])
+    const wrong = await rpc('session:send', { sessionId: vp.sid, message: 'Answer to "Replace the broken hose reel by the pond this month?": Order ten bags', userUuid: randomUUID() })
+    expect(wrong.ok, wrong.error).toBe(true)
+    expect(wrong.result?.answeredLetter).toBeUndefined()
+    expect(await humanTurns(other)).toHaveLength(0)
+    expect((await getLetter(other))?.answered).toBeFalsy()
   })
 
   it('an agent answering for him with his "K" picks the recommended option only once his "K" is on that card', async () => {
@@ -336,10 +343,10 @@ describe('with the one-card setting off (threads_one_card), his words on it stay
   })
 
   it('his answer from a card is filed under the letter\'s thread, never a new one', async () => {
-    const letter = await decide('Repair the greenhouse door?', true, ['Repair it now', 'Leave it till spring'])
+    const letter = await decide('Repair the sticking greenhouse door now?', true, ['Repair it now', 'Leave it till spring'])
     const threads = (await readThreads(vp.taskId)).threads.length
     const before = queued.get(vp.sid)?.length ?? 0
-    const r = await rpc('session:send', { sessionId: vp.sid, message: 'Answer to "The greenhouse door sticks, fix it?": Repair it now', userUuid: randomUUID() })
+    const r = await rpc('session:send', { sessionId: vp.sid, message: 'Answer to "The greenhouse door keeps sticking: shall I repair it now, before the frost?": Repair it now', userUuid: randomUUID() })
     expect(r.ok, r.error).toBe(true)
     expect(r.result?.answeredLetter).toBeUndefined()
     await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('Repair it now'))).toBe(true), { timeout: 10_000, interval: 200 })
