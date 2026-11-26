@@ -49,8 +49,17 @@ enum VerticalPageHarness {
         }
     }
 
-    static func host<V: View>(_ view: V, width: CGFloat, settle seconds: TimeInterval = 1.5) -> Hosted {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: height))
+    /// The window joins the test app's own scene, as a page's window does on a phone. A window with
+    /// no scene never becomes key, and on CI's iOS 26.6 runtime SwiftUI drew no state change into it:
+    /// the note page read its saved copy within 0.2 s yet showed its spinner 10 s later ("key false,
+    /// scene false" in run 45758431154), while the fleet's 26.2 drew it. Since bd9d2d8d44 hosted the
+    /// pages in a bare `UIWindow(frame:)`.
+    static func host<V: View>(_ view: V, width: CGFloat, settle seconds: TimeInterval = 1.5,
+                              file: StaticString = #filePath, line: UInt = #line) -> Hosted {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        XCTAssertNotNil(scene, "the test app has no window scene to put the page in", file: file, line: line)
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow()
+        window.frame = CGRect(x: 0, y: 0, width: width, height: height)
         let host = UIHostingController(rootView: view)
         window.rootViewController = host
         window.makeKeyAndVisible()
