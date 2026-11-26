@@ -542,9 +542,13 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   thread still waiting on him comes first; two that fit, or none, is no answer and the message is
   filed as before. The frame escapes nothing, so an ask that holds `": ` itself (a quoted name, then
   a colon) can end at more than one place: the resolver tries every reading
-  (`cardAnswerReadings`, at most eight), takes the one whose ask is the thread's own words, else the
-  longest ask that still fits, and his words are what follows that one (review 2026-11-26: the ask
-  was cut at its first `": `, the rest of it read as his words, and the answer found no thread).
+  (`cardAnswerReadings`, at most eight) and takes the one whose ask is the thread's own words. Failing
+  that: for the same content words the longest ask that still fits (a shorter one is a piece of it),
+  and for his pick the shortest (his pick leads his words, so a longer one has taken words of his
+  that quote a label). His words are what follows that reading (review 2026-11-26: the ask was cut
+  at its first `": `, the rest of it read as his words, and the answer found no thread). When
+  several threads fit alike, the one alone in asking it in the quoted words wins, then the one alone
+  with the longest quoted ask.
   `thread-capture.ts` files it there, never a new thread, and the send routes answer a live
   decision letter that thread holds with his words, once (`letter-follow-up.ts`, with
   `threads_one_card`). Guard: `tests/core/org/card-answer-thread.test.ts` lists every file that
@@ -572,7 +576,8 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   kept thread's title then names every question it holds, in the order he asked, each title cut to
   its share of the limit (review 2026-11-26: a card holding two unrelated questions read as the
   earliest alone); it stays Walnut's stand-in unless the node wrote every one of them, so the
-  status question still asks the node for one title that covers the card. On
+  status question still asks the node for one title that covers the card, and a title held for the
+  kept question alone (`titleHeld`) is dropped with the old title. On
   that thread the reply, marked `judged`, replaces the interim answer under each question it answers
   (an answer he wrote after stays his; the reply goes under his later words), the thread reads
   answered (his Done), and the summary written while it was out of his sight is cleared unless the

@@ -257,6 +257,18 @@ describe('the write', () => {
     expect(merge(same, [w.thread, b.thread.id])).toMatchObject({ title: 'Weekend trip', titled: true })
   })
 
+  it('a title held for the kept question alone goes with its old title', () => {
+    const w = working()
+    const b = ask(w.f, Q_BIKE, 5)
+    // The node's title for the first question was held as a repeat of another thread: it names that question only.
+    const held = { ...b.file, threads: b.file.threads.map((t) => (t.id === w.thread ? { ...t, titleHeld: { title: 'Saturday train', like: b.thread.id, at: at(6) } } : t)) }
+    expect(held.threads.find((t) => t.id === w.thread)?.titleHeld).toBeDefined()
+    const t = markAnsweredGroup(held, [w.thread, b.thread.id], reply(REAL, 20), at(21), at(19)).file.threads[0]
+    expect(t.title).toBe(`${Q_TRAIN} \u00b7 ${Q_BIKE}`)
+    expect(t.titleHeld).toBeUndefined()
+    expect(t.titled).toBeUndefined()
+  })
+
   it('long titles share the room: every question is still named, within the title limit', () => {
     const long = (word: string) => `${word} ${'and the long way round the orchard wall '.repeat(4)}`.trim()
     const a = ask(emptyThreads(NODE), `${long('Train')}?`, 0)

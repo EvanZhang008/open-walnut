@@ -265,7 +265,8 @@ function titledForAll(file: ThreadsFile, into: AnswerCandidate, merged: readonly
     ...file,
     threads: file.threads.map((t) => {
       if (t.id !== into.thread.id) return t;
-      const { titled: _titled, ...rest } = t;
+      // A title held for the kept question alone (titleHeld) names only that one: it goes with the old title.
+      const { titled: _titled, titleHeld: _held, ...rest } = t;
       return { ...rest, title, ...(nodeWroteAll ? { titled: true } : {}) };
     }),
   };

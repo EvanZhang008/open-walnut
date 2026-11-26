@@ -98,6 +98,43 @@ describe('an ask that holds the frame\'s own marks still finds its thread, and h
     }
   }
 
+  /**
+   * The card's ask is the thread's question in other words (the 'pick' kind): his pick among the
+   * thread's own options proves it, and his words after the pick stay whole, a quoted label included.
+   */
+  describe('the card asks it in other words, and his pick proves it', () => {
+    const THREAD_ASK = 'Which tree should the crew plant by the north gate first?'
+    const CARD_ASK = 'North gate "bed two": which tree should the crew plant first?'
+    const picks: Array<[string, { picked: string[]; words?: string }]> = [
+      ['a tapped option', { picked: ['oak'] }],
+      ['his words quote the other label, then a colon and his pick again', { picked: ['oak'], words: 'the crew said "Plant the larch": Plant the oak' }],
+      ['his words quote the other label and go on', { picked: ['larch'], words: 'not "Plant the oak": Plant the larch, until Monday' }],
+      ['his words hold a quote and a colon', { picked: ['larch'], words: 'the note says "north": check it' }],
+    ]
+    for (const [name, answer] of picks) {
+      it(name, () => {
+        const { threads, id } = asking(THREAD_ASK)
+        const text = askAnswerText({ summary: CARD_ASK, kind: 'single', options }, answer)
+        const fit = cardAnswerFit(threads, text)
+        expect(fit?.thread.id, text).toBe(id)
+        expect(fit?.card).toEqual({ ask: CARD_ASK, words: text.slice(`Answer to "${CARD_ASK}": `.length) })
+      })
+    }
+  })
+
+  it('one thread asks the piece of another\'s ask before its inner quote and colon: the whole quoted ask wins', () => {
+    const whole = 'Move the saplings to the bed marked "two": which tree goes in first?'
+    const piece = 'Move the saplings to the bed marked "two'
+    const a = asking(piece)
+    const b = chat({ ...emptyThreads(NODE), threads: a.threads }, 'and the far bed', 800)
+    const f = updateThread(b.file, b.thread.id, { title: 'Far bed', ask: whole, state: 'needs', user_kind: 'user_own', user_kind_why: 'he asked to pick the trees of his orchard himself', options: options.map((o) => ({ ...o })) }, 'agent', at(805)).file
+    const fit = cardAnswerFit(f.threads, askAnswerText({ summary: whole, kind: 'single', options }, { picked: ['oak'] }))
+    expect(fit?.thread.id).toBe(b.thread.id)
+    expect(fit?.card).toEqual({ ask: whole, words: OAK })
+    // The piece itself, answered in words that are not the rest of the other ask, still goes to its own thread.
+    expect(cardAnswerFit(f.threads, askAnswerText({ summary: piece, kind: 'single', options }, { picked: ['larch'] }))?.thread.id).toBe(a.id)
+  })
+
   it('every reading of a message is listed, the shortest ask first, and no more than eight', () => {
     expect(cardAnswerReadings('Answer to "a": b": c')).toEqual([{ ask: 'a', words: 'b": c' }, { ask: 'a": b', words: 'c' }])
     expect(cardAnswerReadings(TAPPED)).toEqual([{ ask: ASK, words: FITTED }])

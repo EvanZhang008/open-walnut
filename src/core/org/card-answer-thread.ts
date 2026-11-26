@@ -83,34 +83,51 @@ function fits(t: AskingThread, ask: string, words: string): 'ask' | 'pick' | nul
 }
 
 /**
- * The reading of the message that thread `t` asks in this `kind`, or null. An ask that holds `": `
- * itself reads several ways (cardAnswerReadings): the one whose ask is the thread's own words wins,
- * else the longest ask that still fits (the writer quotes the ask whole, so a shorter one that fits
- * too is a piece of it, with the rest of the ask read as his words).
+ * The reading of the message that thread `t` asks in this `kind`, or null; `own` when its ask is the
+ * thread's own words. An ask that holds `": ` itself reads several ways (cardAnswerReadings): the
+ * reading whose ask is the thread's own words wins. Failing that, by kind:
+ *  - 'ask': the longest ask that still fits. The writer quotes the ask whole, so a shorter one that
+ *    fits too is a piece of it, with the rest of the ask read as his words.
+ *  - 'pick': the shortest. His pick leads his words (askAnswerText), so a piece of the ask never fits
+ *    here (its words open with the rest of the ask, not a label), and a longer one that fits has taken
+ *    words of his that quote a label (review 2026-11-26: `Ops said "<label>": <label>` lost his words).
  */
-function readingFor(t: AskingThread, readings: readonly CardAnswer[], kind: 'ask' | 'pick'): CardAnswer | null {
+function readingFor(t: AskingThread, readings: readonly CardAnswer[], kind: 'ask' | 'pick'): { card: CardAnswer; own: boolean } | null {
   const fitting = readings.filter((r) => fits(t, r.ask, r.words) === kind);
   if (!fitting.length) return null;
-  const own = new Set(asksOf(t).map(flat));
-  return fitting.find((r) => own.has(flat(r.ask))) ?? fitting[fitting.length - 1];
+  const mine = new Set(asksOf(t).map(flat));
+  const own = fitting.find((r) => mine.has(flat(r.ask)));
+  return own ? { card: own, own: true } : { card: kind === 'ask' ? fitting[fitting.length - 1] : fitting[0], own: false };
 }
 
 /**
  * The thread a card answer goes to with the reading of the message it asks (the ask he answered and
- * his words), or null (not a card answer, no thread asks it, or two do). Pure.
+ * his words), or null (not a card answer, no thread asks it, or two do). Among several that fit
+ * alike, the one alone in asking it in the quoted words wins, and among those the one alone with the
+ * longest quoted ask (one thread's ask can be the piece of another's before its inner `": `). Pure.
  */
 export function cardAnswerFit<T extends AskingThread>(threads: readonly T[], text: string): { thread: T; card: CardAnswer } | null {
   const readings = cardAnswerReadings(text);
   if (!readings.length) return null;
   const open = threads.filter((t) => !t.closed && !t.movedTo);
   for (const kind of ['ask', 'pick'] as const) {
-    const hits = open.flatMap((thread) => { const card = readingFor(thread, readings, kind); return card ? [{ thread, card }] : []; });
+    const hits = open.flatMap((thread) => { const r = readingFor(thread, readings, kind); return r ? [{ thread, ...r }] : []; });
     if (!hits.length) continue;
     const waiting = hits.filter((h) => h.thread.state === 'needs' || liveLetter(h.thread));
     const pool = waiting.length ? waiting : hits;
-    return pool.length === 1 ? pool[0] : null;
+    const one = pool.length === 1 ? pool[0] : onlyOwn(pool);
+    return one ? { thread: one.thread, card: one.card } : null;
   }
   return null;
+}
+
+/** Among threads that fit alike: the one alone in asking it in the quoted words, else the one of those alone with the longest quoted ask. */
+function onlyOwn<H extends { card: CardAnswer; own: boolean }>(pool: readonly H[]): H | null {
+  const own = pool.filter((h) => h.own);
+  if (own.length <= 1) return own[0] ?? null;
+  const longest = Math.max(...own.map((h) => h.card.ask.length));
+  const top = own.filter((h) => h.card.ask.length === longest);
+  return top.length === 1 ? top[0] : null;
 }
 
 /** The thread a card answer goes to, or null (cardAnswerFit). Pure. */
