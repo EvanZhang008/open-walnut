@@ -206,3 +206,55 @@ export function countIos(root = IOS_ROOT): IosCounts {
 export function totals(c: IosCounts): Record<IosKind, number> {
   return Object.fromEntries(IOS_KINDS.map((k) => [k, Object.values(c[k]).reduce((a, b) => a + b, 0)])) as Record<IosKind, number>
 }
+
+/** The app's Swift files (`IOS_DIRS`), relative to ios-native, sorted. */
+export function appSwiftFiles(root = IOS_ROOT): string[] {
+  return IOS_DIRS.flatMap((d) => (fs.existsSync(path.join(root, d)) ? swiftFiles(path.join(root, d)) : []))
+    .map((f) => path.relative(root, f).split(path.sep).join('/'))
+    .sort()
+}
+
+/** A line's code with every string literal emptied, so a `(` or `{` inside words is not counted. */
+export function bareCode(line: string): string {
+  return line.replace(/"(?:[^"\\]|\\.)*"/g, '""')
+}
+
+/**
+ * The lines of the declaration or call that starts on line `start` of `lines` (code lines, see
+ * `codeLines`): up to where its braces and parentheses close, through a trailing labelled closure
+ * (`} label: {`) and the modifier chain that follows it (lines starting with `.`).
+ */
+export function blockAt(lines: string[], start: number): string[] {
+  let depth = 0
+  let opened = false
+  let i = start
+  for (; i < lines.length; i++) {
+    const code = bareCode(lines[i])
+    let closedAt = -1
+    for (let c = 0; c < code.length; c++) {
+      const ch = code[c]
+      if (ch === '{' || ch === '(') { depth++; opened = true }
+      else if (ch === '}' || ch === ')') {
+        depth--
+        if (opened && depth === 0) closedAt = c
+      }
+    }
+    if (opened && depth <= 0) {
+      // A trailing labelled closure opens on the same line (`} label: {`): depth is back above 0.
+      if (closedAt >= 0 && /^\s*\w+:\s*\{/.test(code.slice(closedAt + 1))) continue
+      break
+    }
+  }
+  let end = Math.min(i, lines.length - 1)
+  // The modifier chain under it.
+  while (end + 1 < lines.length && /^\s*\./.test(lines[end + 1])) {
+    end++
+    let d = 0
+    for (const ch of bareCode(lines[end])) { if (ch === '(' || ch === '{') d++; else if (ch === ')' || ch === '}') d-- }
+    while (d > 0 && end + 1 < lines.length) {
+      end++
+      for (const ch of bareCode(lines[end])) { if (ch === '(' || ch === '{') d++; else if (ch === ')' || ch === '}') d-- }
+    }
+  }
+  return lines.slice(start, end + 1)
+}

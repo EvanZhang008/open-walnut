@@ -219,7 +219,8 @@ final class AskQuestionCardUITests: XCTestCase {
         // is the whole point: a description-less option list would hide what each
         // choice actually means.
         let expected = [
-            "On-disk (Recommended), Survives restarts and costs one extra fsync per batch.",
+            // The agent's own "(Recommended)" shows as the row's mark at its right.
+            "On-disk, Survives restarts and costs one extra fsync per batch., Recommended",
             "In-memory, Fastest, but every restart rebuilds the whole index.",
             "Serve stale, refresh behind, Answers instantly and recomputes in the background.",
             "Block until fresh, Always correct, but a cold entry pays full latency.",

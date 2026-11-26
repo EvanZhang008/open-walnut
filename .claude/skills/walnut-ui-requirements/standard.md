@@ -631,9 +631,11 @@ or button shape.
 | Action | `.btn` | `.walnut(.secondary)`: `tertiarySystemFill`, primary words |
 | Tool | `.ask-card-tools .btn` | `.walnut(.tool)`: no fill, `Theme.secondaryOnCard`; a menu's label is `WalnutMenuLabel` ("Snooze ▾") |
 | Destructive | `.btn-danger` | `.walnut(.destructive)`: the grey fill, `Theme.dangerText` words |
-| Option | `AskOptions` row | `.walnut(.option(recommended:))` with `WalnutOptionLabel`: full width, hairline, a 12 pt corner (a long key: `WalnutButtonStyle.optionShape`, never a capsule), the recommended one solid `Theme.accent` with "Recommended" at its right |
+| Option | `AskOptions` row | `.walnut(.option(recommended:))` with `WalnutOptionLabel`: full width, hairline, a 12 pt corner (a long key: `WalnutButtonStyle.optionShape`, never a capsule), the recommended one solid `Theme.accent` with "Recommended" at its right. Every choice of a question is one: a permission card's (never half-width keys side by side), an ask card's, a thread's, a letter's decision. A plain permission list keeps its strong yes (its first Allow solid); a list that names rules (a choice with details, a Deny that takes a note) stays neutral, as on the web (`PendingPermission.strongChoiceID`); a refusal's words are `Theme.dangerText`. A label's own trailing "(Recommended)" is dropped from what shows and becomes the mark at the right (`WalnutOptionLabel.shown`); the answer sent keeps the label as written, and a pick-then-submit ask fills no row before the pick |
+| Picker key | composer pills | `.walnutPickerKey(active:wraps:)` on every small picker key of a tool row (the composer's Mode and Model, the new-session row's folder, project, sync, mode and model keys, quick folders): a capsule beside the round +, mic and send, the 12 pt corner only once its words wrap; a picked value is `tintSoft` with an accent hairline. A row of them wraps onto a second line, never cuts a key at the screen's edge |
 | Chip, filter | none | `.walnutChip(selected:)`: round, 32 pt drawn, 44 pt touch; selected is `Theme.chipSelected` (a step stronger than `tintSoft`) with an accent hairline and primary words. A chip row that can be wider than the screen scrolls sideways, and a filter that is on says so in the list |
 | Badge | `.badge` | `WalnutBadge` (round, `Theme.TextSize.xs` semibold, one tone); a state is `WalnutStatusLabel` (dot and word) |
+| Diff count | `+N −M` | `LineCounts`, written by `DiffCount` alone: only the sides above zero ("+7", "−3", "+12 −3"), nothing when no line changed; the zero side never takes a state colour |
 | Card | `AskCardFrame`, `NoticeCard` | `.walnutCard()` (grouped fill, `Theme.Radius.card` 16, hairline); `frosted: true` for a card that asks; a notice is the shared notice card (`Theme.Radius.notice` 14, as on the web and the Mac) |
 | Reply box | `AnswerBox`, `wn-input` | the one message box (`MessageBox` / `ReplyBox`): its own box corner, round keys |
 | Plain field | global `input` rules | `.textFieldStyle(.walnut)` or `.walnutFieldBox()`; inside a `Form` the system row |
@@ -653,7 +655,10 @@ picks their shape (a capsule on iOS 26).
 
 `tests/web/ios-ui-standard-ratchet.test.ts` counts, per Swift file, each view that still draws its own
 (literalColour, literalFont, radiusLiteral, systemButtonStyle, ownButtonStyle, ownReplyBox,
-ownEmptyState, tintFill, wideCapsule; `tests/web/ios-ui-standard-baseline.json`), and the counts only go down. A line that must
+ownEmptyState, tintFill, wideCapsule; `tests/web/ios-ui-standard-baseline.json`), and the counts only go down.
+It also holds three classes whole (2026-11-26): no picker key on the composer and new-session rows draws
+its own shape, every button that answers a permission or question choice is an option row with
+`WalnutOptionLabel`, and no view writes a "+N −M" count outside `DiffCount`. A line that must
 keep its shape (a sheet's grabber, a camera shutter) says why with `// ui-standard-ok: <why>`.
 
 ## What exists today that breaks this (the ratchet counts them)

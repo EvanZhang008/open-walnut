@@ -12,8 +12,9 @@ import SwiftUI
 /// - `secondary`: any other action: quiet grey fill, primary words.
 /// - `tool`: Snooze, pin, a pager arrow, a "Group ▾" menu: no fill, quiet words, a fill when pressed.
 /// - `destructive`: Delete, Reject, Deny: the grey fill with red words (`Theme.dangerText`).
-/// - `option`: a choice of a question, a full-width row with a hairline; the recommended one is
-///   filled in the accent like `primary`.
+/// - `option`: a choice of a question (a permission's, an ask's, a thread's, a letter's), a
+///   full-width row with a hairline, its words a `WalnutOptionLabel`; the recommended one (a
+///   plain permission list's strong yes too) is filled in the accent like `primary`.
 ///
 /// Shape (standard.md "Shapes"): a small key is round (a capsule); a long one, an option row or a
 /// full-width key, is a rounded rectangle at the field corner (`Theme.Radius.md`), as every long
@@ -47,7 +48,8 @@ struct WalnutButtonStyle: ButtonStyle {
     }
 
     /// A long key's shape: an option row, a full-width key, and the ring drawn over one.
-    static var optionShape: RoundedRectangle { Theme.Radius.shape(Theme.Radius.md) }
+    /// Nonisolated, so a `Shape`'s path (`WalnutPickerKeyShape`) can draw it.
+    nonisolated static var optionShape: RoundedRectangle { Theme.Radius.shape(Theme.Radius.md) }
 
     func makeBody(configuration: Configuration) -> some View {
         let shape = Self.shape(role, fullWidth: fullWidth)
@@ -57,6 +59,8 @@ struct WalnutButtonStyle: ButtonStyle {
         // The touch reaches 44 pt whatever is drawn.
         let reach = max(0, (Theme.Control.target - height) / 2)
         configuration.label
+            // An option label's second words read on the row's fill (`WalnutOptionLabel`).
+            .environment(\.walnutOnSolid, isSolid)
             .font(isOption ? Theme.TextSize.lg : Theme.TextSize.control)
             .foregroundStyle(ink)
             // Two lines at the usual sizes, so long words wrap rather than cut; more at an
@@ -130,32 +134,61 @@ extension ButtonStyle where Self == WalnutButtonStyle {
 
 /// An option row's words: its label, then its line of why in a smaller grey line (cut at its end),
 /// and "Recommended" at the row's right end on the recommended one (web: `AskOptions`).
+///
+/// A label that ends in " (Recommended)" (an agent's AskUserQuestion writes it so) shows without
+/// it and takes the mark instead, as the Threads card's recommended choice does: the mark is said
+/// once, at the right (`shown(_:)`). Only what is shown changes; the caller still sends its own
+/// label. The mark never fills the row: the row's role says that (`.option(recommended:)`).
 struct WalnutOptionLabel: View {
     let label: String
     var detail: String? = nil
     var recommended = false
+    /// Lines the label and the detail may each take before they are cut at their end; nil shows
+    /// them whole (a question's options are read in full before one is picked).
+    var lines: Int? = 2
+    /// The detail says what the next tap does (a rule armed to be saved): the accent, semibold.
+    var detailAlert = false
+    /// Words of their own in place of `label`'s (a deny that waits for a spoken note says so).
+    var title: AnyView? = nil
 
     static let recommendedWord = "Recommended"
 
     @Environment(\.walnutPalette) private var palette
+    /// The row is filled (a recommended option, a plain list's strong yes).
+    @Environment(\.walnutOnSolid) private var onSolid
+
+    /// The words shown for `label`, and whether it carried its own trailing "(Recommended)".
+    /// A label that is only the mark keeps its words. Pure, unit-tested.
+    nonisolated static func shown(_ label: String) -> (label: String, marked: Bool) {
+        guard let range = label.range(of: #"\s*\(recommended\)\s*$"#, options: [.regularExpression, .caseInsensitive]) else {
+            return (label, false)
+        }
+        let head = label[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
+        return head.isEmpty ? (label, false) : (head, true)
+    }
 
     var body: some View {
+        let shown = Self.shown(label)
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(label)
-                    .font(Theme.TextSize.control)
-                    .lineLimit(2)
+                Group {
+                    if let title { title } else { Text(shown.label) }
+                }
+                .font(Theme.TextSize.control)
+                .lineLimit(lines)
+                .fixedSize(horizontal: false, vertical: true)
                 if let detail, !detail.isEmpty {
                     Text(detail)
-                        .font(Theme.TextSize.sm)
-                        .foregroundStyle(quiet)
-                        .lineLimit(2)
+                        .font(detailAlert ? Theme.TextSize.sm.weight(.semibold) : Theme.TextSize.sm)
+                        .foregroundStyle(detailAlert ? palette.tint : quiet)
+                        .lineLimit(lines)
                         .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .multilineTextAlignment(.leading)
             Spacer(minLength: 0)
-            if recommended {
+            if recommended || (title == nil && shown.marked) {
                 Text(Self.recommendedWord)
                     .font(Theme.TextSize.sm)
                     .foregroundStyle(quiet)
@@ -164,9 +197,67 @@ struct WalnutOptionLabel: View {
         }
     }
 
-    /// Second words: the readable grey on a plain row, `onTint` on the filled one (a dimmed white
+    /// Second words: the readable grey on a plain row, `onTint` on a filled one (a dimmed white
     /// read under 4.5:1 there).
-    private var quiet: Color { recommended ? palette.onTint : Theme.secondaryOnCard }
+    private var quiet: Color { onSolid ? palette.onTint : Theme.secondaryOnCard }
+}
+
+extension EnvironmentValues {
+    /// The family's button below draws a solid fill (`WalnutButtonStyle`): its second words take
+    /// `onTint`.
+    @Entry var walnutOnSolid = false
+}
+
+/// A small picker key on a tool row: the composer's Mode and Model, the new-session row's folder,
+/// project, sync, mode and model keys and its quick folders. Round, as every small key (a
+/// capsule beside the round +, mic and send); a key whose words wrap onto more lines (the
+/// accessibility sizes) is a long block and takes the 12 pt corner (`WalnutButtonStyle.optionShape`),
+/// as a capsule around five lines read as a circle with the words spilling past it.
+/// `active`: a picked value (a folder chosen, the current quick folder): the light accent fill
+/// with an accent hairline, as a selected chip (the fill alone sat 1.04:1 from the bar in dark).
+/// The words' colour stays the caller's (`ComposerPillInk` measures its own).
+struct WalnutPickerKey: ViewModifier {
+    var active = false
+    var wraps = false
+
+    @Environment(\.walnutPalette) private var palette
+
+    func body(content: Content) -> some View {
+        let shape = WalnutPickerKeyShape(wraps: wraps)
+        content
+            .font(Theme.TextSize.sm.weight(.medium))
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s)
+            .background(active ? palette.tintSoft : Color(uiColor: Theme.pickerKeyFillColor), in: shape)
+            .overlay {
+                if active { shape.strokeBorder(palette.tint, lineWidth: 1) }
+            }
+            .contentShape(shape)
+    }
+}
+
+/// The picker key's shape: a capsule on one line, the long key's 12 pt corner once it wraps.
+struct WalnutPickerKeyShape: InsettableShape {
+    var wraps = false
+    var insetAmount: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let inner = rect.insetBy(dx: insetAmount, dy: insetAmount)
+        return wraps ? WalnutButtonStyle.optionShape.path(in: inner) : Capsule(style: .continuous).path(in: inner)
+    }
+
+    func inset(by amount: CGFloat) -> WalnutPickerKeyShape {
+        var shape = self
+        shape.insetAmount += amount
+        return shape
+    }
+}
+
+extension View {
+    /// Draw this label as a small picker key (`WalnutPickerKey`).
+    func walnutPickerKey(active: Bool = false, wraps: Bool = false) -> some View {
+        modifier(WalnutPickerKey(active: active, wraps: wraps))
+    }
 }
 
 /// A chip: a filter, a view switch, a toggle among several (Inbox filters, the board's views, a

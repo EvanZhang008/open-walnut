@@ -38,6 +38,9 @@ enum Theme {
     static let controlFill = Color(dynamic: controlFillColor)
     static let controlFillColor = UIColor(light: 0xE5E5EA, dark: 0x343436)
     static let controlFillPressed = Color(dynamic: controlFillPressedColor)
+    /// A small picker key's fill on a tool row (`WalnutPickerKey`): the system's quiet fill, so the
+    /// key reads on the composer's card and on the page alike (`ComposerPillContrastTests`).
+    static let pickerKeyFillColor = UIColor.tertiarySystemFill
     static let controlFillPressedColor = UIColor(light: 0xD1D1D6, dark: 0x48484A)
 
     static let success = Color(dynamic: UIColor(light: 0x34C759, dark: 0x30D158))

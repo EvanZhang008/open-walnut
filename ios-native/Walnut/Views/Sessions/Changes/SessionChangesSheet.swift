@@ -302,22 +302,51 @@ struct SessionChangesPage: View {
 
 // MARK: - Rows
 
-/// "+12 −3" in the colors a diff uses.
+/// How a diff's line counts read, the one place that writes them (standard.md: a count in a state
+/// colour takes it only above zero, and a diff's zero side is dropped): "+7", "\u{2212}3",
+/// "+12 \u{2212}3", and nothing at all when no line was added or removed (a rename, a mode
+/// change). Pure, unit-tested.
+enum DiffCount {
+    struct Part: Equatable {
+        let text: String
+        /// Added lines (green), else removed lines (red).
+        let added: Bool
+    }
+
+    static func parts(additions: Int, deletions: Int) -> [Part] {
+        var out: [Part] = []
+        if additions > 0 { out.append(Part(text: "+\(additions)", added: true)) }
+        if deletions > 0 { out.append(Part(text: "\u{2212}\(deletions)", added: false)) }
+        return out
+    }
+
+    /// What VoiceOver says, the same sides as shown; nil when nothing shows.
+    static func spoken(additions: Int, deletions: Int) -> String? {
+        let words = [additions > 0 ? "\(additions) added" : nil, deletions > 0 ? "\(deletions) removed" : nil].compactMap { $0 }
+        return words.isEmpty ? nil : words.joined(separator: ", ")
+    }
+}
+
+/// "+12 \u{2212}3" in the colors a diff uses, only the sides above zero (`DiffCount`).
 struct LineCounts: View {
     let additions: Int
     let deletions: Int
 
     var body: some View {
-        HStack(spacing: 4) {
-            Text(verbatim: "+\(additions)").foregroundStyle(DiffColors.addedText)
-            Text(verbatim: "\u{2212}\(deletions)").foregroundStyle(DiffColors.removedText)
+        let parts = DiffCount.parts(additions: additions, deletions: deletions)
+        if !parts.isEmpty {
+            HStack(spacing: 4) {
+                ForEach(parts, id: \.text) { part in
+                    Text(verbatim: part.text).foregroundStyle(part.added ? DiffColors.addedText : DiffColors.removedText)
+                }
+            }
+            .font(.caption.monospacedDigit().weight(.semibold))
+            // A number never breaks across lines.
+            .lineLimit(1)
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(DiffCount.spoken(additions: additions, deletions: deletions) ?? "")
         }
-        .font(.caption.monospacedDigit().weight(.semibold))
-        // A number never breaks across lines.
-        .lineLimit(1)
-        .fixedSize()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(additions) added, \(deletions) removed")
     }
 }
 

@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { countIos, countFile, codeLines, IOS_KINDS, IOS_ROOT, DESIGN_SYSTEM_FILES, type IosCounts } from './ios-ui-standard-scan'
+import { countIos, countFile, codeLines, blockAt, appSwiftFiles, IOS_KINDS, IOS_ROOT, DESIGN_SYSTEM_FILES, type IosCounts } from './ios-ui-standard-scan'
 
 const BASELINE = path.join(import.meta.dirname, 'ios-ui-standard-baseline.json')
 const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md'
@@ -241,6 +241,191 @@ describe('iOS UI standard: one look per kind of control', () => {
       expect(DIRECT_ACCENT.test('config.baseBackgroundColor = Theme.accentColor')).toBe(true)
       expect(DIRECT_ACCENT.test('.foregroundStyle(Theme.Chat.accent)')).toBe(false)
       expect(DIRECT_ACCENT.test('.foregroundStyle(palette.tint)')).toBe(false)
+    })
+  })
+
+  describe('picker keys on a tool row are round, drawn by one helper', () => {
+    // 2026-11-26: "Default", "Opus 5.5 · High", "Mode", "Model" and the new-session row's "Default
+    // model" were 8 pt rounded rectangles beside the round +, mic and send. A small key is round
+    // (a capsule); the shared `walnutPickerKey` draws every one (a wrapped key takes the 12 pt corner).
+    const read = (rel: string) => fs.readFileSync(path.join(IOS_ROOT, rel), 'utf8')
+    /** The files that hold the composer's and the new-session page's tool rows. */
+    const TOOL_ROW_FILES = [
+      'Walnut/Views/Chat/ComposerControls.swift',
+      'Walnut/Views/Chat/ComposerView.swift',
+      'Walnut/Views/Sessions/NewSessionChatView.swift',
+    ]
+    /** Where a key on those rows starts: a menu, a picker, the shared pill, the page's own keys. */
+    const KEY_START = /\bMenu\s*[{(]|\bPicker\s*\(|\bPillChip\s*\(|\bstruct PillChip\b|\bfunc pill\s*\(|\bvar quickFolderRow\b|\bvar pillRow\b/
+    /** A key drawing its own shape instead of the helper. */
+    const OWN_SHAPE = /RoundedRectangle\s*\(|Theme\.Radius\.shape\(|\boptionShape\b|PillChipShape|\bCapsule\s*\(/
+
+    function keyBlocks(rel: string, src: string) {
+      const lines = codeLines(src)
+      const out: { at: string; block: string }[] = []
+      lines.forEach((line, i) => {
+        const m = line.match(KEY_START)
+        if (m) out.push({ at: `ios-native/${rel}:${i + 1} ${m[0]}`, block: blockAt(lines, i).join('\n') })
+      })
+      return out
+    }
+
+    it('no key on the composer and new-session rows draws its own corner or capsule', () => {
+      const offenders: string[] = []
+      const members: string[] = []
+      for (const rel of TOOL_ROW_FILES) {
+        for (const k of keyBlocks(rel, read(rel))) {
+          members.push(k.at)
+          if (OWN_SHAPE.test(k.block)) offenders.push(k.at)
+        }
+      }
+      // The members: the pill's view, its four uses (live mode and model, draft mode and model),
+      // the folder/project/sync key and the quick folders.
+      expect(members.filter((m) => /PillChip\($/.test(m)).length, members.join('\n')).toBeGreaterThanOrEqual(4)
+      expect(members.some((m) => /struct PillChip$/.test(m))).toBe(true)
+      expect(members.some((m) => /func pill\($/.test(m))).toBe(true)
+      expect(offenders, `Draw the key with .walnutPickerKey(active:wraps:) (WalnutButtonStyle.swift):\n${offenders.join('\n')}`).toEqual([])
+    })
+
+    it('the keys that draw go through the helper, and the helper is round', () => {
+      const drawers = TOOL_ROW_FILES.flatMap((rel) => keyBlocks(rel, read(rel)))
+        .filter((k) => /struct PillChip$|func pill\($|var quickFolderRow$/.test(k.at))
+      expect(drawers.length).toBe(3)
+      for (const k of drawers) expect(k.block, k.at).toContain('.walnutPickerKey(')
+      // Every file that uses the pill is a tool-row file named above.
+      const users = appSwiftFiles().filter((rel) => /\bPillChip\s*\(/.test(codeLines(read(rel)).join('\n')))
+      expect(users.filter((rel) => !TOOL_ROW_FILES.includes(rel))).toEqual([])
+      const buttons = read('Walnut/Views/Shared/DesignSystem/WalnutButtonStyle.swift')
+      expect(buttons).toMatch(/wraps \? WalnutButtonStyle\.optionShape\.path\(in: inner\) : Capsule\(style: \.continuous\)\.path\(in: inner\)/)
+      expect(buttons).toMatch(/func walnutPickerKey\(active: Bool = false, wraps: Bool = false\)/)
+    })
+
+    it('finds a key that draws its own shape', () => {
+      const one = (src: string) => keyBlocks('Walnut/Views/X.swift', src).filter((k) => OWN_SHAPE.test(k.block)).length
+      expect(one(['Menu {', '    Button("A") { }', '} label: {', '    Text("Mode")', '        .background(.gray, in: RoundedRectangle(cornerRadius: 8))', '}'].join('\n'))).toBe(1)
+      expect(one(['Menu {', '    Button("A") { }', '} label: {', '    Text("Mode")', '}', '.background(Color.gray, in: Theme.Radius.shape(Theme.Radius.sm))'].join('\n'))).toBe(1)
+      expect(one(['Menu {', '    Button("A") { }', '} label: {', '    Text("Mode").walnutPickerKey()', '}'].join('\n'))).toBe(0)
+      expect(one(['Menu {', '    Button("A") { }', '} label: {', '    Text("Mode").walnutPickerKey()', '}', 'Text("x").background(.gray, in: Capsule())'].join('\n'))).toBe(0)
+    })
+  })
+
+  describe("every permission and question choice is the family's option row", () => {
+    // 2026-11-26: permission cards drew their choices three ways (hairline rows, solid grey rows,
+    // two half-width keys). Each choice of a question is `.walnut(.option(recommended:))` with
+    // `WalnutOptionLabel` (standard.md, the iOS column's Option row).
+    const read = (rel: string) => fs.readFileSync(path.join(IOS_ROOT, rel), 'utf8')
+    /** A file that draws choices: it uses the option row, or holds a permission's or question's options. */
+    const DRAWS_CHOICES = /\.walnut\(\s*\.option\b|\bPermissionChoice\b|\bAskQuestionOption\b|\bWalnutAskOption\b/
+    /** Option rows that are not a question's choices, each with why. */
+    const NOT_A_QUESTION: Record<string, string> = {
+      'Walnut/Views/Inbox/InboxItemTaskSelector.swift': 'a task picker: each row is a task (title, project, phase), not a choice of a question',
+    }
+    /** A button whose action answers a choice. */
+    const ANSWERS = /\btap\(choice\)|\bselections\[|\bonPick\(|\bpick\(o\)|\banswer\(action\)/
+    /** The card's own keys beside its choices (the ask card's Submit and Dismiss). */
+    const OWN_KEYS = /session\.askQuestion\.(?:submit|dismiss)/
+
+    /** Each `.buttonStyle(` of a file with the code of its button, from the `Button` line on. */
+    function styledButtons(src: string) {
+      const lines = codeLines(src)
+      const out: { line: number; style: string; button: string; after: string }[] = []
+      lines.forEach((line, i) => {
+        if (!/\.buttonStyle\(/.test(line)) return
+        let b = i
+        while (b > 0 && i - b < 30 && !/\bButton\b/.test(lines[b])) b--
+        out.push({ line: i + 1, style: line, button: lines.slice(b, i + 1).join('\n'), after: lines.slice(i, i + 6).join('\n') })
+      })
+      return out
+    }
+
+    const files = appSwiftFiles().filter((rel) => !DESIGN_SYSTEM_FILES.includes(rel) && rel.startsWith('Walnut/Views/') && DRAWS_CHOICES.test(codeLines(read(rel)).join('\n')))
+
+    it('finds the files that draw choices', () => {
+      for (const f of ['Walnut/Views/Sessions/PermissionRequestCard.swift', 'Walnut/Views/Tasks/ActionNeededView.swift', 'Walnut/Views/Org/OrgThreadsView.swift', 'Walnut/Views/Inbox/LetterReaderView.swift']) {
+        expect(files, f).toContain(f)
+      }
+      for (const f of Object.keys(NOT_A_QUESTION)) expect(fs.existsSync(path.join(IOS_ROOT, f)), f).toBe(true)
+    })
+
+    it('a button that answers a choice is an option row with WalnutOptionLabel', () => {
+      const offenders: string[] = []
+      for (const rel of files) {
+        if (NOT_A_QUESTION[rel]) continue
+        for (const b of styledButtons(read(rel))) {
+          const option = /\.walnut\(\s*\.option\(/.test(b.style)
+          const answers = ANSWERS.test(b.button)
+          if ((answers || option) && !option) offenders.push(`ios-native/${rel}:${b.line}: a choice styled ${b.style.trim()}`)
+          if (option && !/\bWalnutOptionLabel\(/.test(b.button)) offenders.push(`ios-native/${rel}:${b.line}: an option row without WalnutOptionLabel`)
+        }
+      }
+      expect(offenders, `Draw each choice as .buttonStyle(.walnut(.option(recommended:))) with WalnutOptionLabel:\n${offenders.join('\n')}`).toEqual([])
+    })
+
+    it('a permission or question card has no other key look than its own Submit and Dismiss', () => {
+      const rel = 'Walnut/Views/Sessions/PermissionRequestCard.swift'
+      const offenders = styledButtons(read(rel))
+        .filter((b) => !/\.walnut\(\s*\.option\(/.test(b.style) && !OWN_KEYS.test(b.after))
+        .map((b) => `ios-native/${rel}:${b.line}: ${b.style.trim()}`)
+      expect(offenders).toEqual([])
+      // A plain list keeps its strong yes; a list that names rules stays neutral (the web's rule).
+      expect(read(rel)).toMatch(/\.buttonStyle\(\.walnut\(\.option\(recommended: strong\)\)\)/)
+      expect(read('Walnut/API/ModelsWave1.swift')).toMatch(/guard !choices\.contains\(where: \{ \$0\.detail != nil \|\| \$0\.takesNote \}\) else \{ return nil \}/)
+    })
+
+    it('finds a choice drawn another way', () => {
+      const bad = ['Button {', '    tap(choice)', '} label: {', '    Text(choice.label)', '}', '.buttonStyle(.walnut(.primary, size: .small, fullWidth: true))'].join('\n')
+      const good = ['Button {', '    tap(choice)', '} label: {', '    WalnutOptionLabel(label: choice.label)', '}', '.buttonStyle(.walnut(.option(recommended: false)))'].join('\n')
+      const bare = ['Button { pick(o) } label: {', '    Text(o.label)', '}', '.buttonStyle(.walnut(.option(recommended: false)))'].join('\n')
+      expect(styledButtons(bad).some((b) => ANSWERS.test(b.button) && !/\.option\(/.test(b.style))).toBe(true)
+      expect(styledButtons(good).every((b) => /\.option\(/.test(b.style) && /WalnutOptionLabel\(/.test(b.button))).toBe(true)
+      expect(styledButtons(bare).some((b) => !/WalnutOptionLabel\(/.test(b.button))).toBe(true)
+    })
+  })
+
+  describe('a diff count shows only its sides above zero, written in one place', () => {
+    // 2026-11-26: the Changed page read "+7 −0" and "+0 −3", the zero side in a state colour.
+    // `DiffCount` (SessionChangesSheet.swift) writes every "+N −M"; `LineCounts` draws it.
+    const read = (rel: string) => fs.readFileSync(path.join(IOS_ROOT, rel), 'utf8')
+    const HOME = 'Walnut/Views/Sessions/Changes/SessionChangesSheet.swift'
+    /** A count written with a sign: "+\(n)", and a removed count "\u{2212}\(n)" or "−\(n)"; a
+     *  hyphen "-\(n)" counts only beside a "+\(n)" (a log line's "-\(age)s" is not a diff). */
+    const PLUS = /\+\\\(/
+    const MINUS = /(?:\\u\{2212\}|−)\\\(/
+    const HYPHEN = /-\\\(/
+
+    /** The lines that write a signed count pair (or a removed count), outside `enum DiffCount`. */
+    function writers(rel: string, src: string): string[] {
+      const lines = codeLines(src)
+      const start = lines.findIndex((l) => /\benum DiffCount\b/.test(l))
+      const home = start >= 0 ? new Set(blockAt(lines, start).map((_, k) => start + k)) : new Set<number>()
+      const out: string[] = []
+      lines.forEach((line, i) => {
+        if (home.has(i)) return
+        const near = lines.slice(Math.max(0, i - 2), i + 3).join('\n')
+        if (MINUS.test(line) || (PLUS.test(line) && (MINUS.test(near) || HYPHEN.test(near)))) out.push(`ios-native/${rel}:${i + 1}: ${line.trim()}`)
+      })
+      return out
+    }
+
+    it('no view writes "+N −M" itself', () => {
+      const offenders = appSwiftFiles().flatMap((rel) => writers(rel, read(rel)))
+      expect(offenders, `Show a diff's counts with LineCounts (DiffCount.parts):\n${offenders.join('\n')}`).toEqual([])
+    })
+
+    it('the one formatter drops the zero side and LineCounts uses it', () => {
+      const src = read(HOME)
+      expect(src).toMatch(/if additions > 0 \{ out\.append\(Part\(text: "\+\\\(additions\)", added: true\)\) \}/)
+      expect(src).toMatch(/if deletions > 0 \{ out\.append\(Part\(text: "\\u\{2212\}\\\(deletions\)", added: false\)\) \}/)
+      expect(src).toMatch(/let parts = DiffCount\.parts\(additions: additions, deletions: deletions\)/)
+    })
+
+    it('finds a count pair written outside it', () => {
+      expect(writers('Walnut/Views/X.swift', 'Text(verbatim: "+\\(a) \\u{2212}\\(d)")')).toHaveLength(1)
+      expect(writers('Walnut/Views/X.swift', ['Text("+\\(a)")', 'Text("-\\(d)")'].join('\n'))).toHaveLength(1)
+      expect(writers('Walnut/Views/X.swift', ['Text("+\\(a)")', 'Text("−\\(d)")'].join('\n'))).toHaveLength(2)
+      expect(writers('Walnut/Views/X.swift', 'parts.append("-\\(age)s \\(label)")')).toHaveLength(0)
+      expect(writers('Walnut/Views/X.swift', 'Text("+\\(n) more")')).toHaveLength(0)
+      expect(writers('Walnut/Views/X.swift', ['enum DiffCount {', '    static let a = "+\\(x)"', '    static let b = "\\u{2212}\\(y)"', '}'].join('\n'))).toHaveLength(0)
     })
   })
 

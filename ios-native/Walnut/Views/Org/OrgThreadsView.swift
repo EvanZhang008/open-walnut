@@ -1034,10 +1034,15 @@ struct OrgThreadCard: View {
                      commandsCwd: session?.cwd, commandsHost: session?.host)
     }
 
+    /// The Follow up box's placeholder: whole on an iPhone at the default text size.
+    static let followUpPlaceholder = "Follow up\u{2026}"
+
     private var followUpBox: some View {
         let key = followUpKey
+        // The web's words ("Follow up on this request") were cut on a 402 pt phone beside the
+        // box's keys ("Follow up on this requ…", 2026-11-26): the short words fit whole.
         return ReplyBox(
-            placeholder: "Follow up on this request", draftKey: key, idPrefix: OrgThreadFollowUpDraft.idPrefix(threadId: t.id),
+            placeholder: Self.followUpPlaceholder, draftKey: key, idPrefix: OrgThreadFollowUpDraft.idPrefix(threadId: t.id),
             scope: followUpScope,
             fieldLabel: "Follow up on \u{201C}\(t.title)\u{201D}",
             voiceBox: "thread-follow-up",

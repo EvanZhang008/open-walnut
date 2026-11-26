@@ -130,6 +130,15 @@ struct PendingPermission: Codable, Identifiable, Equatable {
         if !options.contains(where: \.isReject) { out.append(.plainDeny(takesNote: false)) }
         return out
     }
+
+    /// The choice drawn as the card's strong yes (a filled option row), or nil for a neutral list.
+    /// The web's rule (PermissionPromptControls.tsx): a list that names rules stays neutral, no
+    /// choice looking picked or recommended before the person picks (a choice with details, or
+    /// a Deny that takes a note); a plain list keeps its strong yes, its first Allow. Pure.
+    static func strongChoiceID(_ choices: [PermissionChoice]) -> String? {
+        guard !choices.contains(where: { $0.detail != nil || $0.takesNote }) else { return nil }
+        return choices.first(where: \.allow)?.id
+    }
 }
 
 /// One option on a permission prompt, as the server lists it (`acpOptions`).

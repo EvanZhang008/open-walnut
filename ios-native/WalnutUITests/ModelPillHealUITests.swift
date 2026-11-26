@@ -626,7 +626,8 @@ final class ModelPillHealUITests: XCTestCase {
     /// A model the catalog does not know (a custom proxy id) reaches the pill as
     /// its raw id. At AX5 that wrapped to five lines and the Capsule turned the
     /// pill into a 262x266pt circle. A raw id now takes at most two lines, cut in
-    /// the middle, in a rounded rectangle; at the default size it is one line.
+    /// the middle, and a wrapped key takes the long key's 12 pt corner; at the
+    /// default size it is one line, in a capsule.
     /// Catalog names are not capped (the size test holds that they never truncate).
     @MainActor
     func testALongRawModelIDKeepsThePillASaneSize() async throws {
@@ -655,7 +656,7 @@ final class ModelPillHealUITests: XCTestCase {
                 return
             }
             let lineHeight = Self.pillFont(at: category).lineHeight
-            let lines = (chip.height - 10) / lineHeight
+            let lines = (chip.height - 12) / lineHeight
             print("[evidence] \(tag): raw id pill drawn \(Int(frame.width))x\(String(format: "%.1f", chip.height))pt "
                   + "(button \(frame)) = \(String(format: "%.2f", lines)) line(s) of \(String(format: "%.1f", lineHeight))pt; "
                   + "corner \(chip.corner) vs fill \(chip.fill) vs outside \(chip.outside), mic \(mic.frame)")
@@ -667,7 +668,7 @@ final class ModelPillHealUITests: XCTestCase {
                 XCTAssertLessThan(lines, 2.3, "ax5: the raw id takes more than two lines (\(chip.height)pt)")
                 XCTAssertGreaterThan(lines, 1.5, "ax5: the raw id was not given its second line (\(chip.height)pt)")
                 XCTAssertGreaterThan(frame.width, chip.height * 1.5, "ax5: the pill is a blob, \(frame)")
-                XCTAssertTrue(chip.cornerFilled, "ax5: the wrapped pill is round at its corner (a capsule): "
+                XCTAssertTrue(chip.cornerFilled, "ax5: the wrapped pill keeps the long key's 12 pt corner (not a capsule): "
                               + "\(chip.corner) vs fill \(chip.fill)")
             }
             let writes = try await stub.writes()
@@ -731,8 +732,8 @@ final class ModelPillHealUITests: XCTestCase {
             systemName: "chevron.up.chevron.down",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: glyphPoints, weight: .semibold)
         )?.size.width ?? glyphPoints
-        // PillChip: 9pt padding each side, 4pt between the name and the glyph.
-        let column = frame.width - 18 - 4 - glyph
+        // PillChip (`WalnutPickerKey`): 10pt padding each side, 4pt between the name and the glyph.
+        let column = frame.width - 20 - 4 - glyph
         // Greedy word wrap, each line measured whole (summing rounded word widths
         // overstates a line by a point or two).
         var lines: [String] = []
@@ -746,7 +747,7 @@ final class ModelPillHealUITests: XCTestCase {
                 lines.append(word)
             }
         }
-        let fits = Int(((frame.height - 10 + 2) / font.lineHeight).rounded(.down))
+        let fits = Int(((frame.height - 12 + 2) / font.lineHeight).rounded(.down))
         print("[evidence] \(tag): \"\(label)\" is \(Int(Self.width(label, font)))pt, needs \(lines.count) line(s) "
               + "of the \(Int(column))pt column \(lines); the pill \(frame) holds \(fits)")
         XCTAssertLessThanOrEqual(lines.count, fits, "\(tag): \"\(label)\" needs \(lines.count) lines in a pill "
@@ -1570,7 +1571,7 @@ final class ModelPillHealUITests: XCTestCase {
     }
 
     /// The chip a pill draws inside its button: its height, and whether a point
-    /// 6pt in from its top left corner is filled (a 14pt rounded rectangle) or
+    /// 6pt in from its top left corner is filled (a 12pt rounded rectangle) or
     /// outside it (a capsule taller than about 30pt). Its top and bottom are the
     /// first and last rows of the middle column that differ from the corner of
     /// the button, which is outside the chip either way.

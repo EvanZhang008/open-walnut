@@ -186,14 +186,17 @@ final class ComposerControlsTests: XCTestCase {
         XCTAssertEqual(PillChipText.lineLimit(wraps: false, rawID: true), 1)
     }
 
-    /// One shape at every size: the family's 8 pt corner, never a capsule and never a circle.
-    func testThePillIsOneRoundedRectangleAtEverySize() {
-        let shape = PillChipShape()
+    /// The picker key is round on one line (a capsule beside the round +, mic and send), and the
+    /// long key's 12 pt corner once its words wrap: never a capsule around several lines.
+    func testThePillIsACapsuleOnOneLineAndALongKeyWhenItWraps() {
+        let line = WalnutPickerKeyShape(wraps: false).path(in: CGRect(x: 0, y: 0, width: 120, height: 28))
+        XCTAssertFalse(line.contains(CGPoint(x: 3, y: 3)), "one line: a capsule, round to its ends")
+        XCTAssertTrue(line.contains(CGPoint(x: 60, y: 14)))
         for rect in [CGRect(x: 0, y: 0, width: 283, height: 61), CGRect(x: 0, y: 0, width: 262, height: 118)] {
-            let path = shape.path(in: rect)
-            XCTAssertTrue(path.contains(CGPoint(x: 6, y: 6)), "\(rect.size): the pill keeps its corners (no capsule)")
+            let path = WalnutPickerKeyShape(wraps: true).path(in: rect)
+            XCTAssertTrue(path.contains(CGPoint(x: 8, y: 8)), "\(rect.size): the wrapped key keeps its corners (no capsule)")
             XCTAssertFalse(path.contains(CGPoint(x: 1, y: 1)), "\(rect.size): the corner is rounded")
-            XCTAssertTrue(path.contains(CGPoint(x: 6, y: rect.height - 6)))
+            XCTAssertTrue(path.contains(CGPoint(x: 8, y: rect.height - 8)))
         }
     }
 

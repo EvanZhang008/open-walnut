@@ -383,14 +383,13 @@ struct PermissionRequestCard: View {
         sendGate.send { _ in send(choice) }
     }
 
-    /// A deny's title says when it waits for the note's words.
-    @ViewBuilder
-    private func choiceTitle(_ choice: PermissionChoice) -> some View {
-        if choice.allow {
-            Text(choice.displayLabel(note: note))
-        } else {
+    /// A deny's title says when it waits for the note's words, in the danger words a refusal takes.
+    private func choiceTitle(_ choice: PermissionChoice) -> AnyView? {
+        guard !choice.allow else { return nil }
+        return AnyView(
             DictationSendLabel(gate: sendGate, title: choice.displayLabel(note: note))
-        }
+                .foregroundStyle(Theme.dangerText)
+        )
     }
 
     private var genericCard: some View {
@@ -439,86 +438,43 @@ struct PermissionRequestCard: View {
         .accessibilityIdentifier("session.permissionCard")
     }
 
-    /// The choices: a list of full-width rows when any carries a rule to show
-    /// (the remembering options of a Claude prompt), else buttons side by side,
-    /// stacked when there are more than two (an ACP prompt's own options).
-    @ViewBuilder
+    /// The choices, each a row of its own, full width: the family's option row, the one look for
+    /// each choice of a question (standard.md, iOS column; it was three looks: hairline rows, solid
+    /// grey rows, two half-width keys). A plain list keeps its strong yes, its first Allow filled;
+    /// a list that names rules (details, a Deny that takes a note) stays neutral
+    /// (`PendingPermission.strongChoiceID`, the web's rule).
     private var choiceButtons: some View {
         let list = choices
-        if list.contains(where: { $0.detail != nil }) {
-            VStack(spacing: 6) {
-                ForEach(list) { choice in
-                    choiceRow(choice)
-                }
-            }
-        } else if list.count > 2 {
-            VStack(spacing: 6) {
-                ForEach(list) { choice in
-                    choiceButton(choice, main: choice.id == list.first(where: \.allow)?.id)
-                }
-            }
-        } else {
-            HStack(spacing: 10) {
-                ForEach(list) { choice in
-                    choiceButton(choice, main: choice.id == list.first(where: \.allow)?.id)
-                }
+        let strong = PendingPermission.strongChoiceID(list)
+        return VStack(spacing: Theme.Space.s) {
+            ForEach(list) { choice in
+                choiceRow(choice, strong: choice.id == strong)
             }
         }
     }
 
-    /// One of the family's buttons: the first Allow is the card's one main action (solid accent),
-    /// any other Allow the grey secondary, Deny the destructive one (standard.md, iOS column).
-    private func choiceButton(_ choice: PermissionChoice, main: Bool) -> some View {
-        Button {
+    /// A row of the option list: the label, and under it the rule the option allows (a long rule
+    /// wraps rather than hides its middle). Armed once, the rule's line says what the second tap
+    /// does and an accent ring on the row's corner marks it.
+    private func choiceRow(_ choice: PermissionChoice, strong: Bool) -> some View {
+        let armedNow = armed == choice.id && choice.savedTo != nil
+        return Button {
             tap(choice)
         } label: {
-            choiceTitle(choice)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+            WalnutOptionLabel(
+                label: choice.displayLabel(note: note),
+                detail: armedNow ? choice.savedTo.map { "Tap again within 5 s to save to \($0)" } : choice.detail,
+                lines: 6,
+                detailAlert: armedNow,
+                title: choiceTitle(choice)
+            )
         }
-        .buttonStyle(.walnut(main ? .primary : (choice.allow ? .secondary : .destructive), size: .small, fullWidth: true))
-        // The family draws the disabled state; a second fade on top read as invisible.
-        .disabled(isOff(choice))
-        .accessibilityIdentifier(choice.accessibilityID)
-    }
-
-    /// A row of the option list: the label, and under it the rule the option
-    /// allows in a small monospaced line (one line, cut in the middle, so the
-    /// command's head and its wildcard both stay in view).
-    private func choiceRow(_ choice: PermissionChoice) -> some View {
-        Button {
-            tap(choice)
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                choiceTitle(choice)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(choice.allow ? Color.primary : Theme.dangerText)
-                    .fixedSize(horizontal: false, vertical: true)
-                if armed == choice.id, let savedTo = choice.savedTo {
-                    // Tapped once: what the second tap does, where the file line was.
-                    Text("Tap again within 5 s to save to \(savedTo)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.tint)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if let detail = choice.detail {
-                    // A sentence ("Bash commands starting with npm test"), not code: the system font.
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        // One rule per line; a long rule wraps rather than hides its middle.
-                        .lineLimit(6)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .multilineTextAlignment(.leading)
-        }
-        // A choice of the question: the family's option row (a long key: the field corner,
-        // hairline); armed once, an accent ring on the same corner says the next tap saves it.
-        .buttonStyle(.walnut(.option(recommended: false)))
+        .buttonStyle(.walnut(.option(recommended: strong)))
         .overlay(
             WalnutButtonStyle.optionShape
-                .strokeBorder(Theme.tint, lineWidth: armed == choice.id ? 1.5 : 0)
+                .strokeBorder(Theme.tint, lineWidth: armedNow ? 1.5 : 0)
         )
+        // The family draws the disabled state; a second fade on top read as invisible.
         .disabled(isOff(choice))
         .accessibilityIdentifier(choice.accessibilityID)
     }
@@ -781,23 +737,15 @@ struct AskUserQuestionCard: View {
                       : "circle")
                     .font(.body)
                     .foregroundStyle(picked ? Theme.tint : Color.secondary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(option.label)
-                        .font(.subheadline.weight(picked ? .semibold : .regular))
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let description = option.description {
-                        Text(description)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                Spacer(minLength: 0)
+                // Read in full (`lines: nil`). An agent's "On-disk (Recommended)" shows as
+                // "On-disk" with the "Recommended" mark at the right; the pick still sends the
+                // label as the agent wrote it (`option.label` above).
+                WalnutOptionLabel(label: option.label, detail: option.description, lines: nil)
             }
-            .multilineTextAlignment(.leading)
         }
-        // The family's option row, as on the permission card and the thread card; a picked
-        // one wears the accent ring on the row's own corner.
+        // The family's option row, as on the permission card and the thread card. A pick-then-
+        // submit form: no row is filled before a pick; a picked one wears the accent ring on
+        // the row's own corner.
         .buttonStyle(.walnut(.option(recommended: false)))
         .overlay {
             WalnutButtonStyle.optionShape

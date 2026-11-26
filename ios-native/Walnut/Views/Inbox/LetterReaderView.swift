@@ -455,18 +455,8 @@ struct LetterReaderView: View {
                     Task { await answer(action) }
                 } label: {
                     HStack(alignment: .top, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(InboxItemAction.aiLabel(action.label))
-                                .font(.subheadline.weight(.semibold))
-                                .multilineTextAlignment(.leading)
-                            if let description = action.description, !description.isEmpty {
-                                Text(description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.leading)
-                            }
-                        }
-                        Spacer(minLength: 4)
+                        // The option row's own words, read in full.
+                        WalnutOptionLabel(label: InboxItemAction.aiLabel(action.label), detail: action.description, lines: nil)
                         if busyActionId == action.id { ProgressView().controlSize(.small) }
                     }
                 }

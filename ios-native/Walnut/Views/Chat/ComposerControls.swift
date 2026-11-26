@@ -149,7 +149,6 @@ struct PillChip: View {
                 ProgressView().controlSize(.mini)
             }
             Text(text)
-                .font(.caption.weight(.medium))
                 .lineLimit(PillChipText.lineLimit(wraps: wraps, rawID: rawID))
                 .truncationMode(rawID ? .middle : .tail)
                 .multilineTextAlignment(.leading)
@@ -166,12 +165,9 @@ struct PillChip: View {
             }
         }
         .foregroundStyle(Color(uiColor: ComposerPillInk.ink(for: state)))
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(
-            Color(uiColor: ComposerPillInk.capsule),
-            in: PillChipShape()
-        )
+        // The family's picker key: a capsule beside the round +, mic and send, the long key's
+        // corner once its words wrap (the stacked accessibility layout).
+        .walnutPickerKey(wraps: wraps)
         // The pressed look a SwiftUI Button gives, which the transparent UIKit
         // button on top can't draw itself.
         .opacity(pressed ? 0.5 : 1)
@@ -254,7 +250,7 @@ enum ComposerPillInk {
         UIColor.label.resolvedColor(with: traits).withAlphaComponent(0.78)
     }
     static let disabled = UIColor.tertiaryLabel
-    static let capsule = UIColor.tertiarySystemFill
+    static let capsule = Theme.pickerKeyFillColor
 
     /// The ink for a pill: quiet only while it waits on something else.
     static func ink(for state: ComposerControlsModel.PillState) -> UIColor {
@@ -270,15 +266,5 @@ enum PillChipText {
     static func lineLimit(wraps: Bool, rawID: Bool) -> Int? {
         guard wraps else { return 1 }
         return rawID ? 2 : nil
-    }
-}
-
-/// The pill's shape: the family's soft rectangle (`Theme.Radius.sm`) at every size, one line
-/// or wrapped, like every control. It was a capsule on one line and a 14 pt corner once wrapped
-/// (a capsule around five lines was a 262x266pt circle with the text spilling past its edge,
-/// gate r3 P2-3).
-struct PillChipShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        Theme.Radius.shape(Theme.Radius.sm).path(in: rect)
     }
 }

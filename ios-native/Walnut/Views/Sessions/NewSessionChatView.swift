@@ -421,21 +421,12 @@ struct NewSessionChatView: View {
                                 dir, among: chips,
                                 hostLabel: options?.hosts.first { $0.alias == dir.host }?.label
                             ))
-                            .font(.caption.weight(.medium))
                             .lineLimit(1)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                isCurrent(dir) ? palette.tintSoft : Color(.tertiarySystemFill),
-                                in: Capsule()
-                            )
-                            // The web's accent border on the lit chip. Without it
-                            // the tinted fill sat 1.04:1 from the bar in dark mode
-                            // and the chosen folder was the FAINTEST chip in the row.
-                            .overlay(
-                                Capsule().strokeBorder(palette.tint, lineWidth: isCurrent(dir) ? 1 : 0)
-                            )
                             .foregroundStyle(isCurrent(dir) ? palette.tint : .primary)
+                            // The row's one key look; the lit chip's accent hairline is the
+                            // helper's (without it the tinted fill sat 1.04:1 from the bar in
+                            // dark mode and the chosen folder was the FAINTEST chip in the row).
+                            .walnutPickerKey(active: isCurrent(dir))
                         }
                         .accessibilityIdentifier("newSessionChat.quickDir")
                         .accessibilityAddTraits(isCurrent(dir) ? .isSelected : [])
@@ -449,59 +440,67 @@ struct NewSessionChatView: View {
         .accessibilityIdentifier("newSessionChat.quickFolders")
     }
 
+    /// The folder key, then the project and sync keys, then (when they ride here) mode and
+    /// model. The keys WRAP onto a second line rather than scroll: a sideways scroll left "Default
+    /// model" cut at the right edge with its chevron gone (2026-11-26), and a key cut there reads
+    /// as a broken one. Every key stays whole at every text size; one wider than the line itself
+    /// (a long folder path at an accessibility size) is offered the line and cuts its words at
+    /// their end. `OrgChipFlow` measures and places its lines at one width, so a second line is
+    /// never placed where the measure did not count it (over the composer below).
     private var pillRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
+        OrgChipFlow(spacing: ComposerBar.pillSpacing) {
+            Button {
+                showPathPicker = true
+            } label: {
+                pill(
+                    PathRanking.pathLabel(cwd: cwd, host: host.isEmpty ? nil : host, hostLabel: hostLabel),
+                    icon: "folder",
+                    active: !cwd.isEmpty
+                )
+            }
+            .accessibilityIdentifier("newSessionChat.pathPill")
+            // WHICH PROJECT the work is filed under, picked here rather than by
+            // where the add started (the user: the project is chosen on the create
+            // page itself). Rides both exits: the session's task and the todo.
+            if isTaskless {
                 Button {
-                    showPathPicker = true
+                    showProjectPicker = true
                 } label: {
                     pill(
-                        PathRanking.pathLabel(cwd: cwd, host: host.isEmpty ? nil : host, hostLabel: hostLabel),
-                        icon: "folder",
-                        active: !cwd.isEmpty
+                        project.isEmpty ? NewTaskSeed.inboxHeader : AskProjectName.display(project),
+                        icon: project.isEmpty ? "tray" : "folder",
+                        active: !project.isEmpty
                     )
                 }
-                .accessibilityIdentifier("newSessionChat.pathPill")
-                // WHICH PROJECT the work is filed under, picked here rather than by
-                // where the add started (the user: the project is chosen on the create
-                // page itself). Rides both exits: the session's task and the todo.
-                if isTaskless {
+                .disabled(creating)
+                .accessibilityIdentifier("newSessionChat.projectPill")
+                .accessibilityLabel("Project: \(project.isEmpty ? NewTaskSeed.inboxHeader : AskProjectName.display(project))")
+                // Local or the project's outside service, only in a project that syncs.
+                if let service = syncService {
+                    let name = tasks?.serviceName(service) ?? service
                     Button {
-                        showProjectPicker = true
+                        syncLocal.toggle()
                     } label: {
-                        pill(
-                            project.isEmpty ? NewTaskSeed.inboxHeader : AskProjectName.display(project),
-                            icon: project.isEmpty ? "tray" : "folder",
-                            active: !project.isEmpty
-                        )
+                        pill(syncLocal ? "Sync: Local" : "Sync: \(name)",
+                             icon: syncLocal ? "lock" : "arrow.triangle.2.circlepath",
+                             active: !syncLocal)
                     }
                     .disabled(creating)
-                    .accessibilityIdentifier("newSessionChat.projectPill")
-                    .accessibilityLabel("Project: \(project.isEmpty ? NewTaskSeed.inboxHeader : AskProjectName.display(project))")
-                    // Local or the project's outside service, only in a project that syncs.
-                    if let service = syncService {
-                        let name = tasks?.serviceName(service) ?? service
-                        Button {
-                            syncLocal.toggle()
-                        } label: {
-                            pill(syncLocal ? "Sync: Local" : "Sync: \(name)",
-                                 icon: syncLocal ? "lock" : "arrow.triangle.2.circlepath",
-                                 active: !syncLocal)
-                        }
-                        .disabled(creating)
-                        .accessibilityIdentifier("newSessionChat.syncPill")
-                        .accessibilityLabel(syncLocal
-                            ? "Sync: Local. Stays in Walnut, never sent to \(name)"
-                            : "Sync: \(name). Sent there once Walnut checked it is not private")
-                    }
-                }
-                if launchPillsInPillRow {
-                    launchPills
+                    .accessibilityIdentifier("newSessionChat.syncPill")
+                    .accessibilityLabel(syncLocal
+                        ? "Sync: Local. Stays in Walnut, never sent to \(name)"
+                        : "Sync: \(name). Sent there once Walnut checked it is not private")
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            if launchPillsInPillRow {
+                // Each its own key in the wrap, so the model key takes the next line alone.
+                launchModePill
+                launchModelPill
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     // MARK: - Model and mode, on the composer's bottom row
@@ -512,43 +511,51 @@ struct NewSessionChatView: View {
     /// menu opens above it (with the keyboard up the first tap puts the keyboard
     /// away; a SwiftUI `Menu` in this row lost taps over the keyboard, see
     /// `ComposerBar.plusButton`), and the model pill opens the "Select model"
-    /// sheet. Side by side, one line each: at the accessibility sizes they are
-    /// in the folder pill's row, which scrolls sideways, not in the composer.
+    /// sheet. Side by side, one line each: at the accessibility sizes (and beside
+    /// Save as todo) they are in the folder pill's row, which wraps, not in the composer.
     private var launchPills: some View {
-        // A pick while the create call runs would be a choice the launch already
-        // went without.
-        let state: ComposerControlsModel.PillState = creating ? .waiting : .ready
-        return ComposerBar.pillLayout(stacked: false) {
-            PillChip(
-                text: shownMode.label,
-                glyph: .chevron,
-                state: state,
-                wraps: false,
-                rawID: false,
-                menu: Self.modeMenu(selected: shownMode),
-                menuID: "launchMode",
-                accessibilityID: "newSessionChat.modePill",
-                accessibilityLabel: "Permission mode: \(shownMode.label)\(launchDefaults?.mode != nil && !modeTouched ? ", project default" : "")",
-                onSelect: { choice, _ in pick(choice) },
-                onPresentedChange: { _, _ in }
-            )
-            PillChip(
-                text: modelLabel,
-                glyph: .chevron,
-                state: state,
-                wraps: false,
-                rawID: false,
-                menu: Self.modelMenu(selected: shownModel, effort: effort),
-                menuID: "launchModel",
-                accessibilityID: "newSessionChat.modelPill",
-                accessibilityLabel: "Model: \(shownModel == nil ? "Default" : Self.modelLabel(shownModel))\(launchDefaults?.shownModel != nil && !modelTouched ? ", project default" : "")\(effort.map { ", effort \(ComposerControlsModel.effortLabel($0))" } ?? "")",
-                onSelect: { choice, _ in pick(choice) },
-                onPresentedChange: { _, _ in },
-                // The same "Select model" sheet as a live composer's model pill.
-                sheetTitle: ComposerModelPill.sheetTitle
-            )
-            .layoutPriority(1)
+        ComposerBar.pillLayout(stacked: false) {
+            launchModePill
+            launchModelPill
+                .layoutPriority(1)
         }
+    }
+
+    /// A pick while the create call runs would be a choice the launch already went without.
+    private var launchPillState: ComposerControlsModel.PillState { creating ? .waiting : .ready }
+
+    private var launchModePill: some View {
+        PillChip(
+            text: shownMode.label,
+            glyph: .chevron,
+            state: launchPillState,
+            wraps: false,
+            rawID: false,
+            menu: Self.modeMenu(selected: shownMode),
+            menuID: "launchMode",
+            accessibilityID: "newSessionChat.modePill",
+            accessibilityLabel: "Permission mode: \(shownMode.label)\(launchDefaults?.mode != nil && !modeTouched ? ", project default" : "")",
+            onSelect: { choice, _ in pick(choice) },
+            onPresentedChange: { _, _ in }
+        )
+    }
+
+    private var launchModelPill: some View {
+        PillChip(
+            text: modelLabel,
+            glyph: .chevron,
+            state: launchPillState,
+            wraps: false,
+            rawID: false,
+            menu: Self.modelMenu(selected: shownModel, effort: effort),
+            menuID: "launchModel",
+            accessibilityID: "newSessionChat.modelPill",
+            accessibilityLabel: "Model: \(shownModel == nil ? "Default" : Self.modelLabel(shownModel))\(launchDefaults?.shownModel != nil && !modelTouched ? ", project default" : "")\(effort.map { ", effort \(ComposerControlsModel.effortLabel($0))" } ?? "")",
+            onSelect: { choice, _ in pick(choice) },
+            onPresentedChange: { _, _ in },
+            // The same "Select model" sheet as a live composer's model pill.
+            sheetTitle: ComposerModelPill.sheetTitle
+        )
     }
 
     /// The pill's words: the model, then the picked effort as a live session's pill shows it.
@@ -665,13 +672,10 @@ struct NewSessionChatView: View {
             // for the folder) ahead of the pill's own words.
             Image(systemName: icon).font(.system(size: 10, weight: .semibold))
                 .accessibilityHidden(true)
-            Text(text).font(.caption.weight(.medium)).lineLimit(1)
+            Text(text).lineLimit(1)
         }
         .foregroundStyle(active ? palette.tint : .secondary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(active ? palette.tintSoft : Color(.tertiarySystemFill), in: Capsule())
-        .contentShape(Capsule())
+        .walnutPickerKey(active: active)
     }
 
     // MARK: - Derived
