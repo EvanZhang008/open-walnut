@@ -2798,7 +2798,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   /* Where a kept rule goes, on its own line under its rule, before the first click. */
   :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button > .perm-option-saved { flex: 1 0 100%; display: block; margin-top: 1px; font-size: var(--font-size-sm); opacity: 1; color: color-mix(in srgb, var(--fg-muted) 70%, var(--fg)); white-space: normal; overflow-wrap: break-word; }
   /* One line per choice: its name, then its rule cut to fit; what a second click does below. */
-  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; }
+  :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button { display: flex; flex-wrap: wrap; align-items: baseline; align-content: center; column-gap: 8px; }
   :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button > .perm-option-name { flex: 0 0 auto; }
   /* A rule reads on the line under its name, the same in every choice (as on the session card). */
   :is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button > .perm-option-sub { flex: 1 0 100%; min-width: 0; margin-top: 1px; }

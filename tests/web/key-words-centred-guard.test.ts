@@ -5,8 +5,10 @@
  * `align-items: flex-start` (so a wrapping choice keeps its number key on the first line) and the
  * phone's finger size made the row taller than its words.
  *
- * The class: every CSS rule on a key (a selector whose last part names a `btn` or `*-btn` class)
- * that pulls its items to the top. Each must also centre its line of items (`flex-wrap: wrap` with
+ * The class: every CSS rule on a key (a selector whose last part names a `btn` or `*-btn` class, or
+ * a `button`) that pulls its items to the top: `align-items: flex-start`, or `baseline` in a row
+ * that wraps (2026-11-26: the toast's and the notification panel's rules list at 1512 px, its
+ * words 5 px under the top and 9 px over the bottom of the 28 px row). Each must also centre its line of items (`flex-wrap: wrap` with
  * `align-content: center`), or the words leave the middle as soon as the key grows. A new rule that
  * does not fails here.
  */
@@ -31,7 +33,8 @@ function walk(dir: string, out: string[] = []): string[] {
 /** The last compound of each selector in a rule names a key. */
 const isKey = (selector: string) => selector.split(',').some((one) => {
   const last = one.trim().split(/\s+|>|\+|~/).filter(Boolean).pop() ?? '';
-  return /\.(btn|[\w-]+-btn)(?![\w-])/.test(last.replace(/::?[\w-]+(\([^)]*\))?/g, ''));
+  const bare = last.replace(/::?[\w-]+(\([^)]*\))?/g, '');
+  return /\.(btn|[\w-]+-btn)(?![\w-])/.test(bare) || /^button(?![\w-])/.test(bare);
 });
 
 /** Keys whose height is only their words (no min-height anywhere), so the words cannot leave the middle. */
@@ -44,7 +47,9 @@ export function topPulledKeys(css: string): string[] {
   const out: string[] = [];
   for (const m of css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const [sel, body] = [m[1]!.trim(), m[2]!];
-    if (!/align-items:\s*(flex-start|start)\b/.test(body) || !isKey(sel) || sel in OWN_HEIGHT) continue;
+    // Baseline too: in a wrapping row the line stretches to the key's height and baseline puts the words at its top.
+    const top = /align-items:\s*(flex-start|start)\b/.test(body) || (/align-items:\s*baseline\b/.test(body) && /flex-wrap:\s*wrap\b/.test(body))
+    if (!top || !isKey(sel) || sel in OWN_HEIGHT) continue;
     // In a column align-items places the words across, not up and down.
     if (/flex-direction:\s*column\b/.test(body)) continue;
     if (/align-content:\s*center\b/.test(body) && /flex-wrap:\s*wrap\b/.test(body)) continue;
@@ -63,5 +68,7 @@ describe("a key's words stay in its middle", () => {
     expect(topPulledKeys('.permission-request-btn.permission-request-choice { align-items: flex-start; }')).toHaveLength(1);
     expect(topPulledKeys('.a-btn.x { align-items: flex-start; flex-wrap: wrap; align-content: center; }')).toEqual([]);
     expect(topPulledKeys('.settings-row.choice { align-items: flex-start; }')).toEqual([]);
+    // 2026-11-26: the toast's and the panel's rules list at 1512 px, words 5 px under the top and 9 px over the bottom.
+    expect(topPulledKeys(':is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > button { display: flex; flex-wrap: wrap; align-items: baseline; }')).toHaveLength(1);
   });
 });

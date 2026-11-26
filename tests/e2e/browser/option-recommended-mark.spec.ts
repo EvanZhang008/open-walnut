@@ -233,3 +233,35 @@ test("a Claude prompt's list that names rules still fills its main action, Allow
   expect(await rows.first().locator('.permission-choice-label').evaluate((e) => getComputedStyle(e).color)).toBe(await rows.first().evaluate((e) => getComputedStyle(e).color))
   await expectWordsCentred(rows, '1512')
 })
+
+/** The gap above and below the words of each row, read from the text itself. */
+const textGaps = (rows: Locator) => rows.evaluateAll((els) => els.map((el) => {
+  const r = el.getBoundingClientRect()
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  const rects = [...range.getClientRects()].filter((x) => x.height > 0 && x.width > 0)
+  return { above: Math.min(...rects.map((x) => x.top)) - r.top, below: r.bottom - Math.max(...rects.map((x) => x.bottom)) }
+}))
+
+test("the notification center's rules list keeps each choice's words in its middle", async ({ page }) => {
+  await isolateUiPrefs(page)
+  const feed = [{
+    id: 'nfc-rules-mid', kind: 'permission', severity: 'warning', title: 'Bash', body: 'npm test',
+    timestamp: Date.now() - 5_000, read: false, dedupKey: 'perm:pw-rules-mid', requestId: 'pw-rules-mid',
+    toolName: 'Bash', sessionId: SID, input: { command: 'npm test' }, acpOptions: RULE_CHOICES,
+    host: 'nfc-host', sessionTitle: 'PW option rec session', project: 'Walnut',
+  }]
+  await page.routeWebSocket(/\/ws(?:\?|$)/, (ws) => { const server = ws.connectToServer(); server.onMessage((m) => { if (!String(m).includes('notification:')) ws.send(m) }) })
+  await page.route('**/api/notifications', (route) => route.fulfill({ json: { feed, unreadCount: 1 } }))
+  await page.route('**/api/notifications/mark-read', (route) => route.fulfill({ json: { unreadCount: 0 } }))
+  await page.goto('/')
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
+  await page.getByRole('button', { name: 'Notifications' }).click()
+  const panel = page.locator('.notification-panel')
+  const rows = panel.locator('.notification-perm-btn')
+  await expect(rows).toHaveCount(3)
+  await shot(panel, 'notification-rules')
+  for (const [i, g] of (await textGaps(rows)).entries()) {
+    expect(Math.abs(g.above - g.below), `panel row ${i + 1}: words ${g.above.toFixed(1)} px under the top, ${g.below.toFixed(1)} px over the bottom`).toBeLessThanOrEqual(2)
+  }
+})
