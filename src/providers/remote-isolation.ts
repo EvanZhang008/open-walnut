@@ -158,9 +158,9 @@ export function isolatedLayout(root: string): IsolatedLayout {
 export function isolatedProbeOpts(iso: Extract<RemoteIsolation, { mode: 'isolated' }>): DirProbeScriptOpts {
   const [first, second] = iso.roots
   const tmpDir = isolatedLayout(first).daemonDir
-  if (!second) return { tmpDir, noCache: true, guardParent: true }
+  if (!second) return { tmpDir, noCache: true, guardParent: true, preferTmp: true }
   const cacheSubdir = isolatedLayout(second).daemonDir.replace(/^\$HOME\//, '')
-  return { tmpDir, cacheSubdir, guardParent: true }
+  return { tmpDir, cacheSubdir, guardParent: true, preferTmp: true }
 }
 
 /** The root a daemon dir of the layout belongs to. */

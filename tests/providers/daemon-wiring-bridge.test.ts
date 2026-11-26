@@ -69,7 +69,10 @@ describe('daemon wiring: bridge-reachable commands and what stays off the bridge
     expect(standaloneSrc).toMatch(/image\.save: unsupported mediaType \(ENOTIMAGE\)/)
   })
   it('daemon: write image.save output ONLY into the fixed daemon-owned dir with a generated name', () => {
-    expect(standaloneSrc).toMatch(/IMAGE_SAVE_DIR = path\.join\(DAEMON_DIR, 'images', 'mobile'\)/)
+    // The dir is `<the server's images dir>/mobile` (serverImagesDir: the dir the server named, else
+    // one derived from the daemon's own fixed dirs), asked at each save, never from the command.
+    expect(standaloneSrc).toMatch(/const imageSaveDir = \(\): string => path\.join\(serverImagesDir\(\{ env: [\w.]+, daemonDir: DAEMON_DIR, homeDaemonDir: FALLBACK_DAEMON_DIR, sharedDir: PROD_DAEMON_DIR, ownsShared \}\), 'mobile'\)/)
+    expect(standaloneSrc).toMatch(/const IMAGE_SAVE_DIR = imageSaveDir\(\)/)
     // Filename = timestamp + random + allowlist-derived extension.
     expect(standaloneSrc).toMatch(/Date\.now\(\) \+ '-' \+ crypto\.randomBytes\(4\)\.toString\('hex'\) \+ '\.' \+ ext/)
     // The handler must never join caller input into the path: inside

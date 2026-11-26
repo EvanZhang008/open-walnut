@@ -55,6 +55,8 @@ export interface DaemonDirProbe {
   /** Raw `uname -s` (Linux, Darwin, ...): the ssh path installs a Linux daemon only. */
   os?: string
   home?: string
+  /** Set by a probe whose first choice is its dir in /tmp (DirProbeScriptOpts.preferTmp). */
+  prefer?: 'tmp'
   tmp: DirProbe
   cache: DirProbe
 }
@@ -90,6 +92,12 @@ export interface DirProbeScriptOpts {
    * parent is /tmp.
    */
   guardParent?: boolean
+  /**
+   * The dir in /tmp is the first choice and the one in HOME only where it cannot hold the daemon,
+   * as before the production daemon's files left the temp dir: a test server's own root, which is
+   * gone with the server and which nothing but that server looks for.
+   */
+  preferTmp?: boolean
   minFreeMb?: number
 }
 
@@ -106,6 +114,7 @@ export function buildDaemonDirProbeScript(opts: DirProbeScriptOpts = {}): string
     `T=${tmp}`,
     `C=${cache}`,
     `echo '${PROBE_HEADER}'`,
+    ...(opts.preferTmp ? ['echo "prefer=tmp"'] : []),
     'echo "arch=$(uname -m 2>/dev/null)"',
     'echo "os=$(uname -s 2>/dev/null)"',
     'echo "home=$HOME"',
@@ -159,8 +168,9 @@ export function buildDaemonDirProbeScript(opts: DirProbeScriptOpts = {}): string
     'tu=$(w_used "$T")',
     'cu=0; [ -n "$C" ] && cu=$(w_used "$C")',
     // The dir the daemon is going to use is checked first; the other one only when that one cannot hold it.
-    'first=C; [ -n "$C" ] || first=T',
-    'if [ "$tl" = 1 ]; then first=T; elif [ "$cl" = 1 ]; then first=C; elif [ "$tu" -gt "$cu" ] 2>/dev/null; then first=T; fi',
+    `first=${opts.preferTmp ? 'T' : 'C'}; [ -n "$C" ] || first=T`,
+    'if [ "$tl" = 1 ]; then first=T; elif [ "$cl" = 1 ]; then first=C; elif [ "$tu" -gt "$cu" ] 2>/dev/null; then first=T; '
+      + 'elif [ "$cu" -gt "$tu" ] 2>/dev/null; then first=C; fi',
     'ts=unchecked; tf=; cs=unchecked; cf=',
     'if [ "$first" = T ]; then',
     '  ts=$(w_status "$T"); tf=$(w_free "$T")',
@@ -212,6 +222,7 @@ export function parseDaemonDirProbe(output: string): DaemonDirProbe | null {
     ...(kv.get('arch') ? { arch: kv.get('arch') } : {}),
     ...(kv.get('os') ? { os: kv.get('os') } : {}),
     ...(kv.get('home') ? { home: kv.get('home') } : {}),
+    ...(kv.get('prefer') === 'tmp' ? { prefer: 'tmp' as const } : {}),
     tmp: { path: kv.get('tmp_path') || PROD_REMOTE_DAEMON_DIR, status: asStatus(kv.get('tmp')), freeMb: asMb(kv.get('tmp_free_mb')), live: kv.get('tmp_live') === '1', usedAt: asMb(kv.get('tmp_used')) ?? 0 },
     cache: { path: cachePath, status: asStatus(kv.get('cache')), freeMb: asMb(kv.get('cache_free_mb')), live: kv.get('cache_live') === '1', usedAt: asMb(kv.get('cache_used')) ?? 0 },
   }
@@ -257,6 +268,14 @@ export function chooseDaemonDir(probe: DaemonDirProbe, minFreeMb = MIN_DAEMON_FR
   const tmpUsed = probe.tmp.usedAt ?? 0
   const cacheUsed = probe.cache.usedAt ?? 0
   if (tmpUsed > cacheUsed && tmpUsable) return tmpChoice()
+  if (cacheUsed > tmpUsed && cacheUsable) return cacheChoice()
+  if (probe.prefer === 'tmp') {
+    // A test server's own root: its dir in /tmp, and the one in HOME only where that cannot hold the daemon.
+    if (tmpUsable && !low(probe.tmp.freeMb)) return tmpChoice()
+    if (cacheUsable && (!tmpUsable || !low(probe.cache.freeMb))) return cacheChoice()
+    if (tmpUsable) return tmpChoice()
+    return { ...tmpChoice(), unusable: true, reason: `${tmpPath} cannot be used (${probe.tmp.status})` }
+  }
   if (cacheUsed > 0 && cacheUsable) return cacheChoice()
   if (cacheUsable && !low(probe.cache.freeMb)) return cacheChoice()
   if (tmpUsable && (!cacheUsable || !low(probe.tmp.freeMb))) return tmpChoice(describeHomeProblem(probe.cache, minFreeMb))
@@ -284,7 +303,8 @@ export function displayDaemonDir(dir: string, home?: string): string {
 
 /** The preflight warning for a daemon that is not where it should be: on /tmp because the home dir cannot hold it, or nowhere. */
 export function daemonDirWarning(choice: DaemonDirChoice | null | undefined, home?: string): string | undefined {
-  if (!choice?.reason) return undefined
+  // The home dir is where the daemon belongs: never a warning, whatever reason a choice carries.
+  if (!choice?.reason || (choice.fallback && !choice.unusable)) return undefined
   const reason = choice.reason.replace(/(~\/\.cache\/open-walnut|\/tmp\/open-walnut)(?![\w`])/g, '`$1`')
   if (choice.unusable) return `Neither \`~/${FALLBACK_DAEMON_SUBDIR}\` nor \`/tmp/open-walnut\` can hold the session daemon (${reason}, and \`/tmp\` failed too).`
   return `Using \`${displayDaemonDir(choice.path, home)}\` for the session daemon because ${clause(reason)}. The system's temp cleanup removes files there that nobody touched for days.`

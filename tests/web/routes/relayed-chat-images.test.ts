@@ -24,6 +24,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-relayed-i
 
 import { IMAGES_DIR, MOBILE_STAGED_IMAGES_DIR } from '../../../src/constants.js'
 import { adoptRelayedImagePaths, isRelayedImageStagingPath, fitsImageSaveLimits } from '../../../src/web/routes/images.js'
+import { serverImagesDir } from '../../../src/providers/daemon-fs-write.js'
 
 /** 1×1 PNG. Real image bytes: sharp must accept them, magic bytes must match. */
 const TINY_PNG_BASE64 =
@@ -177,9 +178,17 @@ describe('the staging directory is the SAME dir on both sides of the bridge', ()
     expect(MOBILE_STAGED_IMAGES_DIR).toBe(path.join(IMAGES_DIR, 'mobile'))
 
     const root = path.resolve(import.meta.dirname, '../../..')
-    // The daemon's image.save lives in its fs write module, under the runtime's own DAEMON_DIR.
+    // The daemon's image.save lives in its fs write module: `<the server's images dir>/mobile`.
     const src = await fs.readFile(path.join(root, 'src/providers/daemon-fs-write.ts'), 'utf-8')
-    expect(src).toMatch(/IMAGE_SAVE_DIR = path\.join\(DAEMON_DIR, 'images', 'mobile'\)/)
+    expect(src).toMatch(/const imageSaveDir = \(\): string => path\.join\(serverImagesDir\(\{[^}]*\}\), 'mobile'\)/)
+    // The server names its images dir to the daemon it starts (the daemon's own dir is another
+    // one since its files left the temp dir), and the daemon then stages exactly there.
+    const local = await fs.readFile(path.join(root, 'src/providers/local-daemon.ts'), 'utf-8')
+    expect(local).toMatch(/WALNUT_DAEMON_IMAGES_DIR: IMAGES_DIR/)
+    const other = { daemonDir: '/home/me/.cache/open-walnut', homeDaemonDir: '/home/me/.cache/open-walnut', sharedDir: '/tmp/open-walnut', ownsShared: () => false }
+    expect(path.join(serverImagesDir({ env: { WALNUT_DAEMON_IMAGES_DIR: IMAGES_DIR }, ...other }), 'mobile')).toBe(MOBILE_STAGED_IMAGES_DIR)
+    // A daemon no server named a dir to: beside its own files, as before the move.
+    expect(serverImagesDir({ env: {}, ...other, daemonDir: '/tmp/x' })).toBe(path.join('/tmp/x', 'images'))
     const runtime = await fs.readFile(path.join(root, 'src/providers/daemon-standalone.ts'), 'utf-8')
     expect(runtime).toMatch(/createDaemonFsWrite(?:<ServerWebSocket<WsData>>)?\(\{[^}]*\bDAEMON_DIR\b/)
   })

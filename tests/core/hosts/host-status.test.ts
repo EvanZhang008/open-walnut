@@ -237,16 +237,29 @@ describe('listStatusHosts', () => {
 
 describe('buildHostStatus: first-connect facts (runtime, daemon dir, credential kinds)', () => {
   const readiness = { checkedAt: AT, problems: [], fixes: [] } as unknown as import('../../../src/core/hosts/host-readiness.js').HostReadiness;
-  const fallbackDir = { path: '/home/builder/.cache/open-walnut', fallback: true, reason: '/tmp is read-only', freeMb: 4_000, home: '/home/builder' };
+  // The daemon's files belong in the home dir; a host whose home cannot hold them keeps them in /tmp, and says so.
+  const homeDir = { path: '/home/builder/.cache/open-walnut', fallback: true, freeMb: 4_000, home: '/home/builder' };
+  const fallbackDir = { path: '/tmp/open-walnut', fallback: false, reason: '~/.cache/open-walnut is read-only', freeMb: 4_000, home: '/home/builder' };
+  const cleanup = "The system's temp cleanup removes files there that nobody touched for days.";
 
   it('says which runtime the daemon ended up on and where its files live', () => {
-    const s = buildHostStatus('devbox', devbox, state('connected', { runtime: 'binary', daemonDir: fallbackDir }), undefined, AT, readiness);
+    const s = buildHostStatus('devbox', devbox, state('connected', { runtime: 'binary', daemonDir: homeDir }), undefined, AT, readiness);
     expect(s.runtime).toBe('binary');
-    expect(s.daemonDir).toEqual({ path: '/home/builder/.cache/open-walnut', display: '~/.cache/open-walnut', fallback: true, reason: '/tmp is read-only', freeMb: 4_000 });
-    expect(s.warnings).toEqual(['Using `~/.cache/open-walnut` for the session daemon because `/tmp` is read-only.']);
+    expect(s.daemonDir).toEqual({ path: '/home/builder/.cache/open-walnut', display: '~/.cache/open-walnut', fallback: true, freeMb: 4_000 });
+    // The home dir is the daemon's place: nothing to warn about, even for a state an older server recorded with a reason.
+    expect(s.warnings).toBeUndefined();
+    expect(s.readiness).toBe(readiness);
+    const old = buildHostStatus('devbox', devbox, state('connected', { daemonDir: { ...homeDir, reason: '/tmp is read-only' } }), undefined, AT, readiness);
+    expect(old.warnings).toBeUndefined();
+  });
+
+  it('a home dir that cannot hold the daemon leaves it in /tmp, with a warning that names the temp cleanup', () => {
+    const s = buildHostStatus('devbox', devbox, state('connected', { runtime: 'binary', daemonDir: fallbackDir }), undefined, AT, readiness);
+    expect(s.daemonDir).toEqual({ path: '/tmp/open-walnut', display: '/tmp/open-walnut', fallback: false, reason: '~/.cache/open-walnut is read-only', freeMb: 4_000 });
+    expect(s.warnings).toEqual([`Using \`/tmp/open-walnut\` for the session daemon because \`~/.cache/open-walnut\` is read-only. ${cleanup}`]);
     expect(s.readiness?.problems).toEqual([{
       kind: 'daemon_dir_fallback',
-      message: 'Big dev box: Using `~/.cache/open-walnut` for the session daemon because `/tmp` is read-only.',
+      message: `Big dev box: Using \`/tmp/open-walnut\` for the session daemon because \`~/.cache/open-walnut\` is read-only. ${cleanup}`,
       commands: [],
     }]);
   });

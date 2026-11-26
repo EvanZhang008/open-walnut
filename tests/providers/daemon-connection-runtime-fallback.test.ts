@@ -115,7 +115,8 @@ describe('daemon dir fallback threads through the connect', () => {
     const routes: Routes = { dirProbe: FALLBACK_PROBE, start: STARTED }
     const { conn, seen, starts } = setup(routes)
     await priv(conn).resolveRemoteDir()
-    expect(conn.remoteDirChoice).toEqual({ path: '/home/me/.cache/open-walnut', fallback: true, reason: '/tmp is read-only', freeMb: 150 })
+    // The home dir is the daemon's place: no reason to give, even with /tmp unusable.
+    expect(conn.remoteDirChoice).toEqual({ path: '/home/me/.cache/open-walnut', fallback: true, freeMb: 150 })
     expect(conn.remoteHome).toBe('/home/me')
     await priv(conn).deployAndStart()
     const start = starts[0]
@@ -141,7 +142,7 @@ describe('daemon dir fallback threads through the connect', () => {
     expect(seen.find((c) => c.includes('walnut-daemon-stop-confirmed'))).toContain("'/home/me/.cache/open-walnut/daemon.pid'")
   })
 
-  it('a healthy /tmp keeps the env-free start it always had', async () => {
+  it('a daemon left on /tmp (the home dir is nearly full) keeps the env-free start it always had', async () => {
     const probe = FALLBACK_PROBE.replace('tmp=read-only', 'tmp=ok').replace('cache=ok', 'cache=unchecked')
     const { conn, starts } = setup({ dirProbe: probe, start: STARTED })
     await priv(conn).resolveRemoteDir()
@@ -177,8 +178,16 @@ describe('daemon dir fallback threads through the connect', () => {
 describe('never a second daemon beside one that runs from the other dir', () => {
   const TMP_OK_PROBE = [
     'walnut-dir-probe v1', 'arch=x86_64', 'home=/home/me',
-    'tmp_path=/tmp/open-walnut', 'tmp_live=0', 'tmp=ok', 'tmp_free_mb=9000',
-    'cache_path=/home/me/.cache/open-walnut', 'cache_live=0', 'cache=unchecked',
+    // A daemon wrote its files in /tmp/open-walnut since the host booted: that dir is kept.
+    'tmp_path=/tmp/open-walnut', 'tmp_live=0', 'tmp_used=1790000000', 'tmp=ok', 'tmp_free_mb=9000',
+    'cache_path=/home/me/.cache/open-walnut', 'cache_live=0', 'cache_used=0', 'cache=unchecked',
+    'walnut-dir-probe-done',
+  ].join('\n')
+  /** A host nothing ran on: the home dir. */
+  const HOME_OK_PROBE = [
+    'walnut-dir-probe v1', 'arch=x86_64', 'home=/home/me',
+    'tmp_path=/tmp/open-walnut', 'tmp_live=0', 'tmp_used=0', 'tmp=unchecked', 'tmp_free_mb=9000',
+    'cache_path=/home/me/.cache/open-walnut', 'cache_live=0', 'cache_used=0', 'cache=ok', 'cache_free_mb=9000',
     'walnut-dir-probe-done',
   ].join('\n')
 
@@ -215,11 +224,30 @@ describe('never a second daemon beside one that runs from the other dir', () => 
     expect(starts).toEqual([])
     expect(deploys).toEqual([])
     expect(conn.remoteDaemonDir).toBe('/home/me/.cache/open-walnut')
-    expect(conn.remoteDirChoice).toMatchObject({ path: '/home/me/.cache/open-walnut', fallback: true, reason: 'a daemon started there earlier is still running' })
+    expect(conn.remoteDirChoice).toEqual({ path: '/home/me/.cache/open-walnut', fallback: true })
     expect(conn.remoteRuntime).toBe('bun')
     // The chosen dir (/tmp) is looked at first; the other production dir after it.
     const scan = seen.find((c) => c.includes('walnut-live none'))!
     expect(scan.indexOf("d='/tmp/open-walnut'")).toBeLessThan(scan.indexOf("d='/home/me/.cache/open-walnut'"))
+    conn.disconnect()
+  })
+
+  // The class of 2026-11-25 on a remote host: the probe saw no daemon in /tmp/open-walnut (its
+  // files were swept, or it is an older release's whose files the probe could not date), the
+  // scan finds it alive there: it keeps its dir, nothing is started in the home dir beside it.
+  it('probe picks the home dir, but a daemon is alive in /tmp/open-walnut: it is adopted, nothing is deployed', async () => {
+    const { conn, starts, deploys, seen } = connecting({
+      dirProbe: HOME_OK_PROBE,
+      liveScan: 'walnut-live dir=1 pid=4242 port=32200 runtime=binary',
+      start: STARTED,
+    })
+    await conn.connect()
+    expect(starts).toEqual([])
+    expect(deploys).toEqual([])
+    expect(conn.remoteDaemonDir).toBe('/tmp/open-walnut')
+    expect(conn.remoteDirChoice).toEqual({ path: '/tmp/open-walnut', fallback: false })
+    const scan = seen.find((c) => c.includes('walnut-live none'))!
+    expect(scan.indexOf("d='/home/me/.cache/open-walnut'")).toBeLessThan(scan.indexOf("d='/tmp/open-walnut'"))
     conn.disconnect()
   })
 })

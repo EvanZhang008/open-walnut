@@ -41,7 +41,7 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true })
 })
 
-function probe(opts: { writeTest?: boolean; minFreeMb?: number; tmpDir?: string; cacheDir?: string } = {}): { raw: string; parsed: DaemonDirProbe } {
+function probe(opts: { writeTest?: boolean; minFreeMb?: number; tmpDir?: string; cacheDir?: string; preferTmp?: boolean } = {}): { raw: string; parsed: DaemonDirProbe } {
   const raw = execFileSync('/bin/sh', ['-s'], {
     input: buildDaemonDirProbeScript({ tmpDir, cacheDir, ...opts }),
     encoding: 'utf-8',
@@ -341,6 +341,59 @@ describe('daemon dir choice (pure)', () => {
     const parsed = parseDaemonDirProbe(raw)!
     expect(parsed.tmp.usedAt).toBe(0)
     expect(chooseDaemonDir(parsed).path).toBe('/home/me/.cache/open-walnut')
+  })
+
+  // A test server's isolated root (remote-isolation.ts isolatedProbeOpts): its dir in /tmp first, as
+  // before the production daemon's files left the temp dir (2026-11-26: the home-first rule moved
+  // every isolated daemon into HOME, where nothing removes it with its server).
+  describe('a probe that prefers its dir in /tmp', () => {
+    const iso: DaemonDirProbe = { ...base, prefer: 'tmp' }
+
+    it('uses it when it can hold the daemon, and the dir in HOME only when it cannot', () => {
+      expect(chooseDaemonDir(iso)).toEqual({ path: '/tmp/open-walnut', fallback: false, freeMb: 9000 })
+      expect(chooseDaemonDir({ ...iso, cache: { ...iso.cache, status: 'unchecked' } }).path).toBe('/tmp/open-walnut')
+      expect(chooseDaemonDir({ ...iso, tmp: { ...iso.tmp, status: 'not-owned' } })).toEqual({ path: '/home/me/.cache/open-walnut', fallback: true, freeMb: 4000 })
+      expect(chooseDaemonDir({ ...iso, tmp: { ...iso.tmp, freeMb: 50 } }).path).toBe('/home/me/.cache/open-walnut')
+      // Both low: no reason to move.
+      expect(chooseDaemonDir({ ...iso, tmp: { ...iso.tmp, freeMb: 50 }, cache: { ...iso.cache, freeMb: 50 } }).path).toBe('/tmp/open-walnut')
+    })
+
+    it('a daemon that runs, or ran last, in the other dir still keeps it', () => {
+      expect(chooseDaemonDir({ ...iso, cache: { ...iso.cache, live: true } }).path).toBe('/home/me/.cache/open-walnut')
+      expect(chooseDaemonDir({ ...iso, cache: { ...iso.cache, usedAt: 200 }, tmp: { ...iso.tmp, usedAt: 100 } }).path).toBe('/home/me/.cache/open-walnut')
+      // Written in the same second: its first choice.
+      expect(chooseDaemonDir({ ...iso, cache: { ...iso.cache, usedAt: 200 }, tmp: { ...iso.tmp, usedAt: 200 } }).path).toBe('/tmp/open-walnut')
+    })
+
+    it('neither usable: flagged, with what is wrong with its dir', () => {
+      const choice = chooseDaemonDir({ ...iso, tmp: { ...iso.tmp, status: 'not-owned' }, cache: { ...iso.cache, status: 'read-only' } })
+      expect(choice).toMatchObject({ path: '/tmp/open-walnut', unusable: true, reason: '/tmp/open-walnut cannot be used (not-owned)' })
+    })
+
+    it('executed: the dir in /tmp is made and used, and nothing is made in HOME', () => {
+      const { raw, parsed } = probe({ preferTmp: true })
+      expect(raw).toContain('prefer=tmp')
+      expect(parsed.prefer).toBe('tmp')
+      expect(parsed.tmp.status).toBe('ok')
+      expect(parsed.cache.status).toBe('unchecked')
+      expect(chooseDaemonDir(parsed)).toMatchObject({ path: tmpDir, fallback: false })
+      expect(fs.existsSync(path.join(root, 'home', '.cache'))).toBe(false)
+      // The production probe says nothing of a preference and goes to the home dir.
+      expect(probe().raw).not.toContain('prefer=')
+    })
+
+    it.skipIf(asRoot)('executed: a dir in /tmp that cannot be made sends it to HOME', () => {
+      fs.chmodSync(path.join(root, 'tmp'), 0o500)
+      const { parsed } = probe({ preferTmp: true })
+      expect(parsed.tmp.status).not.toBe('ok')
+      expect(parsed.cache.status).toBe('ok')
+      expect(chooseDaemonDir(parsed)).toMatchObject({ path: cacheDir, fallback: true })
+    })
+  })
+
+  it('the home dir is never warned about, whatever reason a choice carries', () => {
+    expect(daemonDirWarning({ path: '/home/me/.cache/open-walnut', fallback: true, reason: '/tmp is read-only' }, '/home/me')).toBeUndefined()
+    expect(daemonDirWarning({ path: '/home/me/.cache/open-walnut', fallback: true })).toBeUndefined()
   })
 
   it('neither dir usable: stays on /tmp, flagged, so the start error says why', () => {

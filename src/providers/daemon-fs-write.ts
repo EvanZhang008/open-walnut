@@ -112,10 +112,10 @@ export function createDaemonFsWrite<W>(deps: DaemonFsWriteDeps) {
     // Generated filename — timestamp + random; extension from the mediaType
     // allowlist. NEVER from caller input: no path component crosses the bridge.
     const filename = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + '.' + ext
-    const saveDir = imageSaveDir()
-    const filePath = path.join(saveDir, filename)
+    const IMAGE_SAVE_DIR = imageSaveDir()
+    const filePath = path.join(IMAGE_SAVE_DIR, filename)
     try {
-      await fs.promises.mkdir(saveDir, { recursive: true })
+      await fs.promises.mkdir(IMAGE_SAVE_DIR, { recursive: true })
       await fs.promises.writeFile(filePath, buf)
       logMsg('info', 'image.save: saved', { path: filePath, size: buf.length })
       return ok({ path: filePath, size: buf.length })
