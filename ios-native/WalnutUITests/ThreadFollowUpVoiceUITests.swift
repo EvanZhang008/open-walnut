@@ -48,33 +48,7 @@ final class ThreadFollowUpVoiceUITests: ThreadPushUITestCase {
         XCTAssertFalse(card(ids[index]).buttons["org.thread.followUp"].exists, "no Follow up button: the box is on the card")
         let follow = box(ThreadFollowUpID.of(ids[current], "input"))
         XCTAssertTrue(follow.waitForExistence(timeout: 15), "the card has no Follow up box")
-        // At accessibility text sizes the view switch is a menu, not the
-        // segmented control the older shared viewport helper looks for.
-        let list = el("org.threads")
-        let window = app.windows.firstMatch
-        let bar = app.tabBars.firstMatch
-        let viewSwitch = el("org.node.tabs")
-        let top = max(list.frame.minY, viewSwitch.frame.maxY) + 12
-        let bottom = (bar.exists ? bar.frame.minY : window.frame.maxY - 20) - 12
-        for _ in 0..<24 {
-            let frame = follow.frame
-            if frame.minY >= top && frame.maxY <= bottom { break }
-            let below = frame.maxY > bottom
-            let gap = below ? frame.maxY - bottom : top - frame.minY
-            // A full-height swipe overshoots the button and oscillates past it.
-            let distance = min(220, max(35, gap + 24))
-            let fromY = below ? bottom - 45 : top + 45
-            let toY = below ? fromY - distance : fromY + distance
-            // Coordinates are screen points. The accessibility container's
-            // normalized origin can be the content origin, above the viewport.
-            app.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: window.frame.midX, dy: fromY))
-                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: .zero)
-                    .withOffset(CGVector(dx: window.frame.midX, dy: toY)),
-                    withVelocity: .slow, thenHoldForDuration: 0.3)
-        }
-        XCTAssertGreaterThanOrEqual(follow.frame.minY, top, "the Follow up box must clear the sticky header")
-        XCTAssertLessThanOrEqual(follow.frame.maxY, bottom, "the Follow up box must clear the tab bar")
+        reachFollowUp(ids[index])
         let mic = box("voice-mic.thread-follow-up")
         XCTAssertTrue(mic.waitForExistence(timeout: 5))
         XCTAssertTrue(mic.isHittable)

@@ -165,9 +165,34 @@ struct LetterReplyField: UIViewRepresentable {
 /// The reply field's text view: Paste with pictures on the clipboard attaches
 /// them beside the reply (`LetterReplyField.onPasteImages`), as pasting into the
 /// web console's reply box does; words on the clipboard paste as words.
-final class PictureTextView: UITextView {
+///
+/// Focused inside a page's scroll view (a thread card's Follow up box), it keeps its bottom above
+/// the keyboard (`KeyboardReveal`): when it takes the focus, when the keyboard comes up or moves,
+/// and when it grows a line while the user types.
+final class PictureTextView: UITextView, KeyboardRevealing {
     private var onPasteImages: (([UIImage]) -> Void)? {
         (delegate as? LetterReplyField.Coordinator)?.parent.onPasteImages
+    }
+    private var laidOutHeight: CGFloat = 0
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { KeyboardReveal.track() }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        // A keyboard already up (another box had it) sends no new frame: reveal once the focus moved.
+        if became { DispatchQueue.main.async { [weak self] in if let self { KeyboardReveal.reveal(self) } } }
+        return became
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.height != laidOutHeight else { return }
+        laidOutHeight = bounds.height
+        // Grown (or shrunk) while focused: moved after this layout pass, never inside it.
+        if isFirstResponder { DispatchQueue.main.async { [weak self] in if let self { KeyboardReveal.reveal(self) } } }
     }
 
     override func paste(_ sender: Any?) {
