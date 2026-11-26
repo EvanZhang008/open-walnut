@@ -8,7 +8,7 @@
  * model is never called here (the per-reply call and its dedupe: tests/e2e/thread-answered-check.test.ts).
  */
 import { describe, expect, it } from 'vitest'
-import { emptyThreads, fileMessage, normalizeThreads, setAnswers, updateThread, type ThreadAnswer, type ThreadsFile } from '../../../src/core/org/threads-model.js'
+import { emptyThreads, fileMessage, normalizeThreads, setAnswers, THREAD_TITLE_MAX, updateThread, type ThreadAnswer, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 import { expandAnswerRefs, storedMessages } from '../../../src/core/org/thread-answer-refs.js'
 import {
   answerCandidates, answeredJudgeInput, markAnswered, markAnsweredGroup, readAnsweredList, readByNode, replyKey, replyProse, turnReply, JUDGED_REOPEN_MS, LIST_MAX, REPLY_MAX,
@@ -232,6 +232,48 @@ describe('the write', () => {
     expect(listedForHim(r.file.threads).map((x) => x.id)).toEqual([w.thread])
     expect(cardView(t).summary).toMatchObject({ by: 'walnut', from: 'answer' })
     expect(cardView(t).summary.text).not.toBe('No answer yet')
+  })
+
+  it('the one thread is titled by every question it holds, and stays for the node to title unless it wrote them all', () => {
+    const both = `${REAL} The bike ride to the north fence takes about forty minutes.`
+    const merge = (f: ThreadsFile, ids: string[]) => markAnsweredGroup(f, ids, reply(both, 20), at(21), at(19)).file.threads[0]
+    // Two questions under Walnut's stand-in titles: both named in the order he asked, still untitled.
+    const w = working()
+    const b = ask(w.f, Q_BIKE, 5)
+    const plain = merge(b.file, [b.thread.id, w.thread])
+    expect(plain.title).toBe(`${Q_TRAIN} \u00b7 ${Q_BIKE}`)
+    expect(plain.titled).toBeUndefined()
+    // The node titled both: its two titles, and nothing more is asked of it.
+    let f = updateThread(b.file, w.thread, { title: 'Saturday train to the coast' }, `task:${NODE}`, at(6)).file
+    f = updateThread(f, b.thread.id, { title: 'Bike ride to the north fence' }, `task:${NODE}`, at(6)).file
+    expect(merge(f, [w.thread, b.thread.id])).toMatchObject({ title: 'Saturday train to the coast \u00b7 Bike ride to the north fence', titled: true })
+    // The node titled only the kept one: the card names both, and the node is asked for a title again.
+    const half = merge(updateThread(b.file, w.thread, { title: 'Saturday train to the coast' }, `task:${NODE}`, at(6)).file, [w.thread, b.thread.id])
+    expect(half.title).toBe(`Saturday train to the coast \u00b7 ${Q_BIKE}`)
+    expect(half.titled).toBeUndefined()
+    // Titles that say the same are named once, and the title is left as it was.
+    let same = updateThread(b.file, w.thread, { title: 'Weekend trip' }, `task:${NODE}`, at(6)).file
+    same = updateThread(same, b.thread.id, { title: 'weekend  trip' }, `task:${NODE}`, at(6), undefined, { line: true }).file
+    expect(merge(same, [w.thread, b.thread.id])).toMatchObject({ title: 'Weekend trip', titled: true })
+  })
+
+  it('long titles share the room: every question is still named, within the title limit', () => {
+    const long = (word: string) => `${word} ${'and the long way round the orchard wall '.repeat(4)}`.trim()
+    const a = ask(emptyThreads(NODE), `${long('Train')}?`, 0)
+    const b = ask(a.file, `${long('Bike')}?`, 5)
+    const c = ask(b.file, `${long('Ferry')}?`, 8)
+    const t = markAnsweredGroup(c.file, [a.thread.id, b.thread.id, c.thread.id], reply(REAL, 20), at(21), at(19)).file.threads[0]
+    expect(t.title.length).toBeLessThanOrEqual(THREAD_TITLE_MAX)
+    const parts = t.title.split(' \u00b7 ')
+    expect(parts).toHaveLength(3)
+    expect(parts.map((p) => p.split(' ')[0])).toEqual(['Train', 'Bike', 'Ferry'])
+    // A thread that could not merge is not in the title.
+    const w = working()
+    const d = ask(w.f, Q_BIKE, 5)
+    const e = ask(d.file, 'Where can the fence posts be stored over winter?', 8)
+    const held = { ...e.file, threads: e.file.threads.map((x) => (x.id === e.thread.id ? { ...x, letter: { id: 'lt-0123456789ab' } as never } : x)) }
+    const kept = markAnsweredGroup(held, [e.thread.id, d.thread.id, w.thread], reply(REAL, 20), at(21), at(19)).file.threads.find((x) => x.id === w.thread)!
+    expect(kept.title).toBe(`${Q_TRAIN} \u00b7 ${Q_BIKE}`)
   })
 
   it('three questions, one that cannot merge (it holds a letter): two become one, the third is left as it was', () => {

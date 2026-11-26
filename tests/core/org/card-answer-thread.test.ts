@@ -22,9 +22,9 @@ import {
   emptyThreads, fileMessage, mergeThreads, SAME_CONVERSATION_MS, updateThread,
   type OrgThread, type ThreadsFile,
 } from '../../../src/core/org/threads-model.js'
-import { askAnswerText, parseCardAnswer } from '../../../src/core/user-status.js'
+import { askAnswerText, cardAnswerReadings, parseCardAnswer } from '../../../src/core/user-status.js'
 import { asksQuestion, isQuestionThread, setEachQuestion } from '../../../src/core/org/thread-question.js'
-import { cardAnswerThread } from '../../../src/core/org/card-answer-thread.js'
+import { cardAnswerFit, cardAnswerThread } from '../../../src/core/org/card-answer-thread.js'
 
 const TASK = 'bike-card-answer'
 const NODE = `task:${TASK}` as const
@@ -49,6 +49,71 @@ function letterThread(f: ThreadsFile, sec = 0): { f: ThreadsFile; id: string } {
 
 beforeEach(() => { setEachQuestion(true) })
 afterEach(() => { setEachQuestion(false) })
+
+/**
+ * The frame escapes nothing, so an ask (or his words) may hold the frame's own marks. Each row is one
+ * way they can: a new shape that breaks the reader goes here.
+ */
+describe('an ask that holds the frame\'s own marks still finds its thread, and his words stay his', () => {
+  const LARCH = 'Plant the larch'
+  const OAK = 'Plant the oak'
+  const options = [{ id: 'larch', label: LARCH }, { id: 'oak', label: OAK }]
+  const asks: Array<[string, string]> = [
+    ['a quoted name, then a colon', 'The tag on the sapling says "sold": which tree goes by the north gate?'],
+    ['two quoted names and a colon', 'Rename "old shed" to "tool shed": which tree shades it better?'],
+    ['an ask that reads like the frame itself', 'Answer to "which corner": which tree goes in the far corner of the orchard?'],
+    ['an ask that ends in a quote', 'Which tree goes beside the bench marked "wet paint"'],
+    ['a quote and a colon on a second line', 'The crew wrote "ready":\nwhich tree do they plant first by the pond?'],
+  ]
+  const answers: Array<[string, { picked?: string[]; words?: string }]> = [
+    ['a tapped option', { picked: ['oak'] }],
+    ['an option and words of his', { picked: ['oak'], words: 'before the frost' }],
+    ['words of his that hold a quote and a colon', { picked: ['oak'], words: 'the note says "north": check it' }],
+    ['typed words alone', { words: 'neither, wait for spring' }],
+  ]
+  /** A thread waiting on him with this ask, beside another decision of the same task with the same options. */
+  function asking(ask: string): { threads: OrgThread[]; id: string } {
+    const one = chat(emptyThreads(NODE), 'plan the orchard planting', 0)
+    const id = one.thread.id
+    let f = updateThread(one.file, id, { title: 'Orchard planting', ask, state: 'needs', user_kind: 'user_own', user_kind_why: 'he asked to pick the trees of his orchard himself', options: options.map((o) => ({ ...o })) }, 'agent', at(5)).file
+    const two = chat(f, 'and the hedge along the lane', 400)
+    f = updateThread(two.file, two.thread.id, { title: 'Hedge along the lane', ask: 'Which sapling starts the hedge along the lane this autumn?', state: 'needs', user_kind: 'user_own', user_kind_why: 'he asked to pick the saplings of his hedge himself', options: options.map((o) => ({ ...o })) }, 'agent', at(405)).file
+    return { threads: f.threads, id }
+  }
+
+  for (const [askName, ask] of asks) {
+    for (const [answerName, answer] of answers) {
+      it(`${askName}; ${answerName}`, () => {
+        const { threads, id } = asking(ask)
+        const text = askAnswerText({ summary: ask, kind: 'single', options }, answer)
+        const said = text.slice(`Answer to "${ask}": `.length)
+        const fit = cardAnswerFit(threads, text)
+        expect(fit?.thread.id, text).toBe(id)
+        expect(fit?.card).toEqual({ ask: ask.trim(), words: said })
+        expect(cardAnswerThread(threads, text)?.id).toBe(id)
+        // It stays a card answer for every reader, and never a question of his.
+        expect(parseCardAnswer(text)).not.toBeNull()
+        expect(asksQuestion(text)).toBe(false)
+      })
+    }
+  }
+
+  it('every reading of a message is listed, the shortest ask first, and no more than eight', () => {
+    expect(cardAnswerReadings('Answer to "a": b": c')).toEqual([{ ask: 'a', words: 'b": c' }, { ask: 'a": b', words: 'c' }])
+    expect(cardAnswerReadings(TAPPED)).toEqual([{ ask: ASK, words: FITTED }])
+    expect(cardAnswerReadings(`Answer to "x${'": y'.repeat(20)}`)).toHaveLength(8)
+    for (const text of ['', 'Answer to "no end', 'Answer to "x":', 'the Answer to "x": y']) expect(cardAnswerReadings(text), text).toEqual([])
+  })
+
+  it('a piece of the ask that fits too never takes the rest of the ask as his words', () => {
+    // The ask up to its inner quote has the same content words as a shorter thread ask: the whole quote still wins.
+    const ask = 'Which tree goes by the north gate says the tag "sold": the larch or the oak?'
+    const { threads, id } = asking(ask)
+    const fit = cardAnswerFit(threads, askAnswerText({ summary: ask, kind: 'single', options }, { picked: ['larch'] }))
+    expect(fit?.thread.id).toBe(id)
+    expect(fit?.card.words).toBe(LARCH)
+  })
+})
 
 describe('a card answer is never a question of his', () => {
   const frames: Array<[string, string]> = [

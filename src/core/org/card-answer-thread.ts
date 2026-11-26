@@ -19,12 +19,14 @@
  * The same content words come first among all open threads, then the reworded ask with his pick;
  * within each, a thread still waiting on him comes first and one already answered takes a resend of
  * the same answer. Two that fit alike are no answer (null): the message is filed as any other.
+ * An ask that holds `": ` itself reads more than one way (user-status.ts cardAnswerReadings): each
+ * reading is tried, and his words are what follows the ask the thread asks (readingFor).
  *
  * Readers: thread-capture.ts (the message is filed under it, never a new thread) and the send routes
  * (cardAnswerLetter: a live decision letter that thread holds is answered with his words, once,
  * through letter-follow-up.ts; only for a task that keeps Threads). Pure but for cardAnswerLetter's reads.
  */
-import { parseCardAnswer } from '../user-status.js';
+import { cardAnswerReadings, type CardAnswer } from '../user-status.js';
 import { askIsPartOf, askShape, sameAskReworded, sameAskText } from '../same-ask.js';
 import { answersOnly } from '../ask-decision.js';
 import { threadAskText } from './thread-task-ask.js';
@@ -81,20 +83,39 @@ function fits(t: AskingThread, ask: string, words: string): 'ask' | 'pick' | nul
 }
 
 /**
- * The thread a card answer goes to, or null (not a card answer, no thread asks it, or two do). Pure.
+ * The reading of the message that thread `t` asks in this `kind`, or null. An ask that holds `": `
+ * itself reads several ways (cardAnswerReadings): the one whose ask is the thread's own words wins,
+ * else the longest ask that still fits (the writer quotes the ask whole, so a shorter one that fits
+ * too is a piece of it, with the rest of the ask read as his words).
  */
-export function cardAnswerThread<T extends AskingThread>(threads: readonly T[], text: string): T | null {
-  const card = parseCardAnswer(text);
-  if (!card) return null;
+function readingFor(t: AskingThread, readings: readonly CardAnswer[], kind: 'ask' | 'pick'): CardAnswer | null {
+  const fitting = readings.filter((r) => fits(t, r.ask, r.words) === kind);
+  if (!fitting.length) return null;
+  const own = new Set(asksOf(t).map(flat));
+  return fitting.find((r) => own.has(flat(r.ask))) ?? fitting[fitting.length - 1];
+}
+
+/**
+ * The thread a card answer goes to with the reading of the message it asks (the ask he answered and
+ * his words), or null (not a card answer, no thread asks it, or two do). Pure.
+ */
+export function cardAnswerFit<T extends AskingThread>(threads: readonly T[], text: string): { thread: T; card: CardAnswer } | null {
+  const readings = cardAnswerReadings(text);
+  if (!readings.length) return null;
   const open = threads.filter((t) => !t.closed && !t.movedTo);
   for (const kind of ['ask', 'pick'] as const) {
-    const hits = open.filter((t) => fits(t, card.ask, card.words) === kind);
+    const hits = open.flatMap((thread) => { const card = readingFor(thread, readings, kind); return card ? [{ thread, card }] : []; });
     if (!hits.length) continue;
-    const waiting = hits.filter((t) => t.state === 'needs' || liveLetter(t));
+    const waiting = hits.filter((h) => h.thread.state === 'needs' || liveLetter(h.thread));
     const pool = waiting.length ? waiting : hits;
     return pool.length === 1 ? pool[0] : null;
   }
   return null;
+}
+
+/** The thread a card answer goes to, or null (cardAnswerFit). Pure. */
+export function cardAnswerThread<T extends AskingThread>(threads: readonly T[], text: string): T | null {
+  return cardAnswerFit(threads, text)?.thread ?? null;
 }
 
 /**
@@ -103,14 +124,13 @@ export function cardAnswerThread<T extends AskingThread>(threads: readonly T[], 
  * when the send is no card answer, the task keeps no Threads or its thread holds no letter. Never throws.
  */
 export async function cardAnswerLetter(taskId: string, text: string): Promise<{ threadId: string; words: string } | null> {
-  const card = parseCardAnswer(text);
-  if (!card) return null;
+  if (!cardAnswerReadings(text).length) return null;
   try {
     // A task with Threads turned off keeps its file: nothing in it takes his answer.
     const [{ getTask }, { keepsThreads }, { readThreads }] = await Promise.all([import('../task-manager.js'), import('./keeps-threads.js'), import('./threads-store.js')]);
     if (!keepsThreads(await getTask(taskId).catch(() => null))) return null;
-    const t = cardAnswerThread((await readThreads(taskId)).threads, text);
-    return t?.letter && !t.letter.off ? { threadId: t.id, words: card.words } : null;
+    const fit = cardAnswerFit((await readThreads(taskId)).threads, text);
+    return fit?.thread.letter && !fit.thread.letter.off ? { threadId: fit.thread.id, words: fit.card.words } : null;
   } catch {
     return null;
   }

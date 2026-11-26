@@ -540,7 +540,12 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   option alone is never proof (a task can hold two decisions with the same labels; review
   2026-11-26), and a bare yes or no counts only with the same content words. Within each kind a
   thread still waiting on him comes first; two that fit, or none, is no answer and the message is
-  filed as before. `thread-capture.ts` files it there, never a new thread, and the send routes answer a live
+  filed as before. The frame escapes nothing, so an ask that holds `": ` itself (a quoted name, then
+  a colon) can end at more than one place: the resolver tries every reading
+  (`cardAnswerReadings`, at most eight), takes the one whose ask is the thread's own words, else the
+  longest ask that still fits, and his words are what follows that one (review 2026-11-26: the ask
+  was cut at its first `": `, the rest of it read as his words, and the answer found no thread).
+  `thread-capture.ts` files it there, never a new thread, and the send routes answer a live
   decision letter that thread holds with his words, once (`letter-follow-up.ts`, with
   `threads_one_card`). Guard: `tests/core/org/card-answer-thread.test.ts` lists every file that
   builds the frame (the web's and the phone's) and fails on a new one;
@@ -562,7 +567,12 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   reply gets one locked write by Walnut. When it answers several of his questions, their threads
   become ONE (the user, on two cards holding one answer: "u need to combine them"): the oldest
   question's thread keeps and the others merge into it (`mergeThreads`, so his messages, tasks and
-  watch go with them); one that cannot merge (a letter or a choice it holds) is left as it was. On
+  watch go with them); one that cannot merge (a letter or a choice it holds) is left as it was (it
+  holds a decision for him, which this check never marks answered: the node's own line does). The
+  kept thread's title then names every question it holds, in the order he asked, each title cut to
+  its share of the limit (review 2026-11-26: a card holding two unrelated questions read as the
+  earliest alone); it stays Walnut's stand-in unless the node wrote every one of them, so the
+  status question still asks the node for one title that covers the card. On
   that thread the reply, marked `judged`, replaces the interim answer under each question it answers
   (an answer he wrote after stays his; the reply goes under his later words), the thread reads
   answered (his Done), and the summary written while it was out of his sight is cleared unless the
@@ -617,6 +627,9 @@ Newest first. State: fixed (with where), open (with who owns it next).
 
 | Date | What the user saw | Cause | State |
 |---|---|---|---|
+| 11-26 | Not seen by him (review): a card answer whose ask holds a quote then a colon opened a second card, and part of the ask rode his words into a letter's answer | the frame `Answer to "<ask>": <words>` was cut at its first `": ` | fixed: every reading is tried (`cardAnswerReadings`, `cardAnswerFit`); class table in `tests/core/org/card-answer-thread.test.ts`, one case on a real server in `tests/e2e/letter-thread-follow-up.test.ts` |
+| 11-26 | Not seen by him (review): one reply answered two unrelated questions, and the one card it left was titled by the first alone | the merge kept the oldest thread's title | fixed: the kept thread is titled by every question it holds (`titledForAll` in `thread-answered-check.ts`) |
+| 11-26 | Not seen by him (review): after a lost receipt, tapping the same option again sends the answer a second time (the second is filed under the same thread, no second card; the session reads it twice) | a tap from a card has no box key, so the send hook's "same words wait to go out" check (`sameWaitingSend`) never applies and the second tap gets a new user line | open, low: the web's send hook already resends a lost send by itself under the same user line; only a manual second tap doubles it. Owner: the Threads task |
 | 11-25 | Two cards for one matter on a task, and the old one stayed after he answered (his words, translated: "this thread is completely duplicated ... I already gave it the new update, and the old thread did not go away") | the task asked one decision three ways (its report's ask, a decision letter, the letter's thread); his tap on the report's ask reached the chat as a card answer naming no thread, the quoted ask's question mark read as his own question (`threads_each_question`), so it opened a thread no merge could take, and nothing told the letter it was answered | fixed: a card answer is never his question, is filed under the thread that asked, and answers the decision letter that thread holds (`card-answer-thread.ts`; see threads_each_question) |
 | 11-26 | Two cards on one subject from one node (the 7-day monitor's duplicate check) | he asked two questions on one subject a few minutes apart, past the join window; each was his own question, each was answered on its own card, and under the first each-question rule a question thread could never merge, answered or not | fixed by the rule's second version (an answered question merges with a thread on the same matter; `thread-question.ts` `ownQuestionRefusal`) and reported by `threads_audit` with the merge call; no code change of its own |
 | 11-26 | An ask he had answered came back on his card, options and all (found replaying one of his 11-25 cases on main) | a session wrote its ask itself (`task_report_set`, `ask_by_self`); he answered; the session replied and its turn end said "needs you" only for him to read the reply, with no ask and no decision named, and the rule that keeps a session's own ask over its turn-end reports (`sessions/own-ask-write.ts`) copied the answered ask back | fixed: once he wrote after the ask was first shown (`ask_since`), it is kept only when the turn end asks something in words; and a needs report with no ask no longer names the decision it asked before in the next turn's status question (`ask-decision.ts` `askDecisionQuestion`; `tests/core/own-ask-survives-turn-end.test.ts`) |

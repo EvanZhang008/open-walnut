@@ -207,6 +207,20 @@ describe('his words on a thread holding a letter answer the letter', () => {
     expect(rowsSince(before).some((m) => m.includes('Answer to "'))).toBe(false)
   })
 
+  it('a card answer whose ask holds a quote and a colon answers its letter with his words alone', async () => {
+    const subject = 'The gate sign reads "Members only": repaint the orchard gate sign before the fair?'
+    const letter = await decide(subject, true, ['Repaint it now', 'Leave it as it is'])
+    const threads = (await readThreads(vp.taskId)).threads.length
+    const before = queued.get(vp.sid)?.length ?? 0
+    const r = await rpc('session:send', { sessionId: vp.sid, message: `Answer to "${subject}": Repaint it now`, userUuid: randomUUID() })
+    expect(r.ok, r.error).toBe(true)
+    expect(r.result?.answeredLetter).toMatchObject({ id: letter, threadId: letterThreadId(letter) })
+    // His words are the label he tapped: no piece of the quoted ask rides them.
+    await expectAnsweredByWords(letter, 'Repaint it now', before)
+    expect((await readThreads(vp.taskId)).threads).toHaveLength(threads)
+    expect(rowsSince(before).some((m) => m.includes('before the fair?"'))).toBe(false)
+  })
+
   it('his answer from a card on the phone does the same, and a card answer no thread asks stays a chat message', async () => {
     const letter = await decide('Order the winter mulch for the vegetable beds?', true, ['Order ten bags', 'Skip this year'])
     const before = queued.get(vp.sid)?.length ?? 0

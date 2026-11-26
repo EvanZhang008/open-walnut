@@ -1095,16 +1095,36 @@ export function askAnswerText(form: Pick<AskForm, 'summary' | 'kind' | 'options'
 
 /** His answer from a card (askAnswerText): `Answer to "<ask>": <words>`. */
 export interface CardAnswer { ask: string; words: string }
-const CARD_ANSWER_RE = /^Answer to "([\s\S]*?)": ([\s\S]*)$/;
+const CARD_ANSWER_HEAD = 'Answer to "';
+const CARD_ANSWER_MID = '": ';
+/** How many ways one message is read at most (cardAnswerReadings). */
+const CARD_READINGS_MAX = 8;
+
+/**
+ * Every way a message reads as a card answer, the shortest ask first; none when it is not one. The
+ * writer (askAnswerText) quotes the ask as it is, so an ask that holds `": ` itself (a quoted name,
+ * then a colon) can end at each `": ` of the message, and so can his words. A reader that knows the
+ * asks he could be answering tries each (org/card-answer-thread.ts); one that only needs to know it
+ * is a card answer takes the first (parseCardAnswer). Pure.
+ */
+export function cardAnswerReadings(text: string): CardAnswer[] {
+  const t = text.trim();
+  if (!t.startsWith(CARD_ANSWER_HEAD)) return [];
+  const out: CardAnswer[] = [];
+  for (let i = t.indexOf(CARD_ANSWER_MID, CARD_ANSWER_HEAD.length); i >= 0 && out.length < CARD_READINGS_MAX; i = t.indexOf(CARD_ANSWER_MID, i + 1)) {
+    out.push({ ask: t.slice(CARD_ANSWER_HEAD.length, i).trim(), words: t.slice(i + CARD_ANSWER_MID.length).trim() });
+  }
+  return out;
+}
 
 /**
  * The card answer a message is, or null: the reader of askAnswerText's frame, beside its writer. The
  * ask is the agent's words, the rest his, so nothing in the ask is ever read as said by him (a
- * question mark in it is no question of his: org/thread-question.ts). Pure.
+ * question mark in it is no question of his: org/thread-question.ts). The ask ends at the first
+ * `": `: where the ask itself may hold one, read cardAnswerReadings. Pure.
  */
 export function parseCardAnswer(text: string): CardAnswer | null {
-  const m = CARD_ANSWER_RE.exec(text.trim());
-  return m ? { ask: m[1].trim(), words: m[2].trim() } : null;
+  return cardAnswerReadings(text)[0] ?? null;
 }
 
 /** The task's own line for the state it is in (StatusLine), from its current report. */
