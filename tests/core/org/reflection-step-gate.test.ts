@@ -115,7 +115,7 @@ describe('a correction that tells a session to use his browser', () => {
     const e = (await readDayEntries(vp.id, localDate(NOW)))![0]
     expect(e.gated?.steps).toContain('user_browser')
     expect(e.rule.kind).toBe('none')
-    expect(e.rule.text).toContain('the step check held it')
+    expect(e.rule.text).toContain('step_check_held')
     expect(e.rule.text).not.toContain('walnut browser')
     const { nightlyLine } = await import('../../../src/core/org/reflection/nightly.js')
     expect(nightlyLine(e)).toContain('held back by the step check')
@@ -226,8 +226,11 @@ describe('held corrections kept before the check existed', () => {
   it('the ones the session took up since are dropped, said in the record; a check that cannot be read sends them all', async () => {
     const items = [1, 2].map((i) => ({ taskId: worker.id, at: iso(60), date: localDate(NOW), entryAt: iso(60), text: `Point ${i}.`, checked: true as const }))
     const later = async () => [{ role: 'assistant', text: 'Answered point 1 in full.', timestamp: iso(10) }] as never
-    const r = await stillNeeded(items, 'sess-1', { readTranscript: later, callModel: async () => '{"done":[1]}' }, vp.id)
+    const r = await stillNeeded(items, 'sess-1', { readTranscript: later, callModel: async () => '{"done":[{"n":1,"quote":"Answered point 1 in full."}]}' }, vp.id)
     expect(r.keep.map((h) => h.text)).toEqual(['Point 2.'])
+    // A "done" with no words of LATER, or words LATER does not hold, is still needed.
+    expect((await stillNeeded(items, 'sess-1', { readTranscript: later, callModel: async () => '{"done":[1]}' }, vp.id)).keep).toHaveLength(2)
+    expect((await stillNeeded(items, 'sess-1', { readTranscript: later, callModel: async () => '{"done":[{"n":1,"quote":"Point 1 was fixed and shipped."}]}' }, vp.id)).keep).toHaveLength(2)
     expect((await stillNeeded(items, 'sess-1', { readTranscript: later, callModel: async () => 'x' }, vp.id)).keep).toHaveLength(2)
     expect((await stillNeeded(items, 'sess-1', { readTranscript: async () => [] as never, callModel: async () => '{"done":[1,2]}' }, vp.id)).keep).toHaveLength(2)
   })

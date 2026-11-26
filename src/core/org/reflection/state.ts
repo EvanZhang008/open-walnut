@@ -42,6 +42,8 @@ export interface ReflectionState {
   backfilled?: string[];
   /** Today's merge calls (guidance-merge.ts): at most MERGE_CALLS_PER_DAY_MAX. */
   merges?: { date: string; count: number };
+  /** Today's calls that merged two guidance lines to make room (guidance-compact.ts), and the lines they freed. */
+  compacts?: { date: string; count: number; freed: number };
   /** Lessons merged into a line (guidance-merge.ts), normalized, and the line that holds each now: the same lesson again needs no call. */
   mergedLessons?: Array<{ lesson: string; line: string }>;
   /** Failed tries of a dropped lesson the backfill has not settled yet (normalized lesson: count). */
@@ -64,6 +66,10 @@ export interface ReflectionState {
   stepChecked?: Record<string, { steps: string[]; why: string }>;
   /** Waiting lessons the step check held (normalized): never written, listed or taken up again. */
   stepHeld?: string[];
+  /** The step check's version its verdicts and held lessons were judged by (step-gate.ts GATE_VERSION). */
+  gateVersion?: number;
+  /** Held lessons with his own words, rewritten to ask first (step-gate.ts askFirstLesson), by the held one's normalized text: rewritten once. */
+  askFirst?: Record<string, string>;
   /** Guidance lines the step check held that the node was told about (normalized), once each. */
   linesHeldTold?: string[];
   /** The local date the guidance lines were last run through the step check (guidance-tidy.ts tellHeldLines): once a day. */
@@ -152,6 +158,7 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(Array.isArray(r.backfilled) ? { backfilled: r.backfilled.filter((s): s is string => typeof s === 'string').slice(-500) } : {}),
     ...(Array.isArray(r.backfillGaveUp) ? { backfillGaveUp: r.backfillGaveUp.filter((s): s is string => typeof s === 'string').slice(-500) } : {}),
     ...(r.merges?.date === today && Number.isFinite(r.merges.count) ? { merges: r.merges } : {}),
+    ...(r.compacts?.date === today && Number.isFinite(r.compacts.count) && Number.isFinite(r.compacts.freed) ? { compacts: r.compacts } : {}),
     ...(Array.isArray(r.mergedLessons) ? { mergedLessons: r.mergedLessons.filter((m): m is { lesson: string; line: string } => !!m && typeof m.lesson === 'string' && typeof m.line === 'string').slice(-500) } : {}),
     ...(r.aligned && Array.isArray(r.aligned.rules) ? { aligned: { rules: r.aligned.rules.filter((k): k is string => typeof k === 'string').slice(0, 1000), ...(Number.isFinite(r.aligned.short) ? { short: r.aligned.short } : {}) } } : {}),
     ...(r.aligns?.date === today && Number.isFinite(r.aligns.count) ? { aligns: r.aligns } : {}),
@@ -159,6 +166,8 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(typeof r.tidyAsked === 'string' ? { tidyAsked: r.tidyAsked } : {}),
     ...(r.stepChecked && typeof r.stepChecked === 'object' ? { stepChecked: r.stepChecked } : {}),
     ...(Array.isArray(r.stepHeld) ? { stepHeld: r.stepHeld.filter((s): s is string => typeof s === 'string').slice(-1000) } : {}),
+    ...(Number.isInteger(r.gateVersion) ? { gateVersion: r.gateVersion } : {}),
+    ...(r.askFirst && typeof r.askFirst === 'object' ? { askFirst: Object.fromEntries(Object.entries(r.askFirst as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string').slice(-300)) } : {}),
     ...(typeof r.linesChecked === 'string' ? { linesChecked: r.linesChecked } : {}),
     ...(Array.isArray(r.linesHeldTold) ? { linesHeldTold: r.linesHeldTold.filter((s): s is string => typeof s === 'string').slice(-500) } : {}),
     ...(Array.isArray(r.covered) ? { covered: r.covered.filter((s): s is string => typeof s === 'string').slice(-1000) } : {}),

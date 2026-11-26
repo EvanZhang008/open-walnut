@@ -30,7 +30,7 @@ const vp = { id: 'vp-marina', title: 'Marina VP', project: 'Marina', org_role: '
 const BEFORE = 'Shipped the new card layout.'
 
 const finding = JSON.stringify({ verdict: 'bad_decision', why: 'x', finding: {
-  kind: 'regression', session_quote: BEFORE, user_quote: 'used to show', rule_quote: '', what_went_wrong: 'The card lost its reply.',
+  kind: 'unchecked_claim', session_quote: BEFORE, user_quote: 'used to show', rule_quote: '', what_went_wrong: 'The card lost its reply.',
   correct_action: 'Bring the reply back.', already_fixed: false, correction: 'Bring the reply back under the card.',
   guidance: '', same_as: 0, skill: null,
 } })
@@ -129,7 +129,9 @@ describe('every correction says when he wrote what it quotes', () => {
   it('the quote is dated by the message that holds it, not by the end of the talk', () => {
     const c = { to: iso(1), messages: [{ id: 'a', at: iso(30), text: 'the reply used to show' }, { id: 'b', at: iso(1), text: 'so?' }] }
     expect(quoteTimeOf(c, 'used to show')).toBe(iso(30))
-    expect(quoteTimeOf(c, 'not there')).toBe(iso(1))
+    // Not in the moment's messages: the context's message that holds it dates it; in none, no time is claimed.
+    expect(quoteTimeOf(c, 'said on monday', [{ at: iso(3000), text: 'I said on monday to keep it' }])).toBe(iso(3000))
+    expect(quoteTimeOf(c, 'not there')).toBe('')
   })
 
   it('no file that builds a correction quotes him undated (source guard)', async () => {
@@ -159,7 +161,7 @@ describe('one about words hours old is checked against what happened since', () 
 
   it('done since (his pick, the task it went to): not sent; the check read his later words, the card and the task', async () => {
     const after = [{ id: 'tm-aa0020', at: iso(old - 30), text: 'ok pick design 3', sid: 'sess-vp', answer: { text: 'Design 3 is live.', at: iso(old - 31) } }]
-    const { d, sent, checks } = deps(oneMoment(old, { tasks: ['t-design'], reply: 'Design 3 shipped.', state: 'answered' }, after), '{"done":[1]}', {
+    const { d, sent, checks } = deps(oneMoment(old, { tasks: ['t-design'], reply: 'Design 3 shipped.', state: 'answered' }, after), '{"done":[{"n":1,"quote":"ok pick design 3"}]}', {
       taskOutcome: async (id) => ({ id, title: 'Ten header designs', phase: 'COMPLETE', summary: 'He picked design 3; it is live.' }),
     })
     await reflectForNode(vp, 'Marina VP', [vp], d)
@@ -182,5 +184,58 @@ describe('one about words hours old is checked against what happened since', () 
       expect(sent).toHaveLength(1)
       expect(sent[0].text).toContain(`This is about his words of ${iso(old).slice(0, 16).replace('T', ' ')} UTC (3 hours ago), not a new ask`)
     }
+  })
+})
+
+describe('review of e1b20d7bf1', () => {
+  const defect = JSON.stringify({ verdict: 'bad_decision', why: 'x', finding: {
+    kind: 'regression', session_quote: BEFORE, user_quote: 'used to show', rule_quote: '', what_went_wrong: 'The card lost its reply.',
+    correct_action: 'Bring the reply back.', already_fixed: false, correction: 'Bring the reply back under the card.', guidance: '', same_as: 0, skill: null,
+  } })
+
+  it('a defect of the product is not settled by a closed thread: still checked, and sent when not done', async () => {
+    const old = STALE_MOMENT_MS / 60_000 + 60
+    const { d, sent, checks } = deps(oneMoment(old, { closed: true }, [{ id: 'tm-aa0020', at: iso(old - 20), text: 'thanks', sid: 'sess-vp' }]))
+    await reflectForNode(vp, 'Marina VP', [vp], { ...d, callModel: async (system, user) => { if (system === TAKEN_UP_SYSTEM) { checks.push(user); return '{"done":[]}' } return defect } })
+    expect(checks).toHaveLength(1)
+    expect(sent).toHaveLength(1)
+  })
+
+  it('a quote the judge read in an earlier message of the thread is dated by that message, and the correction says it is old', async () => {
+    // His message now holds no quote; the one four messages back (two days ago) does.
+    const threads: ReflectionThread[] = [{ id: 'th-aa0001', title: 'Pier page', messages: [
+      { id: 'tm-aa0000', at: iso(48 * 60), text: 'the reply under the card used to show', sid: 'sess-vp', answer: { text: BEFORE, at: iso(48 * 60 - 1) } },
+      { id: 'tm-aa0010', at: iso(10), text: 'The reply is broken again, it used to work.', sid: 'sess-vp', answer: { text: BEFORE, at: iso(9) } },
+    ] }]
+    const { d, sent } = deps(threads)
+    await reflectForNode(vp, 'Marina VP', [vp], d)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].text).toContain(`The user said this at ${iso(48 * 60).slice(0, 16).replace('T', ' ')} UTC (2 days ago)`)
+    expect(sent[0].text).toContain('not a new ask')
+  })
+
+  it('outside a thread, his later words to the task are read too', async () => {
+    const worker = { id: 'w-1', title: 'Dock page', project: 'Marina', phase: 'IN_PROGRESS', session_id: 'sess-1', parent_task_id: vp.id } as Task
+    const old = STALE_MOMENT_MS / 60_000 + 60
+    const msgs = [{ id: 'm-1', at: iso(old), text: 'The reply under the card used to show.' }, { id: 'm-2', at: iso(30), text: 'ok it is good now, thanks' }]
+    const { d, sent, checks } = deps([], '{"done":[{"n":1,"quote":"ok it is good now, thanks"}]}', {
+      readMessages: async (id) => (id === worker.id ? msgs : []),
+      readTranscript: async () => [{ role: 'assistant', text: BEFORE, timestamp: iso(old + 5) }, { role: 'user', text: msgs[0].text, timestamp: msgs[0].at, sentBy: 'person' }] as never,
+    })
+    await reflectForNode(vp, 'Marina VP', [vp, worker], d)
+    expect(checks.some((c) => c.includes('ok it is good now, thanks'))).toBe(true)
+    expect(sent.filter((s) => s.task === worker.id)).toHaveLength(0)
+  })
+
+  it('no send text puts his quote in by hand: only datedQuoteLine does (source guard)', async () => {
+    const dir = path.join(process.cwd(), 'src/core/org/reflection')
+    const offenders: string[] = []
+    for (const f of await fs.readdir(dir)) {
+      // records.ts and nightly.ts write the day record and the nightly note, dated by saidAt; judge.ts reads quotes.
+      if (!f.endsWith('.ts') || ['records.ts', 'nightly.ts', 'judge.ts', 'moment-age.ts'].includes(f)) continue
+      const src = await fs.readFile(path.join(dir, f), 'utf-8')
+      for (const m of src.matchAll(/\$\{[^}]*user_quote[^}]*\}/g)) offenders.push(`${f}: ${m[0]}`)
+    }
+    expect(offenders).toEqual([])
   })
 })

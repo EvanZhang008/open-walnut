@@ -264,6 +264,18 @@ export function cardText(head: string, words: string, options: readonly CardOpti
   return [head, words.trim() || '(no summary written: the card shows only a line Walnut took from the latest answer)', buttons].filter(Boolean).join('\n');
 }
 
+/** A task's own ask in Needs you as he reads it (its one-click form when it has one), or null when none waits. Pure. */
+export function statusAskText(r: Task['user_status']): string | null {
+  if (r?.state !== 'needs' || r.source !== 'session') return null;
+  const form = r.askForm;
+  if (form) return cardText('', [form.summary, form.more ?? ''].filter(Boolean).join('\n\n'), form.options, form.kind);
+  return r.ask?.trim() ? cardText('', r.ask, undefined) : null;
+}
+
+/** A thread card waiting on him as he reads it, or null when it waits on him no more. Pure. */
+export const threadCardText = (th: ReflectionThread): string | null =>
+  (th.state === 'needs' && !th.closed ? cardText(`Thread card: ${th.title}`, th.reply ?? '', th.options) : null);
+
 /**
  * A thread card of the node or a lead in its team waiting on his decision (state needs): judged once
  * per decision (its ask id; with none, its summary and buttons), for whether a reader who never saw the work
@@ -297,7 +309,7 @@ async function threadCardCandidates(owner: Task, p: Pass): Promise<void> {
     p.out.push({
       key: j.key, signal: 'needs_ask', task: owner, sessionId, ...(sessionId ? {} : { hold: 'no_asking_session' as const }), messages: [], from: j.at, to: j.at, cardId: th.askId ?? 'card',
       thread: { id: th.id, title: th.title }, context: threadTurns([...th.messages].sort((a, b) => a.at.localeCompare(b.at)), th.messages.length - 1, 4),
-      ask: { text: cardText(`Thread card: ${th.title}`, th.reply ?? '', th.options) }, evidence: j.evidence, why: 'needs_ask (a thread card waiting on him)',
+      ask: { text: threadCardText(th)! }, evidence: j.evidence, why: 'needs_ask (a thread card waiting on him)',
     });
   }
 }
@@ -339,7 +351,7 @@ async function needsAskCandidate(task: Task, node: Task, all: readonly Task[], p
   const evidence = [...own.map((m) => ({ id: m.id, at: m.at, text: m.text })), ...inThreads]
     .sort((a, b) => a.at.localeCompare(b.at)).slice(-EVIDENCE_MAX)
     .map((m) => ({ ...m, text: m.text.length > EVIDENCE_TEXT_MAX ? `${m.text.slice(0, EVIDENCE_TEXT_MAX)} [...]` : m.text }));
-  const text = form ? cardText('', [form.summary, form.more ?? ''].filter(Boolean).join('\n\n'), form.options, form.kind)
+  const text = form ? statusAskText(r)!
     : card ? cardText(`Thread card: ${card.title}`, card.reply || words, card.options) : cardText('', words, undefined);
   const sessionId = r.askSessionId ?? '';
   const at = askAt ?? new Date(p.now).toISOString();

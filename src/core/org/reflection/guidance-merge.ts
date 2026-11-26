@@ -23,7 +23,7 @@ import { screenSkillWrite } from '../../memory-safety.js';
 import { addGuidance, appendDayNote, dayNoteSaid, readDayEntries, readGuidance, reflectionDayFileOf, replaceGuidanceLine, type GuidanceLine } from './records.js';
 import { localDate, readReflectionState, updateReflectionState, type ReflectionState } from './state.js';
 import { guidanceRoomLeft } from './team-guidance-hint.js';
-import { checkCached, checkStepOf, verdictOf, type StepCheck } from './step-gate.js';
+import { askFirstLesson, checkCached, checkStepOf, verdictOf, type StepCheck } from './step-gate.js';
 
 /** Merge calls a node may spend a day (apart from the judge's budget), and the backfill's share of them. */
 export const MERGE_CALLS_PER_DAY_MAX = 12;
@@ -136,6 +136,8 @@ export interface MergeDeps {
   callModel: CallModel; replyLanguage: () => Promise<string | null>;
   /** The step check (step-gate.ts): a lesson kept before it existed passes it before the backfill writes it. */
   checkStep?: StepCheck;
+  /** Make room in a full guidance while lessons wait (guidance-compact.ts compactGuidance); answers the lines freed. */
+  makeRoom?: (waiting: number) => Promise<number>;
 }
 
 /** The line a lesson merged before now sits in (its number), or 0 when none holds it any more. */
@@ -197,7 +199,7 @@ export async function mergeGuidance(
   return r;
 }
 
-const DROPPED_TEXT_RE = /^not added \((?:day_full|file_full|step_check_failed)\b/;
+const DROPPED_TEXT_RE = /^not added \((?:day_full|file_full|step_check_failed|step_check_held)\b/;
 const DROPPED_MD_RE = /^- Rule: none \(not added \((?:day_full|file_full)(?:; not merged: .*?)?\): (.+)\)\s*$/;
 
 /**
@@ -258,24 +260,44 @@ export async function backfillDropped(node: Task, nodeName: string, deps: MergeD
   const todo = (await droppedLessons(node.id, nowMs)).filter((l) => !done.has(normalizeForQuote(l.text)) && !state.removed.includes(normalizeForQuote(l.text)) && !covered.has(normalizeForQuote(l.text)));
   const date = localDate(nowMs);
   await noteLeaving(node, nodeName, todo, nowMs);
+  // A full guidance makes its own room first: the lessons below go in after it (2026-11-26: the VPs compacted by hand).
+  if (todo.length) await deps.makeRoom?.(todo.length).catch(() => 0);
   const check = checkStepOf(deps);
   let taken = 0;
   for (const l of todo.slice(0, BACKFILL_PER_PASS)) {
     const key = normalizeForQuote(l.text);
     // A lesson that would have sessions use his browser, accounts or name, or write in production or a
-    // cloud account, is never written: kept as held by the step check, said in the day's record. One the
+    // cloud account, is never written as it is. One that quotes him is rewritten to ask first and checked
+    // again (his words are never dropped for a step); the others are held, said in the day's record. One the
     // check cannot judge now waits for a later pass. Each lesson is asked about once (checkCached).
     const g = await checkCached(node.id, l.text, check, nowMs);
     if (verdictOf(g) === 'failed') continue;
+    let text = l.text;
     if (g.steps.length) {
-      await updateReflectionState(node.id, (s) => { s.stepHeld = [...new Set([...(s.stepHeld ?? []), key])].slice(-1000); }, nowMs);
-      await appendDayNote(node.id, nodeName, date, `A dropped lesson was not taken up: the step check held it (${g.steps.join(', ')}).`, nowMs).catch(() => {});
-      continue;
+      // Rewritten once: kept on the state, so a lesson that waits for room is not rewritten every pass.
+      const rewritten = !l.own ? null : state.askFirst?.[key]
+        ?? await askFirstLesson(l.text, g.steps, deps.callModel, (t, id) => checkCached(id, t, check, nowMs), node.id);
+      if (rewritten && !state.askFirst?.[key]) {
+        await updateReflectionState(node.id, (s) => { s.askFirst = { ...(s.askFirst ?? {}), [key]: rewritten }; }, nowMs);
+        await appendDayNote(node.id, nodeName, date, `A dropped lesson with the user's own words was held by the step check (${g.steps.join(', ')}) and is taken up rewritten to ask first: "${rewritten}".`, nowMs).catch(() => {});
+      }
+      if (!rewritten) {
+        // His words: tried again on later passes, held only after BACKFILL_TRIES_MAX rewrites that failed.
+        const tries = (state.backfillTries?.[key] ?? 0) + 1;
+        if (l.own && tries < BACKFILL_TRIES_MAX) {
+          await updateReflectionState(node.id, (s) => { s.backfillTries = { ...(s.backfillTries ?? {}), [key]: tries }; }, nowMs);
+          continue;
+        }
+        await updateReflectionState(node.id, (s) => { s.stepHeld = [...new Set([...(s.stepHeld ?? []), key])].slice(-1000); }, nowMs);
+        await appendDayNote(node.id, nodeName, date, `A dropped lesson was not taken up: the step check held it (${g.steps.join(', ')})${l.own ? `, and it could not be rewritten to ask first; its words: "${l.text.slice(0, 300)}"` : ''}.`, nowMs).catch(() => {});
+        continue;
+      }
+      text = rewritten;
     }
     const addedToday = (await readGuidance(node.id)).filter((x) => x.date === date).length;
-    const line = { text: l.text, from: `reflection of ${l.date}`, date };
+    const line = { text, from: `reflection of ${l.date}`, date };
     const added = await addGuidance(node.id, nodeName, line, { removed: state.removed, addedToday });
-    if (added === 'added') await updateReflectionState(node.id, (s) => { s.written.push(key); }, nowMs);
+    if (added === 'added') await updateReflectionState(node.id, (s) => { s.written.push(normalizeForQuote(text)); }, nowMs);
     const merged = added === 'day_full' || added === 'file_full' ? await mergeGuidance(node, nodeName, line, deps, nowMs, BACKFILL_CALLS_PER_DAY_MAX) : null;
     // No call was made: the lesson waits for a later pass (a new day, or room the user freed), no try spent.
     if (merged?.kind === 'failed' && (merged.why === MERGES_SPENT || merged.why === ROOM_SPENT)) break;

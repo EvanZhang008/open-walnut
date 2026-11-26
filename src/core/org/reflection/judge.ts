@@ -57,6 +57,8 @@ export interface JudgeInput {
   askText?: string;
   /** needs_ask: his messages of the last 48 hours in the task and its lead's threads, rendered. */
   evidenceText?: string;
+  /** His words the judge read, with their times (moment-age.ts quoteTimeOf dates a quote by them). */
+  saidSources?: Array<{ at: string; text: string }>;
   /** The turns, rendered (context.ts renderTurns). */
   turnsText: string;
   /** The session's latest turns, written after `turnsText` ends and up to now, rendered: what it did since (a late judgment reads them). */

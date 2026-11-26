@@ -33,8 +33,9 @@ export { nearlySame } from './records.js';
 import { MOMENT_MAX_AGE_MS } from './candidates.js';
 import { askTidy, tellHeldLines } from './guidance-tidy.js';
 import { gatedPoint, heldPoint, holdCorrection, sendHeld } from './held-corrections.js';
-import { handledSince, oldMomentLine, quoteTimeOf, STALE_MOMENT_MS, userSaidLine, type TaskOutcome } from './moment-age.js';
-import { checkCached, checkStepOf, findingInstruction, gatedNote, gateText, STEP_CHECK_FAILED, stepWords, verdictOf as stepVerdict, type GateResult, type StepCheck } from './step-gate.js';
+import { compactGuidance } from './guidance-compact.js';
+import { datedQuoteLine, handledSince, oldMomentLine, STALE_MOMENT_MS, quoteTimeOf, type AskNow, type LetterText, type TaskOutcome } from './moment-age.js';
+import { checkCached, checkStepOf, findingInstruction, gatedNote, gateText, resetForGateVersion, STEP_CHECK_FAILED, STEP_CHECK_HELD, stepWords, verdictOf as stepVerdict, type GateResult, type StepCheck } from './step-gate.js';
 
 /** The session's text turns read before the moment: anger is often about a run of turns, not the last one. */
 const TURNS_BEFORE: Record<ReflectionSignal, number> = {
@@ -66,6 +67,9 @@ export interface ReflectDeps extends CandidateDeps {
   checkStep?: StepCheck;
   /** A thread's task as it stands now, for the check that an old moment was handled since (moment-age.ts). */
   taskOutcome?: TaskOutcome;
+  /** A task's ask now and a letter's text, for the check that a card has what a correction says it lacks. */
+  askNow?: AskNow;
+  letterText?: LetterText;
 }
 
 export interface ReflectResult {
@@ -81,7 +85,7 @@ function unsafeText(f: Finding): string | null {
   return screenSkillWrite([f.correction, f.guidance, f.skill?.description ?? '', f.skill?.text ?? ''].join('\n\n'), 'reflection finding');
 }
 
-function correctionText(node: Task, nodeName: string, c: Candidate, f: Finding, nowMs: number, where: 'recent' | 'earlier' | 'task' = 'recent'): string {
+function correctionText(node: Task, nodeName: string, c: Candidate, f: Finding, said: { at: string; momentAt: string }, nowMs: number, where: 'recent' | 'earlier' | 'task' = 'recent'): string {
   // A thread's title is free text someone wrote: it rides a correction only when the injection screen passes it.
   const title = c.thread && !screenSkillWrite(c.thread.title, 'reflection thread title') ? c.thread.title : '';
   return [
@@ -92,13 +96,13 @@ function correctionText(node: Task, nodeName: string, c: Candidate, f: Finding, 
     `What went wrong: ${f.what_went_wrong}`,
     `The right way: ${f.correct_action}`,
     `You said: "${f.session_quote}"`,
-    ...(f.user_quote ? [userSaidLine(f.user_quote, quoteTimeOf(c, f.user_quote), nowMs)] : []),
+    ...(f.user_quote ? [datedQuoteLine(f.user_quote, said.at, nowMs)] : []),
     ...(f.rule_quote ? [`The rule: "${f.rule_quote}"`] : []),
     // A defect of the product: the task he said it in owns its fix, or hands it to the task that owns that code.
     ...(PRODUCT_DEFECT_KINDS.has(f.kind) ? ['', 'This is a defect of the product: fix it in this task, or hand it to the task that owns that code and say which.'] : []),
     '',
     // Words hours or days old say so: never read as a new ask (2026-11-26, Walnut VP).
-    ...(c.messages.length && c.signal !== 'wrong_language' && nowMs - Date.parse(c.to) >= STALE_MOMENT_MS ? ['', oldMomentLine(quoteTimeOf(c, f.user_quote), nowMs)] : []),
+    ...(c.messages.length && c.signal !== 'wrong_language' && nowMs - Date.parse(said.momentAt) >= STALE_MOMENT_MS ? ['', oldMomentLine(said.momentAt, nowMs)] : []),
     '',
     `Act on it in this task. No reply to ${nodeName} is needed (task ${node.id}).`,
   ].join('\n');
@@ -129,6 +133,7 @@ export async function judgeInputOf(node: Task, c: Candidate, deps: Pick<ReflectD
       ...turns.filter((t) => t.role === 'user' && t.at <= c.to).map((t) => t.text),
       ...c.messages.map((m) => parseCardAnswer(m.text)?.words ?? m.text), ...(c.evidence ?? []).map((m) => m.text),
     ].join('\n\n'),
+    saidSources: [...turns.filter((t) => t.role === 'user' && t.at <= c.to), ...c.messages, ...(c.evidence ?? [])].map((m) => ({ at: m.at, text: m.text })),
     ...(c.ask?.text ? { askText: c.ask.text } : {}),
     ...(c.evidence ? { evidenceText: c.evidence.map((m: SpokenMessage) => `[${m.at}] ${m.text}`).join('\n\n') } : {}),
     rulesText: await deps.rulesText(node), guidance, replyLanguage: await deps.replyLanguage(),
@@ -181,9 +186,13 @@ async function keepRule(node: Task, nodeName: string, c: Candidate, f: Finding, 
 }
 
 /** The verdict on one candidate: the judge's, or the fixed language finding (no model call). Sends nothing. */
-export async function verdictOf(node: Task, c: Candidate, deps: Pick<ReflectDeps, 'readTranscript' | 'callModel' | 'rulesText' | 'replyLanguage'>, guidance: readonly string[]): Promise<Verdict> {
+export async function verdictOf(
+  node: Task, c: Candidate, deps: Pick<ReflectDeps, 'readTranscript' | 'callModel' | 'rulesText' | 'replyLanguage'>, guidance: readonly string[],
+  onInput?: (input: JudgeInput) => void,
+): Promise<Verdict> {
   if (c.signal === 'wrong_language') return { verdict: 'bad_decision', finding: languageFinding(c, await deps.replyLanguage(), guidance) };
   const input = await judgeInputOf(node, c, deps, guidance);
+  onInput?.(input);
   if (!input.sessionText) return { verdict: 'unverified', why: 'no session turn to read' };
   return judge(input, deps.callModel, node.id);
 }
@@ -198,7 +207,8 @@ export async function reflectOnCandidate(
   // not read (2026-11-24 audit: a correction went 9 seconds after the session had answered).
   const newestTurn = async () => (c.sessionId && !c.context ? (await turnsSince(c.sessionId, c.to, deps.readTranscript, 1).catch(() => []))[0]?.at ?? '' : '');
   const before = await newestTurn();
-  const verdict = await verdictOf(node, c, deps, guidance);
+  let sources: JudgeInput['saidSources'] = [];
+  const verdict = await verdictOf(node, c, deps, guidance, (input) => { sources = input.saidSources ?? []; });
   if (verdict.verdict !== 'bad_decision') return { verdict };
   // It had not answered his message when the judge read, and has now: judged again on the next pass, with
   // that answer (nothing sent or written now; the second judgment sees the answer, so it never loops).
@@ -207,6 +217,9 @@ export async function reflectOnCandidate(
   const unsafe = unsafeText(f);
   if (unsafe) return { verdict: { verdict: 'unverified', why: `the finding's text was refused: ${unsafe.slice(0, 160)}` } };
   const now = deps.nowMs();
+  // When he wrote what it quotes: the message of his that holds it, wherever the judge read it ('' when none does).
+  const saidAt = quoteTimeOf(c, f.user_quote, sources);
+  const said = { at: saidAt, momentAt: saidAt || c.to };
   // The step check, in code (step-gate.ts): an instruction to use his browser, accounts or name, or to write
   // in production or a cloud account, never goes as written; the session gets a note to ask the person its
   // rules name instead, and the lesson that says so is not written (2026-11-25 audit).
@@ -224,7 +237,9 @@ export async function reflectOnCandidate(
   if (willSend) {
     const chat = c.task.org_role === 'main' || c.task.org_role === 'lead';
     // One card or ask: its thread and its decision (or its words); a new decision on the same thread is another.
-    const cardKey = c.signal === 'needs_ask' ? `${c.task.id}:${c.thread?.id ?? ''}:${c.cardId ?? ''}` : '';
+    // Keyed by its place only (the task and its thread): a card rewritten got a new decision id or words, and
+    // so a new key, and one decision was corrected 4 times in 2 hours (2026-11-26 audit).
+    const cardKey = c.signal === 'needs_ask' ? `${c.task.id}:${c.thread?.id ?? ''}` : '';
     const lastCard = cardKey ? (await readReflectionState(node.id, now)).cardCorrected?.[cardKey] : undefined;
     const heSince = (c.evidence ?? []).some((m) => lastCard && m.at > lastCard);
     // No known asking session: the task's current one reads it, told it is about a turn of the task
@@ -242,7 +257,8 @@ export async function reflectOnCandidate(
     };
     const r = await route();
     // About words hours or days old: what they asked may be done or answered since; then it is not sent.
-    const handled = r.to !== 'off' ? await handledSince(c, f.correction, now, deps, node.id).catch(() => 'unknown' as const) : 'open';
+    // Only for a send now: a held one is checked at its send (held-corrections.ts stillNeeded).
+    const handled = r.to === 'send' ? await handledSince(c, f, said.momentAt, now, deps, node.id).catch(() => 'unknown' as const) : 'open';
     if (r.to === 'off') { corrected = 'off'; notSent = r.why; }
     else if (handled === 'handled') { corrected = 'off'; notSent = 'handled_since'; }
     else {
@@ -256,9 +272,7 @@ export async function reflectOnCandidate(
         else {
           thisPass.add(c.task.id);
           const where = r.check === 'session_changed' ? 'earlier' : c.sessionId ? 'recent' : 'task';
-          // A held one keeps what went wrong only when that alone passes the check.
-          const saw = gated && stepVerdict(await stepCheck(f.what_went_wrong)) === 'pass' ? f.what_went_wrong : '';
-          const text = gated ? gatedNote(nodeName, gated.steps, f.session_quote, saw) : correctionText(node, nodeName, c, f, now, where);
+          const text = gated ? gatedNote(nodeName, gated.steps, f.session_quote) : correctionText(node, nodeName, c, f, said, now, where);
           const title = gated ? `${nodeName}'s reflection: a step to ask about, not to take` : `${nodeName}'s reflection: ${f.correct_action.slice(0, 120)}`;
           corrected = await deps.send(c.task, text, title).then((ok) => (ok ? 'sent' : 'failed'), () => 'failed' as const);
           if (r.check === 'session_changed') earlierSession = true;
@@ -278,7 +292,9 @@ export async function reflectOnCandidate(
   const lessonGate = gated ?? (lessonBody && !twin ? await stepCheck(lessonBody) : null);
   const lessonVerdict = lessonGate ? stepVerdict(lessonGate) : 'pass';
   const rule: DayRule = lessonVerdict === 'held'
-    ? { kind: 'none', text: `not added (the step check held it: it would have sessions ${stepWords(lessonGate!.steps)})` }
+    // Kept as a dropped lesson: the backfill rewrites one with his own words to ask first (guidance-merge.ts).
+    // (the backfill reads its words from the finding: the record never repeats the held text).
+    ? { kind: 'none', text: f.guidance && !f.same_as ? `not added (${STEP_CHECK_HELD}: it would have sessions ${stepWords(lessonGate!.steps)})` : `not added (the step check held it: it would have sessions ${stepWords(lessonGate!.steps)})` }
     // No verdict now: kept as a dropped lesson, so the backfill takes it up (and checks it) later.
     : lessonVerdict === 'failed' && f.guidance && !f.same_as ? { kind: 'none', text: `not added (${STEP_CHECK_FAILED}): ${f.guidance}` }
     : twin
@@ -288,7 +304,7 @@ export async function reflectOnCandidate(
   if (lessonText && lessonVerdict === 'pass') thisPass.add(lessonPrefix + lessonText);
   const entry: DayEntry = {
     at: new Date(now).toISOString(), signal: c.signal, task: { id: c.task.id, title: c.task.title }, ...(c.thread ? { thread: c.thread } : {}),
-    finding: f, ...(f.user_quote ? { saidAt: quoteTimeOf(c, f.user_quote) } : {}), corrected, ...(held ? { held } : {}), ...(notSent ? { notSent } : {}), ...(earlierSession ? { earlierSession } : {}),
+    finding: f, ...(saidAt ? { saidAt } : {}), corrected, ...(held ? { held } : {}), ...(notSent ? { notSent } : {}), ...(earlierSession ? { earlierSession } : {}),
     ...(gated ? { gated: { steps: [...gated.steps], why: gated.why, by: gated.by } } : {}),
     rule, ...(corrected === 'sent' ? { handedTo: { taskId: c.task.id, title: c.task.title } } : {}),
   };
@@ -307,7 +323,6 @@ export async function reflectOnCandidate(
   // Every hold waits for the task's next send, with the others held for it. A held one keeps only the
   // check's note when the check held its instruction; one not checked yet is checked at its send.
   if (held) {
-    const saidAt = entry.saidAt ?? c.to;
     const text = gated ? gatedPoint(gated.steps) : heldPoint(f, saidAt);
     await holdCorrection(node, nodeName, c.task.title, { taskId: c.task.id, at: entry.at, date: localDate(now), entryAt: entry.at, text, saidAt, ...(checkFailed ? {} : { checked: true as const }) }, now)
       .catch((err) => log.task.warn('reflection: a held correction was not kept', { nodeId: node.id, taskId: c.task.id, error: err instanceof Error ? err.message : String(err) }));
@@ -326,6 +341,8 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
   const now = deps.nowMs();
   // A guidance line the user deleted is remembered first, so it is never written again.
   await rememberDeletedGuidance(node.id, now);
+  // The step check's rules changed: what it held is judged again by the new ones.
+  await resetForGateVersion(node.id, now);
   // Read and kept in one write: a node seen for the first time keeps the `since` of this pass, never
   // a new "now" at every pass (2026-11-19 on production: a node with no guidance file saved nothing).
   const state = await updateReflectionState(node.id, (s) => { s.callsFrom ??= new Date(now).toISOString(); return structuredClone(s); }, now);
@@ -388,7 +405,7 @@ export async function reflectForNode(node: Task, nodeName: string, all: readonly
   await recordDayPass(node.id, nodeName, today, { candidates: result.candidates, judged: result.judged, skipped: result.skipped }, now)
     .catch((err) => log.task.warn('reflection: the pass was not counted in the day record', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
   // Lessons a full day dropped are taken up again, a few a pass, after this pass's own findings had their places.
-  await backfillDropped(node, nodeName, deps, now).catch((err) => log.task.warn('reflection: dropped lessons not taken up', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
+  await backfillDropped(node, nodeName, { ...deps, makeRoom: (n) => compactGuidance(node, nodeName, n, deps, now) }, now).catch((err) => log.task.warn('reflection: dropped lessons not taken up', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
   // A full guidance is the node's to tidy: told once a day which lessons wait for room.
   await askTidy(node, nodeName, deps, now).catch((err) => log.task.warn('reflection: the node was not asked to tidy its guidance', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) }));
   // A line already in the guidance that the step check holds is named to the node, once each.
@@ -445,7 +462,11 @@ export function defaultDeps(): ReflectDeps {
   return {
     readTranscript: readTranscriptDefault,
     callModel: callModelDefault(),
-    checkStep: (text, nodeId) => gateText(text, callModelDefault(), nodeId),
+    // His standing rules ride the check: a sign-in they tell agents to do themselves is not held (step-gate.ts).
+    checkStep: async (text, nodeId) => {
+      const { USER_FILE } = await import('../../../constants.js');
+      return gateText(text, callModelDefault(), nodeId, await fsp.readFile(USER_FILE, 'utf-8').catch(() => ''));
+    },
     send: async (task, text, title) => {
       const { performSessionSend } = await import('../../sessions/session-send-core.js');
       const { getTask } = await import('../../task-manager.js');
@@ -461,6 +482,18 @@ export function defaultDeps(): ReflectDeps {
       return confirmSendCheck(node, task, sessionId, { getTask: async (id) => (await getTask(id)) ?? null, orgTasks, orgEnabled: isOrgEnabled, dutyOn, currentSession: currentSessionDefault });
     },
     currentSession: currentSessionDefault,
+    askNow: async (id) => {
+      const { getTask } = await import('../../task-manager.js');
+      const t = await getTask(id);
+      return t ? t.user_status ?? null : null;
+    },
+    letterText: async (id) => {
+      const { getLetter } = await import('../../human-inbox/store.js');
+      const l = await getLetter(id);
+      if (!l) return null;
+      const actions = (l.actions ?? []).map((a) => `[${a.label}${a.recommended ? ' (recommended)' : ''}]`).join(' ');
+      return [`Subject: ${l.subject}`, l.body ?? l.textPreview, actions ? `Buttons: ${actions}` : ''].filter(Boolean).join('\n');
+    },
     taskOutcome: async (id) => {
       const { getTask } = await import('../../task-manager.js');
       const t = await getTask(id).catch(() => null);

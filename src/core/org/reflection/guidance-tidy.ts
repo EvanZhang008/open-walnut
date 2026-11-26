@@ -139,6 +139,8 @@ export async function askTidy(node: Task, nodeName: string, deps: TidyDeps, nowM
   const waiting = queued.filter((w) => !settled.has(normalizeForQuote(w)));
   if (state.tidyAsked === date) return false;
   if (!waiting.length) return false;
+  // The reflection made room itself today (guidance-compact.ts): the node is not asked to.
+  if (state.compacts?.date === date && state.compacts.freed > 0) return false;
   // Asked when little room is left, or when none of the waiting lessons fits in what is left
   // (2026-11-23: 276 characters left, every waiting lesson longer, and the node was never asked).
   if (room >= TIDY_ROOM_MIN && waiting.some((w) => guidanceRoomLeft(nodeName, [...texts, w]) >= 0)) return false;

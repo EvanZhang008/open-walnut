@@ -13,7 +13,7 @@
  */
 import crypto from 'node:crypto';
 import type { CallModel, Finding } from './judge.js';
-import { normalizeForQuote } from './judge.js';
+import { normalizeForQuote, quoteHolds } from './judge.js';
 import { readReflectionState, updateReflectionState } from './state.js';
 
 export const GATED_STEPS = ['user_browser', 'user_account', 'in_his_name', 'production_write', 'cloud_account_write'] as const;
@@ -27,6 +27,27 @@ const STEP_WORDS: Record<GatedStep, string> = {
   cloud_account_write: 'change something in a cloud account or a cloud service\'s stage',
 };
 
+export const ASK_FIRST_SYSTEM = [
+  'A lesson for AI agent sessions would have them take a step that is the user\'s to allow. Rewrite it so it keeps its point and the user\'s intent, but tells sessions to ask the person their rules name before that step and take it only on that person\'s explicit yes, never to take it on their own.',
+  'Name the step in general words, never "his", "her" or "the user\'s" before browser, account, login or sign-in, and no tool names (say "a step only the user may allow"). One or two sentences, in the language of the lesson, general (no names of one case). Answer only the rewritten lesson.',
+].join('\n');
+
+/**
+ * A held lesson that quotes the user, rewritten to ask first and checked again: kept, never dropped for good
+ * (2026-11-26 audit: six lessons with his own words were held out of the queue). Null when the rewrite fails
+ * or is held too.
+ */
+export async function askFirstLesson(lesson: string, steps: readonly GatedStep[], callModel: CallModel, check: StepCheck, nodeId: string): Promise<string | null> {
+  let raw = '';
+  try {
+    raw = (await callModel(ASK_FIRST_SYSTEM, `STEP: ${stepWords(steps)}\nLESSON: ${lesson}`, nodeId)).trim();
+  } catch { return null; }
+  const text = raw.replace(/^["'\s]+|["'\s]+$/g, '').slice(0, 400);
+  if (!text || text.includes('{')) return null;
+  const g = await check(text, nodeId).catch(() => null);
+  return g && verdictOf(g) === 'pass' ? text : null;
+}
+
 /** Fixed words that hold a text whatever the model says: the user's browser and the sign-in commands. */
 const ALWAYS: ReadonlyArray<[RegExp, GatedStep]> = [
   [/\bwalnut\s+browser\b/i, 'user_browser'],
@@ -35,7 +56,17 @@ const ALWAYS: ReadonlyArray<[RegExp, GatedStep]> = [
   [/\b(?:his|her|the user'?s)\s+(?:own\s+)?(?:account|login|sign-?in|credentials?)\b/i, 'user_account'],
 ];
 
-export interface GateResult { steps: GatedStep[]; why: string; by: 'words' | 'model' | 'failed' }
+export interface GateResult { steps: GatedStep[]; why: string; by: 'words' | 'model' | 'failed'; settled?: Array<{ step: GatedStep; rule: string }> }
+
+/**
+ * The steps the user's own standing rules may settle: a sign-in or his browser's saved login, which his
+ * rules tell agents to do themselves (2026-11-26 audit: the check held a correction that said what his
+ * rule says, and a card waited three hours for him). Never a send in his name, a production write or a
+ * cloud-account write: those stay his, whatever a rule seems to say.
+ */
+const SETTLEABLE: ReadonlySet<GatedStep> = new Set(['user_browser', 'user_account']);
+/** Bumped when the check's rules change: verdicts and held lessons of an older version are judged again. */
+export const GATE_VERSION = 2;
 
 export const GATE_SYSTEM = [
   'You check one instruction an automated reviewer wants to send to an AI agent that works for a user.',
@@ -45,8 +76,9 @@ export const GATE_SYSTEM = [
   '- in_his_name: send, post, comment, reply, edit, approve or sign anything in the user\'s name or from his accounts, to or before anyone (a channel, a DM, a document, a ticket comment, a code review).',
   '- production_write: turn on, change, approve, promote, roll out or delete anything in a production system (deploy pipelines, feature flags, traffic weights, promotions).',
   '- cloud_account_write: change, create or delete anything in a cloud account or any stage of a cloud service (test, beta and gamma stages included), permissions and roles included.',
-  'Not a step: asking a person for it; reading, listing, checking or reporting (a read of a cloud account with the agent\'s own command-line access included; opening the user\'s browser is a step even to read); editing a card, a thread or a message to the user inside his own task tool; handing work to another agent\'s task; changing, testing, landing or deploying the agent\'s own code through its repository\'s own scripts; local commands that change nothing outside the machine.',
-  'Answer only JSON: {"steps": [...the names above, none when it asks for none...], "why": "one short sentence"}',
+  'Not a step: asking a person for it, or telling the agent to ask first and take the step only on that person\'s explicit yes to it; using, testing or recording the team\'s own product (its app, its web console, its test accounts, a copy of the user\'s data), or turning one of its own settings or flags on or off; reading, listing, checking or reporting (a read of a cloud account with the agent\'s own command-line access included; opening the user\'s browser is a step even to read); editing a card, a thread or a message to the user inside his own task tool; handing work to another agent\'s task; changing, testing, landing or deploying the agent\'s own code through its repository\'s own scripts; local commands that change nothing outside the machine.',
+  'Answer only JSON: {"steps": [...the names above, none when it asks for none...], "why": "one short sentence", "settled": [{"step": "user_browser or user_account", "rule": "the words of USER RULES that tell agents to take that step themselves, copied exactly"}]}',
+  'settled is only for user_browser and user_account, and only when USER RULES (given below the instruction, when there are any) tell agents to take that very step themselves (a sign-in, his saved login); [] otherwise. Copy the rule exactly: it is checked word for word.',
 ].join('\n');
 
 const ALL = new Set<string>(GATED_STEPS);
@@ -57,8 +89,8 @@ export function gatedByWords(text: string): GateResult | null {
   return steps.length ? { steps, why: 'it names the user\'s own browser or a sign-in step', by: 'words' } : null;
 }
 
-/** Read the model's answer: steps it names, or null when it cannot be read. Pure. */
-export function readGateAnswer(raw: string): GateResult | null {
+/** Read the model's answer: steps it names, or null when it cannot be read; a step his rules settle (quoted exactly) is not held. Pure. */
+export function readGateAnswer(raw: string, userRules = ''): GateResult | null {
   const body = raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
   let a: unknown;
   try { a = JSON.parse(body); } catch { return null; }
@@ -66,7 +98,19 @@ export function readGateAnswer(raw: string): GateResult | null {
   const named = ((a as { steps: unknown[] }).steps).filter((s): s is GatedStep => typeof s === 'string' && ALL.has(s));
   // A name it made up is no verdict: the text is checked again later, never passed and never called a step it is not.
   if (named.length !== (a as { steps: unknown[] }).steps.length) return null;
-  return { steps: named, why: String((a as { why?: unknown }).why ?? '').slice(0, 300), by: 'model' };
+  const why = String((a as { why?: unknown }).why ?? '').slice(0, 300);
+  const settled = settledOf((a as { settled?: unknown }).settled, userRules);
+  return { steps: named.filter((st) => !settled.some((x) => x.step === st)), why, by: 'model', ...(settled.length ? { settled } : {}) };
+}
+
+/** The settled steps of an answer whose rule is in USER RULES word for word, and only of the steps a rule may settle. Pure. */
+function settledOf(raw: unknown, userRules: string): Array<{ step: GatedStep; rule: string }> {
+  if (!Array.isArray(raw) || !userRules.trim()) return [];
+  return raw.flatMap((x) => {
+    const step = (x as { step?: unknown })?.step;
+    const rule = String((x as { rule?: unknown })?.rule ?? '').trim();
+    return typeof step === 'string' && SETTLEABLE.has(step as GatedStep) && rule.length >= 12 && quoteHolds(rule, userRules) ? [{ step: step as GatedStep, rule: rule.slice(0, 300) }] : [];
+  });
 }
 
 /**
@@ -74,26 +118,35 @@ export function readGateAnswer(raw: string): GateResult | null {
  * `by: 'failed'` is no verdict (the call failed, or its answer could not be read): the caller sends and
  * writes nothing of the text now and checks it again later; it never says a step the text may not hold.
  */
-export async function gateText(text: string, callModel: CallModel, nodeId?: string): Promise<GateResult> {
+export async function gateText(text: string, callModel: CallModel, nodeId?: string, userRules = ''): Promise<GateResult> {
   if (!text.trim()) return { steps: [], why: '', by: 'words' };
   const fixed = gatedByWords(text);
-  if (fixed) return fixed;
+  // Fixed words hold a text, except a sign-in his own rules tell agents to do: only then is the model asked about it too.
+  const rules = userRules.trim();
+  if (fixed && (!rules || fixed.steps.some((st) => !SETTLEABLE.has(st)))) return fixed;
   let raw: string;
   try {
-    raw = await callModel(GATE_SYSTEM, `INSTRUCTION:\n${text}`, nodeId);
+    raw = await callModel(GATE_SYSTEM, `INSTRUCTION:\n${text}${rules ? `\n\nUSER RULES:\n${rules}` : ''}`, nodeId);
   } catch (err) {
-    return { steps: [], why: `the check could not run (${err instanceof Error ? err.message : String(err)})`, by: 'failed' };
+    return fixed ?? { steps: [], why: `the check could not run (${err instanceof Error ? err.message : String(err)})`, by: 'failed' };
   }
-  return readGateAnswer(raw) ?? { steps: [], why: 'the check\'s answer could not be read', by: 'failed' };
+  const read = readGateAnswer(raw, rules);
+  if (!read) return fixed ?? { steps: [], why: 'the check\'s answer could not be read', by: 'failed' };
+  if (!fixed) return read;
+  // The fixed words' steps stay held unless the answer settles each by his rule.
+  const steps = [...new Set([...read.steps, ...fixed.steps.filter((st) => !read.settled?.some((x) => x.step === st))])];
+  return { ...read, steps, why: steps.length ? `${fixed.why}; ${read.why}` : read.why };
 }
 
 /** The rule text of a lesson the check could not judge: the backfill takes it up again (guidance-merge.ts). */
 export const STEP_CHECK_FAILED = 'step_check_failed';
+/** The rule text of a lesson the check held: the backfill rewrites one that quotes him to ask first (guidance-merge.ts). */
+export const STEP_CHECK_HELD = 'step_check_held';
 
 /** A verdict: the text may go (`pass`), holds a step (`held`), or was not judged now (`failed`). */
 export const verdictOf = (g: GateResult): 'pass' | 'held' | 'failed' => (g.by === 'failed' ? 'failed' : g.steps.length ? 'held' : 'pass');
 
-const keyOf = (text: string) => crypto.createHash('sha256').update(normalizeForQuote(text)).digest('hex').slice(0, 16);
+const keyOf = (text: string) => crypto.createHash('sha256').update(`v${GATE_VERSION}:${normalizeForQuote(text)}`).digest('hex').slice(0, 16);
 /** Verdicts kept per node (state.ts stepChecked), newest last. */
 export const STEP_CHECKS_KEPT = 600;
 
@@ -118,22 +171,49 @@ export async function checkCached(nodeId: string, text: string, check: StepCheck
 
 export type StepCheck = (text: string, nodeId: string) => Promise<GateResult>;
 
-/** The check a pass uses: the fixed words first, always, then the model layer its deps name (none in a test's deps). */
+/**
+ * Once per node after the check's rules change (GATE_VERSION): its verdicts and held lessons are dropped,
+ * so each is judged again by the new rules (2026-11-26 audit: six lessons quoting the user were held for good
+ * by rules that since let a step his own rules settle through). Answers whether it reset.
+ */
+export async function resetForGateVersion(nodeId: string, nowMs: number): Promise<boolean> {
+  if ((await readReflectionState(nodeId, nowMs)).gateVersion === GATE_VERSION) return false;
+  return updateReflectionState(nodeId, (s) => {
+    if (s.gateVersion === GATE_VERSION) return false;
+    s.gateVersion = GATE_VERSION;
+    s.stepChecked = {};
+    s.stepHeld = [];
+    delete s.linesChecked;
+    return true;
+  }, nowMs);
+}
+
+/**
+ * The check a pass uses: the model layer its deps name (none in a test's deps), and the fixed words always:
+ * a step they find stays held unless the answer settles it by his own rule (gateText).
+ */
 export const checkStepOf = (deps: { checkStep?: StepCheck }): StepCheck =>
-  async (text, nodeId) => gatedByWords(text) ?? (deps.checkStep ? deps.checkStep(text, nodeId) : { steps: [], why: '', by: 'words' });
+  async (text, nodeId) => {
+    const fixed = gatedByWords(text);
+    if (!deps.checkStep) return fixed ?? { steps: [], why: '', by: 'words' };
+    const g = await deps.checkStep(text, nodeId);
+    const left = (fixed?.steps ?? []).filter((st) => !g.settled?.some((x) => x.step === st));
+    if (!left.length) return g;
+    return { ...g, steps: [...new Set([...g.steps, ...left])], why: g.why ? `${fixed!.why}; ${g.why}` : fixed!.why, by: g.by === 'failed' ? 'words' : g.by };
+  };
 
 /** What a finding would tell the session: every part of it that is sent (what went wrong carries steps too). */
 export const findingInstruction = (f: Pick<Finding, 'correction' | 'correct_action' | 'what_went_wrong'>) => [f.what_went_wrong, f.correct_action, f.correction].filter(Boolean).join('\n\n');
 
 /**
- * The note a held finding becomes: never its instruction, only that a step is not to be taken on its word.
- * `saw` is what went wrong, when that alone passed the check. Pure.
+ * The note a held finding becomes: never its instruction nor its diagnosis, only that a step is not to be
+ * taken on its word (2026-11-26 audit: "what it saw" rode the note, and a session took a decision of the
+ * user's on it). Pure.
  */
-export function gatedNote(nodeName: string, steps: readonly GatedStep[], sessionQuote: string, saw = ''): string {
+export function gatedNote(nodeName: string, steps: readonly GatedStep[], sessionQuote: string): string {
   const what = steps.map((s) => STEP_WORDS[s]).join('; ');
   return [
     `${nodeName}'s reflection looked at your turn and held its correction back: the fix it saw would have you ${what}.`,
-    ...(saw ? ['', `What it saw: ${saw}`] : []),
     '',
     'The reflection never tells a session to take such a step, and this note is not a reason to take it. Where your rules or the user already settled that step for this kind of work, follow them; otherwise ask the person your rules name for it (the user, or whoever his rules say), with what the step is and what you recommend, and take it only on their word.',
     ...(sessionQuote ? ['', `Your turn it looked at: "${sessionQuote}"`] : []),

@@ -15,7 +15,7 @@ import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
 import type { CallModel, Finding } from './judge.js';
 import { turnsSince, type ReadTranscript } from './context.js';
-import { takenUp, userSaidLine } from './moment-age.js';
+import { datedQuoteLine, takenUp } from './moment-age.js';
 import { checkCached, checkStepOf, stepWords, verdictOf, type GatedStep, type StepCheck } from './step-gate.js';
 import { appendDayNote, markHeld, nearlySame } from './records.js';
 import { sessionNowOf } from './candidates.js';
@@ -49,7 +49,8 @@ export function gatedPoint(steps: readonly GatedStep[]): string {
  */
 export async function stillNeeded(items: readonly HeldCorrection[], sessionId: string, deps: Pick<HeldDeps, 'readTranscript' | 'callModel'>, nodeId: string): Promise<{ keep: HeldCorrection[]; done: HeldCorrection[] }> {
   if (!items.length || !sessionId || !deps.readTranscript || !deps.callModel) return { keep: [...items], done: [] };
-  const oldest = items.map((h) => h.saidAt ?? h.entryAt).sort()[0];
+  // From the judgment on: the turns before it were judged not to take it up (saidAt is shown, never read from).
+  const oldest = items.map((h) => h.entryAt).sort()[0];
   const later = await turnsSince(sessionId, oldest, deps.readTranscript, 4).catch(() => []);
   const done = await takenUp(items.map((h) => `[judged ${h.entryAt}] ${h.text}`), later, deps.callModel, nodeId);
   if (!done) return { keep: [...items], done: [] };
@@ -60,7 +61,7 @@ export async function stillNeeded(items: readonly HeldCorrection[], sessionId: s
 /** The point a held correction makes, short: the correction, the right way, his words with when he wrote them. Pure. */
 export function heldPoint(f: Pick<Finding, 'correction' | 'correct_action' | 'user_quote'>, saidAt: string): string {
   // The time alone: it is sent later, when an age said now would be wrong.
-  const said = f.user_quote ? userSaidLine(f.user_quote.trim(), saidAt) : '';
+  const said = f.user_quote ? datedQuoteLine(f.user_quote.trim(), saidAt) : '';
   const text = [f.correction.trim(), f.correct_action ? `The right way: ${f.correct_action.trim()}` : '', said].filter(Boolean).join(' ');
   return text.length > POINT_MAX ? `${text.slice(0, POINT_MAX)} [...]` : text;
 }

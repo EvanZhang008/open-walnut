@@ -140,6 +140,26 @@ export async function replaceGuidanceLine(nodeId: string, nodeName: string, oldT
   });
 }
 
+/** Two lines become one (guidance-compact.ts): the first is replaced by `next`, the second removed; 'gone' when either changed meanwhile. */
+export async function mergeTwoGuidanceLines(nodeId: string, nodeName: string, firstText: string, secondText: string, next: GuidanceLine): Promise<'merged' | 'gone'> {
+  const file = guidanceFileOf(nodeId);
+  const [ka, kb] = [normalizeForQuote(firstText), normalizeForQuote(secondText)];
+  return withFileLock(file, async () => {
+    const had = await fsp.readFile(file, 'utf-8').catch(() => null);
+    if (had === null) return 'gone';
+    const rows = had.split('\n');
+    const find = (k: string) => rows.findIndex((raw) => { const m = LINE_RE.exec(raw.trimEnd()); return !!m && normalizeForQuote(m[1]) === k; });
+    const [a, b] = [find(ka), find(kb)];
+    if (a < 0 || b < 0 || a === b) return 'gone';
+    rows[a] = renderGuidance(nodeName, [next]).split('\n').find((l) => l.startsWith('- '))!;
+    rows.splice(b, 1);
+    const tmp = `${file}.${process.pid}.tmp`;
+    await fsp.writeFile(tmp, rows.join('\n'), 'utf-8');
+    await fsp.rename(tmp, file);
+    return 'merged';
+  });
+}
+
 /** Lines the reflection wrote before that are gone from the file now: the user deleted them. */
 export function deletedSince(before: readonly string[], now: readonly GuidanceLine[]): string[] {
   const kept = new Set(now.map((l) => normalizeForQuote(l.text)));
