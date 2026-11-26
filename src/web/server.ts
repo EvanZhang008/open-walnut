@@ -3683,6 +3683,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     .catch((err) => log.web.warn('tail windows: not read back', { error: err instanceof Error ? err.message : String(err) }))
   void import('../core/history-dead-set-memo.js').then((m) => m.startDeadSetDisk())
     .catch((err) => log.web.warn('rewound transcripts\' dead sets: not read back', { error: err instanceof Error ? err.message : String(err) }))
+  // The sessions' costs (core/usage/session-cost.ts): a restart no longer sends every session's next
+  // cost read to its host (seconds for a long transcript); a cost read back answers and refreshes.
+  void import('../core/usage/session-cost.js').then((m) => m.startSessionCostDisk())
+    .catch((err) => log.web.warn('session costs: not read back', { error: err instanceof Error ? err.message : String(err) }))
   // The "is a newer open-walnut published?" check (every 6 h): armed after listen so its
   // first call (20 s out) is clear of the boot fan-out. A source checkout, a
   // replica, a test and WALNUT_NO_UPDATE_CHECK=1 make start() a no-op. The live
@@ -8055,13 +8059,14 @@ export async function stopServer(opts: { dropConnections?: boolean; reason?: str
   ;(await import('../core/push/work-card.js')).stopWorkCard()
   // Visits still in memory (at most FLUSH_MS of them); bounded like every write here.
   await shutdownStep('page visits flush', async () => (await import('../core/page-visits.js')).flushVisitsNow())
-  // The palette's host scans, the remote tail windows and the over-ceiling dead sets asked to be
-  // written and not yet (at most 10 s, 30 s and 10 s of them): written now, so the next boot reads them back.
+  // The palette's host scans, the remote tail windows, the over-ceiling dead sets and the session
+  // costs asked to be written and not yet (at most 10 s, 30 s, 10 s and 10 s of them): written now, so the next boot reads them back.
   await shutdownStep('kept caches flush', async () => {
-    const [palette, windows, deadSets] = await Promise.all([
+    const [palette, windows, deadSets, costs] = await Promise.all([
       import('./routes/slash-commands-disk.js'), import('../core/history-tail-window-disk.js'), import('../core/history-dead-set-memo.js'),
+      import('../core/usage/session-cost.js'),
     ])
-    await Promise.all([palette.flushPaletteDisk(), windows.flushTailWindowDisk(), deadSets.flushDeadSetDisk()])
+    await Promise.all([palette.flushPaletteDisk(), windows.flushTailWindowDisk(), deadSets.flushDeadSetDisk(), costs.flushSessionCostDisk()])
   }, { budgetMs: 1_500 })
   // Host-exec runs noted since the grants were last written (at most RUN_NOTE_FLUSH_MS of them).
   await shutdownStep('grant runs flush', async () => (await import('../core/hosts/exec-grants.js')).flushRunNotes())

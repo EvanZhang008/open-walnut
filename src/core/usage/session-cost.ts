@@ -9,7 +9,7 @@ import { ensurePriceBook, priceBookInfo, priceThresholds, resolvePrice, type Use
 import { priceScanWith, type SessionCostPayload } from './session-cost-pricing.js';
 import type { SessionCostScan } from '../../providers/session-cost-core.js';
 import type { BudgetState } from '../../providers/usage-budget-runtime.js';
-import { SwrCache } from './session-cost-cache.js';
+import { keepOnDisk, SwrCache, type SwrDisk } from './session-cost-cache.js';
 import { settledCost } from './session-cost-settled.js';
 import { readHostOf } from '../sessions/session-row-owner.js';
 
@@ -109,11 +109,55 @@ function watchTurnEnds(): void {
  */
 export async function getSessionCost(sessionId: string): Promise<SessionCostPayload> {
   watchTurnEnds();
+  if (disk) await waitBounded(disk.readback, READBACK_WAIT_MS);
   return costCache.get(sessionId);
 }
 
-/** Test seam: forget every kept cost. */
-export function resetSessionCostCacheForTests(): void { costCache.clear(); }
+/** Test seam: forget every kept cost and the disk copy, as a new process starts with neither. */
+export function resetSessionCostCacheForTests(): void { costCache.clear(); costCache.onChange = undefined; disk = null; }
+
+// ── disk copy (WALNUT_HOME/cache/session-costs.json) ──
+
+const DISK_VERSION = 1;
+/** About 150 sessions of a few models each (a priced answer is 2 to 10 KB). */
+const DISK_MAX_BYTES = 1_500_000;
+const DISK_SAVE_EVERY_MS = 10_000;
+/** A read that races the boot's readback waits at most this long for it, then reads the host. */
+const READBACK_WAIT_MS = 2_000;
+let disk: SwrDisk | null = null;
+
+function savedCost(id: string, v: unknown): v is SessionCostPayload {
+  const c = v as SessionCostPayload | null;
+  return !!c && typeof c === 'object' && c.sessionId === id && typeof c.status === 'string' && Array.isArray(c.models) && settledCost(c);
+}
+
+/**
+ * Read the kept costs back and keep writing them from now on (the server's boot, once). The
+ * server restarts with every land, and each restart made every session's next cost read wait on
+ * its host again (seconds for a long transcript); a cost read back answers at once and refreshes.
+ */
+export async function startSessionCostDisk(file?: string): Promise<void> {
+  if (disk) return disk.readback;
+  const at = file ?? (await import('node:path')).join((await import('../../constants.js')).WALNUT_HOME, 'cache', 'session-costs.json');
+  disk = keepOnDisk(costCache, {
+    file: at, version: DISK_VERSION, maxBytes: DISK_MAX_BYTES, delayMs: DISK_SAVE_EVERY_MS, valid: savedCost,
+    onError: (err) => void import('../../logging/index.js').then(({ log }) => log.usage.debug('session costs not kept on disk', {
+      error: err instanceof Error ? err.message : String(err),
+    })).catch(() => {}),
+  });
+  return disk.readback;
+}
+
+/** Write now what is asked (server stop; the caller bounds the wait). */
+export async function flushSessionCostDisk(): Promise<void> {
+  await disk?.flush();
+}
+
+async function waitBounded(p: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([p, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); timer.unref?.(); })]);
+  clearTimeout(timer);
+}
 
 /** GET /api/v1/sessions/:id/cost (the phone's model sheet): the cost and the budget in one answer. */
 export interface SessionCostFacts {

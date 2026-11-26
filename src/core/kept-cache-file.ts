@@ -11,7 +11,8 @@
  *  - a file that does not parse or carries another version reads as none, never an error.
  *
  * Users: the change watcher's next reads (changes/due-file.ts), the slash palette's host scans
- * (web/routes/slash-commands-disk.ts) and the over-ceiling dead sets (history-dead-set-memo.ts).
+ * (web/routes/slash-commands-disk.ts), the over-ceiling dead sets (history-dead-set-memo.ts) and
+ * the session costs (usage/session-cost-cache.ts keepOnDisk).
  * The history tail windows (history-tail-window-disk.ts) append to their files instead, so they
  * have a writer of their own.
  * A copy read back is only a hint: each user validates it against the source before it answers.
