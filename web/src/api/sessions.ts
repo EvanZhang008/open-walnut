@@ -23,6 +23,7 @@ import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineEntry, type LaunchEngine } from '@/utils/engines';
 import { wsClient } from './ws';
 import { knownFallbackEngine } from './engine-fallback';
+import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import {
   catalogCwd,
   clearEngineModelCatalogCache,
@@ -1253,6 +1254,11 @@ export interface QuickStartTaskMeta {
   sync?: 'local' | 'project';
 }
 
+/** The quick-start route's answer. `sessionId` is present when the engine takes a preassigned id
+ *  (an ACP engine's provider issues its own and omits it); `continued` when the task already had a
+ *  conversation and the message went on in that session (src/web/routes/sessions.ts). */
+export type QuickStartResult = { taskId: string; task: unknown; sessionId?: string; continued?: boolean; preparing?: boolean; workspaceError?: string };
+
 export async function quickStartSession(opts: {
   cwd: string;
   /** The person picked `cwd` in the draft's folder picker. Without it the folder is only one the
@@ -1313,9 +1319,7 @@ export async function quickStartSession(opts: {
   /** A new task with no folder (`cwd` ''): it starts in its own task directory on this machine
    *  (the browser extension's New task, which has no folder picker). */
   ownTaskDir?: boolean;
-  /** `sessionId` is present when the engine takes a preassigned id; an engine
-   *  whose provider issues its own id (every ACP engine) omits it. */
-}): Promise<{ taskId: string; task: unknown; sessionId?: string; preparing?: boolean; workspaceError?: string }> {
+}): Promise<QuickStartResult> {
   // Convert ImageAttachment[] to the backend ImagePayload format (data + mediaType only)
   const { expectEngine, ...sent } = opts;
   const payload: Record<string, unknown> = { ...sent };
@@ -1346,15 +1350,25 @@ export async function quickStartSession(opts: {
   // (an npm install, the first time), which the server allows 300s for: the same
   // budget as the notification card's fix (api/notifications.ts).
   const timeoutMs = opts.intent === 'fix-walnut' ? 330_000 : 60_000;
+  // Every launch holds its own first message for the panel that opens next (launch-prompt-seed.ts),
+  // whichever surface launched it: the server's copy comes one queue read after the panel mounts and
+  // is gone once the first turn's result is in, so a launcher that did not seed (the ask drawer, the
+  // side panel's Ask) showed no bubble of the person's words when a fast first answer beat that read.
+  // A task that already had its conversation took the message into that session (`continued`):
+  // its panel shows the line from the session's own queue, so a seed would draw it twice.
+  const launched = <R extends { sessionId?: string; continued?: boolean }>(r: R): R => {
+    if (r.sessionId && opts.message && !r.continued) seedLaunchPrompt(r.sessionId, opts.message);
+    return r;
+  };
   try {
-    const result = await apiPost<{ taskId: string; task: unknown; sessionId?: string; preparing?: boolean; workspaceError?: string }>('/api/sessions/quick-start', payload, { timeoutMs });
+    const result = await apiPost<QuickStartResult>('/api/sessions/quick-start', payload, { timeoutMs });
     seedTaskSessionStatuses(result.task, 'rest:task');
     // New session → new path entry: read the list again, keeping the cached one on screen meanwhile.
     // Dropping it (invalidate) left the next New task draft with no folder chips and no launch memory
     // until the picker opened, after a launch from anywhere but Home (2026-11-04).
     refreshWorkingDirsAfterLaunch();
     if (opts.createCwd) invalidateLiveDirCache(); // the dir now exists — stale "missing" entries lie
-    return result;
+    return launched(result);
   } catch (err) {
     // Timeout with a client-owned id = UNKNOWN outcome, not failure. The server
     // may well have started the session; reconcile by id before giving up so the
@@ -1362,7 +1376,7 @@ export async function quickStartSession(opts: {
     const isTimeout = err instanceof DOMException && err.name === 'TimeoutError';
     if (isTimeout && clientSessionId) {
       const recovered = await reconcileQuickStart(clientSessionId);
-      if (recovered) return recovered;
+      if (recovered) return launched(recovered);
     }
     throw asQuickStartGateError(err) ?? err;
   }

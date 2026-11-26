@@ -56,7 +56,6 @@ import { primeSessionOpenHistory } from '@/api/session-open-prime';
 import { readString, writeLayoutField } from '@/utils/layout-record';
 import { recordTaskOpened } from '@/utils/recent-opened';
 import { resolveTaskSessionId } from '@/utils/session-status';
-import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
 import { askProjectDisplay, askTitle } from '@open-walnut/ask-list';
 import { pickMain } from '@open-walnut/org-tree';
@@ -590,9 +589,6 @@ export function AskWalnutSlot({
         });
         return true;
       }
-      // The pending view echoed the message; the session panel's first frame
-      // must hold it too (see launch-prompt-seed.ts).
-      if (result.sessionId && launch.message) seedLaunchPrompt(result.sessionId, launch.message);
       setLaunched({
         taskId: result.taskId,
         ...(result.sessionId ? { sessionId: result.sessionId } : {}),

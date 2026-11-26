@@ -12,7 +12,6 @@ import { ensureMainTask } from '@/api/org';
 import { fetchWorkingDirs, hydrateSessionStatuses, quickStartSession } from '@/api/sessions';
 import { sendSessionMessage } from '@/api/session-send';
 import { GENERAL_ASK_AGENT } from '@/components/chat/ask-walnut-slot-model';
-import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { resolveTaskSessionId } from '@/utils/session-status';
 
@@ -62,8 +61,6 @@ export async function askMain(message: string): Promise<AskMainResult> {
   });
   // The launch emptied the working-dirs cache; refill it as the slot does (AskWalnutSlot runLaunch).
   void fetchWorkingDirs().catch(() => { /* drafts fetch again on their own */ });
-  // The chat's first frame holds the message before the transcript has it (launch-prompt-seed.ts).
-  if (result.sessionId) seedLaunchPrompt(result.sessionId, message);
   lastStart = { taskId: main.id, sessionId: result.sessionId ?? null, at: Date.now() };
   return { taskId: main.id, sessionId: result.sessionId ?? null, started: true };
 }
