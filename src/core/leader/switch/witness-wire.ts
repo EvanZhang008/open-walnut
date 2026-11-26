@@ -277,6 +277,15 @@ export const WITNESS_DOOR_REQUEST = '/request'
 export const WITNESS_RELAY_SUB = '/relay'
 /** A relay with nothing parked for that witness: not reached (never NO_WITNESS_HERE_CODE, never evidence `absent`). */
 export const NO_RELAY_CODE = 'no_relay'
+
+/**
+ * Where a witness relayed by another one is posted: that witness's door's relay, naming the hosts alias the config
+ * gives the relayed witness's machine (the companion takes that host's parked streams, witness-relay.ts) when it is one
+ * the relay's path can carry.
+ */
+export function relayUrlOf(viaUrl: string, host: string | undefined): string {
+  return `${viaUrl}${WITNESS_RELAY_SUB}${host && /^[A-Za-z0-9._:-]{1,128}$/.test(host) ? `/to/${host}` : ''}`
+}
 /**
  * The largest call text the door takes. The largest real call is a list change carrying the full ledger
  * (MAX_LEDGER_ENTRIES entries of a real op id such as mail:<key>, the holder's id and its nonce: about 160

@@ -1708,7 +1708,7 @@ only once this server leads, a relay with nothing parked) is still heard within 
 | b, direct | `url` and `key` | the witness's direct door, proven with the witness's own key (`witness-direct.ts`, `witness-door.ts`) | any process of this Walnut that holds the config: the leader, a candidate, a standby |
 | c, link | `host` | the leader's link to that machine's service (`witness-route.ts` on its leader door), or a host-dialed door's call frames once 5a lands | the leader server only |
 | host-link | `machine` (another machine) and `key` | the door of the machine that leads, over this machine's own host link to it ([The leader relay](#the-leader-relay)), the same caller and proofs as way b; asked only for the witness whose `machine` is the leader's (its relay door's `whoami`): a witness another machine keeps is never asked at the leader's door, even if a record of it were left in that door's root. Tried before the direct door (that door is often out of this machine's reach, and a call to it holds the turn until its timeout) | a candidate's probe only (`probeWitnessReach` with a relay socket on its machine), never a permit runtime; it ends with the leader's server |
-| relay | `relay` (the id of another witness with a `url`, the companion) and `key` | the witness's door through that witness's door, `<url>/relay/challenge` and `/relay/request`, over a stream the witness's machine parked there ([The witness relay](#the-witness-relay)); the call and proofs of way b with THIS witness's key | any process of this Walnut that holds the config; it stands whatever any leader's server does, so a candidate's commit counts it |
+| relay | `relay` (the id of another witness with a `url`, the companion) and `key` | the witness's door through that witness's door, `<url>/relay/to/<host>/challenge` and `.../request` (`/to/<host>` when the entry has a `host`), over a stream the witness's machine parked there ([The witness relay](#the-witness-relay)); the call and proofs of way b with THIS witness's key | a candidate's probe; a permit runtime only with `relay_commit: true` (the Mac does not lead through it in this phase); it stands whatever any leader's server does, so a candidate's commit counts it |
 
 **Way a: a shared record with a lock, not a call to the service over loopback.** Every way to one witness ends at one file:
 the machine's service serves it (way c, way b) from `<state dir>/open-walnut/leader-witness/<walnut id>/<witness id>/permit-record.json`,
@@ -1796,12 +1796,18 @@ caller   POST <companion door>/relay/challenge, /relay/request   (way b's body, 
   companion for each witness it keeps with a key, over that machine's OWN cloud bridge (the daemon's existing follower-to-companion
   stream, purpose `witness-relay`; no daemon change, no new daemon command). Each starts with one hello line (`{v, walnutId,
   witness}`), carries ONE HTTP request the companion writes and the witness's door answers (`serveDoorHttp`, the one every door
-  uses), and closes; the service parks the next one. The companion takes such a stream only from a bridge (the host's machine
-  token) and only with the capability `witness-door`; it keeps at most 8 per witness from each host (the bridge's host alias, the
-  link's identity: the hello's witness id is only a claim) and 256 in all, each for 50 s; a call waits up to 3 s for one, the
-  newest first. A host of this Walnut that parks under another machine's witness id gets no vote from it (its door holds no such
-  key) and cannot crowd that machine's own streams out; the companion logs `witness relay: more than one host parks for one
-  witness` with both hosts. With the old leader's server stopped, the path is the witness machine's service, its daemon and bridge, and
+  uses), and closes; the service parks the next one. A stream counts as served only when the door got a request on it (or it
+  ran out its park unused); one closed early with no call (the companion refused it, or a companion before the relay, whose
+  own port answers the hello and closes) backs the parker off, 1 s doubling to 30 s, never a loop. The companion takes such a
+  stream only from a bridge (the host's machine token) and only with the capability `witness-door`; it keeps at most 8 per
+  witness and 64 over all witnesses from each host (the bridge's host alias, the link's identity: the hello's witness id is only
+  a claim), each for 50 s (4096 in all bound the memory of many hosts). A call names the hosts alias its config gives the
+  witness's machine (`<url>/relay/to/<host>/challenge`); once that host has parked for the witness, only its streams are taken,
+  the newest first; a call waits up to 3 s for one. So a host of this Walnut that parks under another machine's witness id, or
+  under many made-up ones, gets no vote from it (its door holds no such key) and crowds out no other host's streams; the
+  companion logs `witness relay: more than one host parks for one witness` with both hosts. The far door brakes each relayed
+  caller on its own (the companion names the caller in the post), so one address cannot spend the relay's whole share
+  there. With the old leader's server stopped, the path is the witness machine's service, its daemon and bridge, and
   the companion: none of them the old leader's. With the old leader's machine gone entirely (an automatic takeover later), the
   same.
 - **The relay can make no vote count.** The call is way b's: the caller proves the far witness's key over a nonce of the far door,
@@ -1810,9 +1816,13 @@ caller   POST <companion door>/relay/challenge, /relay/request   (way b's body, 
   call it sends to another witness, a call it drops: each is no answer (`bad_witness_proof` or nothing), never a vote
   (`tests/core/leader/switch/witness-relay.test.ts`, "a hostile relay"). A relayed witness counts as reached only by its own proof,
   never because the companion answered. With nothing parked the relay answers **503 `no_relay`** (not reached), never
-  `no_witness_here`, so a setup's evidence never counts a witness absent from what the relay says.
+  `no_witness_here`; and a `no_witness_here` that comes back over the relay is not reached either, never absent (no key proves
+  an absence, `permit-ops.ts`), so a setup's evidence never counts a witness absent from what the relay says.
 - **Config**: a witness entry names its relay, `relay: w-k` (another witness of the list with a `url`; never itself, one hop only).
-  The way is tried last (after direct and link), for every caller: a leader's renew too.
+  The way is tried last (after direct and link). A candidate's probe always takes it (its report says what needs it); a permit
+  runtime (the grant at boot, the renews, the commit) takes it only with `leader_switch.relay_commit: true`
+  (`witness-transport.ts` `permitWays`): off, no runtime counts a relayed witness, so a machine that reaches a majority only
+  through a relay never leads, whatever started its runtime.
 - **One path for two votes.** A Mac whose majority is the companion and a witness relayed by the companion depends on the companion
   alone: with it down the Mac reaches only what it dials itself (none in the lead's layout). The candidate's check says so in a line
   that refuses nothing (`check note: the commit majority goes through w-k's door alone (w-k itself, and w-b through w-k): with w-k
@@ -1957,10 +1967,16 @@ witness, above).
   through the companion's relay ([The witness relay](#the-witness-relay)), which stands with the old leader's server
   stopped (or its machine gone) and is rehearsed (`--remote`, scenario `mac-shaped`: B, with no witness and nothing dialing
   it, commits by 2 of 3 after A's server pid is gone; the red control without the relay reaches 1 of 3 and is refused).
-  The preflight still refuses any switch whose commit majority needs a relay unless `leader_switch.relay_commit: true`,
-  and the lead's config has neither `relay` nor `relay_commit`. What is left before the lead lifts it:
+  The preflight still refuses any switch whose commit majority needs a relay unless `leader_switch.relay_commit: true`, and
+  without it no permit runtime takes the relay at all (`permitWays`: no grant, renew or commit through it); the lead's config
+  has neither `relay` nor `relay_commit`. What is left before the lead lifts it:
   - not run on real machines: the relay over a real companion and a real dev box's bridge, and the Mac's https to the
     companion's door at its commit;
+  - a new leader's hosts get their bridge up to 5 minutes late: its first `bridge.configure` push to a host comes before it
+    holds the permission and is refused (no machine token), and the next is `DaemonConnection`'s re-push every 5 minutes
+    (`daemon-connection.ts`, not this step's). Until then that host parks no relay stream: measured about 280 s on a fresh
+    rehearsal world (`mac-shaped` waits for it). A dev box's bridge stands long before any switch, but right after a switch
+    the new leader's hosts may have no relay for minutes;
   - the companion is one path for both votes of such a commit (its own and the relayed one): with it down the Mac reaches
     none, and the check says so in a note (no refusal);
   - the old leader's machine's witness is not relayed: its handed-over standby keeps its door up but is no follower, and that

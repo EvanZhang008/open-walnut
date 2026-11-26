@@ -57,8 +57,10 @@ export function openPermitClient(id: string, places: WitnessPlace[], params: Per
     remote: hostLinkCall({ daemonLink }), direct: directWitnessCall({ walnutId: thisWalnutId }), here: lazyMachine(),
     ...transportOpts,
     onDrop: (why, d) => {
-      // Only the witness's own "nothing here" (it looked at its directory) is absent; any other 404 is not reached.
-      if (why === 'bad-status' && d.status === 404 && d.error === NO_WITNESS_HERE_CODE) absentAt.set(d.witness, Date.now())
+      // Only the witness's own "nothing here" (it looked at its directory) is absent; any other 404 is not reached. Over
+      // the relay it is not reached either: no key proves an absence, and the companion (or a host parking under that
+      // witness's id) could say it for a witness that holds records.
+      if (why === 'bad-status' && d.status === 404 && d.error === NO_WITNESS_HERE_CODE && d.way !== 'relay') absentAt.set(d.witness, Date.now())
       transportOpts.onDrop?.(why, d)
     },
   })

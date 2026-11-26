@@ -30,12 +30,12 @@ import path from 'node:path'
 import type { Duplex } from 'node:stream'
 import { requestOver } from '../../host-server/request-over.js'
 import { log } from '../../../logging/index.js'
-import { callerBrake, machineWitnessDoor, readDoorBody, serveDoorHttp, type DoorResponse, type WitnessDoor } from './witness-door.js'
+import { callerBrake, callerKey, machineWitnessDoor, readDoorBody, serveDoorHttp, type DoorResponse, type WitnessDoor } from './witness-door.js'
 import { witnessRoot } from './machine-id.js'
 import { readWitnessKey, witnessDir } from './witness-route.js'
 import { NO_RELAY_CODE, WITNESS_DOOR_CHALLENGE, WITNESS_DOOR_PATH, WITNESS_DOOR_REQUEST, parseDoorChallenge, parseDoorRequest } from './witness-wire.js'
 
-export { NO_RELAY_CODE, WITNESS_RELAY_SUB } from './witness-wire.js'
+export { NO_RELAY_CODE, WITNESS_RELAY_SUB, relayUrlOf } from './witness-wire.js'
 
 export { WITNESS_RELAY_PURPOSE } from '../../../lib/leader-relay-names.js'
 
@@ -45,17 +45,22 @@ const HELLO_WAIT_MS = 5_000
 /** A parked stream is closed after this (the host parks a fresh one): a stream a cut left half open never waits for good. */
 export const PARK_MAX_MS = 50_000
 /**
- * Parked streams kept per witness from one host (the bridge's host alias, the link's identity), and in all; past them
- * the newest is refused. Per host: a host of this Walnut that parks under another machine's witness id (its streams
- * answer without that witness's proof, so they count for nothing) cannot crowd that machine's own streams out.
+ * Parked streams kept from one host (the bridge's host alias, the link's identity) per witness and over all its
+ * witnesses; past them that host's newest is refused. Per host: a host of this Walnut that parks under another
+ * machine's witness id, or under many made-up ones (its streams answer without that witness's proof, so they count for
+ * nothing), cannot crowd any other host's streams out. PARKED_ALL only bounds the memory of many hosts at once.
  */
 export const PARKED_PER_WITNESS = 8
-export const PARKED_TOTAL = 256
+export const PARKED_PER_HOST = 64
+export const PARKED_ALL = 4096
 /** How long a call waits for a parked stream when none is there (the host parks the next within a moment). */
 export const TAKE_WAIT_MS = 3_000
 /** One relayed post's bound: under the transport's 15 s per call, which holds two posts. */
 export const RELAY_POST_TIMEOUT_MS = 6_000
-/** Relayed posts one caller may send in one window (the door's own brake counts the relay as one caller). */
+/**
+ * Relayed posts one caller may send in one window. The far door counts each relayed caller on its own too (the hub
+ * names the caller in the post, `?caller=`), so one address cannot spend another caller's share there.
+ */
 export const RELAY_PER_CALLER = 256
 export const RELAY_WINDOW_MS = 10_000
 
@@ -74,13 +79,21 @@ export function parseRelayHello(line: string): RelayHello | null {
 
 const keyOf = (walnutId: string, witness: string) => `${walnutId}\n${witness}`
 
+/** The caller a relayed post names to the far door (its brake's key there), at most this long. */
+const CALLER_MAX = 64
+const callerParam = (caller: string): string => encodeURIComponent(caller.slice(0, CALLER_MAX))
+
 interface Parked { stream: Duplex; from: string; timer: ReturnType<typeof setTimeout> }
 
 export interface RelayHub {
-  /** A stream a host parked (`from`: who it came from, the bridge's host alias, for logs). Reads its hello, then keeps it. */
+  /** A stream a host parked (`from`: who it came from, the bridge's host alias, the link's identity). Reads its hello, then keeps it. */
   park(from: string, stream: Duplex): void
-  /** One door post to that witness over a parked stream: its status and JSON, or null when no stream was there in time or it broke. */
-  post(walnutId: string, witness: string, sub: string, body: unknown, timeoutMs?: number): Promise<{ status: number; json: unknown } | null>
+  /**
+   * One door post to that witness over a parked stream: its status and JSON, or null when no stream was there in time
+   * or it broke. `host`: the host the caller's config says keeps that witness; once that host has parked for it, only
+   * its streams are taken (another host's can only fail the proof). `caller`: who asked, named to the far door.
+   */
+  post(walnutId: string, witness: string, sub: string, body: unknown, o?: { host?: string; caller?: string; timeoutMs?: number }): Promise<{ status: number; json: unknown } | null>
   /** Streams parked for that witness now. */
   parked(walnutId: string, witness: string): number
   close(): void
@@ -90,8 +103,9 @@ export function createRelayHub(o: { parkMaxMs?: number; takeWaitMs?: number; log
   const parkMaxMs = o.parkMaxMs ?? PARK_MAX_MS
   const takeWaitMs = o.takeWaitMs ?? TAKE_WAIT_MS
   const byWitness = new Map<string, Parked[]>()
-  const waiters = new Map<string, Array<() => void>>()
+  const waiters = new Map<string, Array<() => boolean>>()
   let total = 0
+  const perHost = new Map<string, number>()
   let closed = false
   /** Per witness, the hosts it was parked by, once more than one (said once each time the set grows). */
   const parkers = new Map<string, Set<string>>()
@@ -103,13 +117,16 @@ export function createRelayHub(o: { parkMaxMs?: number; takeWaitMs?: number; log
     list.splice(i, 1)
     if (!list.length) byWitness.delete(key)
     total--
+    const n = (perHost.get(p.from) ?? 1) - 1
+    if (n > 0) perHost.set(p.from, n)
+    else perHost.delete(p.from)
     clearTimeout(p.timer)
     return true
   }
 
   const keep = (key: string, stream: Duplex, from: string): void => {
     const list = byWitness.get(key) ?? []
-    if (closed || list.filter((x) => x.from === from).length >= PARKED_PER_WITNESS || total >= PARKED_TOTAL) { stream.destroy(); return }
+    if (closed || list.filter((x) => x.from === from).length >= PARKED_PER_WITNESS || (perHost.get(from) ?? 0) >= PARKED_PER_HOST || total >= PARKED_ALL) { stream.destroy(); return }
     const by = parkers.get(key) ?? new Set<string>()
     if (!by.has(from)) {
       by.add(from)
@@ -122,16 +139,22 @@ export function createRelayHub(o: { parkMaxMs?: number; takeWaitMs?: number; log
     list.push(p)
     byWitness.set(key, list)
     total++
+    perHost.set(from, (perHost.get(from) ?? 0) + 1)
     stream.once('close', () => { drop(key, p) })
-    const w = waiters.get(key)
-    if (w?.length) w.shift()!()
+    // The first waiter this stream serves takes it (a waiter for another host's streams leaves it).
+    for (const w of [...(waiters.get(key) ?? [])]) if (w()) break
   }
 
-  const take = (key: string): Promise<Parked | null> => {
+  /** The streams a post to `key` may take: the named host's once it has parked for that witness, else any. */
+  const takeable = (key: string, host?: string): ((p: Parked) => boolean) => {
+    const only = host && parkers.get(key)?.has(host) ? host : null
+    return only ? (p) => p.from === only : () => true
+  }
+  const take = (key: string, host?: string): Promise<Parked | null> => {
     const now = (): Parked | null => {
-      const list = byWitness.get(key)
+      const ok = takeable(key, host)
       // The newest first: the one least likely to have gone quiet.
-      const p = list?.at(-1)
+      const p = [...(byWitness.get(key) ?? [])].reverse().find(ok)
       if (!p) return null
       drop(key, p)
       return p
@@ -141,13 +164,27 @@ export function createRelayHub(o: { parkMaxMs?: number; takeWaitMs?: number; log
     return new Promise((resolve) => {
       const list = waiters.get(key) ?? []
       let done = false
-      const wake = (): void => { if (done) return; done = true; clearTimeout(timer); resolve(now()) }
-      const timer = setTimeout(() => {
-        if (done) return
-        done = true
+      const leave = (): void => {
         const l = waiters.get(key)
         const i = l?.indexOf(wake) ?? -1
         if (l && i >= 0) l.splice(i, 1)
+        if (l && !l.length) waiters.delete(key)
+      }
+      // True when it took a stream (or ended): the hub's close wakes every waiter with nothing.
+      const wake = (): boolean => {
+        if (done) return false
+        const got = closed ? null : now()
+        if (!got && !closed) return false
+        done = true
+        clearTimeout(timer)
+        leave()
+        resolve(got)
+        return true
+      }
+      const timer = setTimeout(() => {
+        if (done) return
+        done = true
+        leave()
         resolve(null)
       }, takeWaitMs)
       timer.unref?.()
@@ -177,13 +214,14 @@ export function createRelayHub(o: { parkMaxMs?: number; takeWaitMs?: number; log
       }
       stream.on('data', onData)
     },
-    async post(walnutId, witness, sub, body, timeoutMs = RELAY_POST_TIMEOUT_MS) {
+    async post(walnutId, witness, sub, body, po = {}) {
       if (sub !== WITNESS_DOOR_CHALLENGE && sub !== WITNESS_DOOR_REQUEST) return null
-      const p = await take(keyOf(walnutId, witness))
+      const p = await take(keyOf(walnutId, witness), po.host)
       if (!p) return null
       p.stream.resume()
       try {
-        const res = await requestOver(p.stream, 'POST', `${WITNESS_DOOR_PATH}${sub}`, Buffer.from(JSON.stringify(body)), timeoutMs)
+        const route = `${WITNESS_DOOR_PATH}${sub}${po.caller ? `?caller=${callerParam(po.caller)}` : ''}`
+        const res = await requestOver(p.stream, 'POST', route, Buffer.from(JSON.stringify(body)), po.timeoutMs ?? RELAY_POST_TIMEOUT_MS)
         return { status: res.status, json: await res.json().catch(() => null) }
       } catch {
         return null
@@ -195,7 +233,7 @@ export function createRelayHub(o: { parkMaxMs?: number; takeWaitMs?: number; log
     close() {
       closed = true
       for (const [key, list] of [...byWitness]) for (const p of [...list]) { drop(key, p); p.stream.destroy() }
-      for (const list of waiters.values()) for (const w of [...list]) w()
+      for (const list of [...waiters.values()]) for (const w of [...list]) w()
       waiters.clear()
     },
   }
@@ -211,17 +249,22 @@ export function relayHub(): RelayHub {
 export function _resetRelayHub(): void { shared?.close(); shared = null }
 
 /**
- * The relay's two paths on a door (`sub` under WITNESS_RELAY_SUB: '/challenge' or '/request'): the body read as the
+ * The relay's paths on a door, under WITNESS_RELAY_SUB: `[/to/<host>]/challenge` and `.../request` (`host`, the hosts
+ * alias the caller's config names for the witness's machine, picks its streams: relayUrlOf in witness-wire.ts). The body is read as the
  * door reads it (capped, JSON), checked to be a door call (it names its Walnut and witness), sent on over one parked
- * stream, and that door's answer passed back as it came (status and JSON). The relay checks no proof: it holds no
- * key. Returns false (nothing written) for any other method or path.
+ * stream with the caller named, and that door's answer passed back as it came (status and JSON). The relay checks no
+ * proof: it holds no key. Returns false (nothing written) for any other method or path.
  */
-export function serveRelayHttp(hub: RelayHub, sub: string, req: IncomingMessage, res: ServerResponse, from: string, brake = defaultBrake()): boolean {
+export function serveRelayHttp(hub: RelayHub, path: string, req: IncomingMessage, res: ServerResponse, from: string, brake = defaultBrake()): boolean {
+  const m = /^(?:\/to\/([A-Za-z0-9._:-]{1,128}))?(\/[a-z]+)$/.exec(path)
+  if (!m) return false
+  const host = m[1]
+  const sub = m[2]!
   return readDoorBody(sub, req, res, (body, send) => {
     const call = sub === WITNESS_DOOR_CHALLENGE ? parseDoorChallenge(body) : parseDoorRequest(body)
     if (!call) { send({ status: 400, body: { ok: false, error: 'bad_request' } }); return }
     if (!brake(from, performance.now())) { send({ status: 429, body: { ok: false, error: 'too_many_requests' } }); return }
-    void hub.post(call.walnutId, call.witness, sub, body).then((r) => {
+    void hub.post(call.walnutId, call.witness, sub, body, { ...(host ? { host } : {}), caller: callerKey(from) }).then((r) => {
       if (!r) { send({ status: 503, body: { ok: false, error: NO_RELAY_CODE } }); return }
       // Passed on as it came: the caller judges it by the far witness's proof alone.
       send({ status: r.status, body: (r.json && typeof r.json === 'object' ? r.json : { ok: false, error: 'bad_relay_answer' }) as DoorResponse['body'] })
@@ -253,6 +296,9 @@ export interface RelayParkerDeps {
 
 export interface RelayParker { stop(): void; parked(): number }
 
+/** A parked stream closed unused after this long ran out its park at the companion (PARK_MAX_MS there): a normal park. */
+const PARK_SERVED_MS = PARK_MAX_MS * 0.8
+
 /** How often the parker looks again at which witnesses this machine keeps. */
 const PARKER_LOOK_MS = 5_000
 
@@ -268,11 +314,16 @@ export function startWitnessRelayParker(d: RelayParkerDeps): RelayParker {
   const open = new Set<Duplex>()
   const slots = new Map<string, number>()
   const failures = new Map<string, number>()
+  // The streams this machine's door got a request on (the companion wrote one call): only those count as served.
+  const served = new WeakSet<object>()
   const server = http.createServer((req, res) => {
-    const url = req.url ?? ''
-    const sub = url.startsWith(`${WITNESS_DOOR_PATH}/`) ? url.slice(WITNESS_DOOR_PATH.length) : ''
+    served.add(req.socket)
+    const url = new URL(req.url ?? '/', 'http://relay')
+    const sub = url.pathname.startsWith(`${WITNESS_DOOR_PATH}/`) ? url.pathname.slice(WITNESS_DOOR_PATH.length) : ''
     res.setHeader('connection', 'close')
-    if (!serveDoorHttp(d.door, sub, req, res, 'relay')) { res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'not_found' })) }
+    // The door's brake counts each relayed caller as its own (the companion names it), never all of them as one.
+    const caller = (url.searchParams.get('caller') ?? '').slice(0, 64)
+    if (!serveDoorHttp(d.door, sub, req, res, `relay/${caller || '?'}`)) { res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'not_found' })) }
   })
   server.on('clientError', (_err, socket) => { try { socket.destroy() } catch { /* gone */ } })
   let warned = ''
@@ -306,15 +357,15 @@ export function startWitnessRelayParker(d: RelayParkerDeps): RelayParker {
     warned = ''
     open.add(stream)
     const at = Date.now()
-    let served = false
     stream.on('error', () => { /* the companion went */ })
     stream.once('close', () => {
       open.delete(stream)
-      // Closed within a second having served nothing: the companion refused it (no relay there, too many parked). Back off.
-      release(!served && Date.now() - at < 1_000)
+      // Served: this door got a request on it, or the companion kept it for its park time unused (a park that just ran
+      // out). Anything else closed early with no call on it: the companion refused it (no relay there, too many parked),
+      // or it is a companion before the relay, whose own port answers the hello and closes. Back off, more each time.
+      release(!(served.has(stream) || Date.now() - at >= PARK_SERVED_MS))
     })
     stream.write(`${JSON.stringify({ v: 1, walnutId: d.walnutId, witness } satisfies RelayHello)}\n`)
-    stream.once('data', () => { served = true })
     server.emit('connection', stream)
   }
 

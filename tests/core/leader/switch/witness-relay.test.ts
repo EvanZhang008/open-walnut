@@ -30,11 +30,14 @@ import { DEFAULT_PERMIT_PARAMS } from '../../../../src/core/leader/permit/index.
 import { commitReach, probeWitnessReach, relayNeed, CANDIDATE_WAYS } from '../../../../src/core/leader/switch/witness-reach.js'
 import { directWitnessCall, BAD_WITNESS_PROOF } from '../../../../src/core/leader/switch/witness-direct.js'
 import { setUpMachineWitness } from '../../../../src/core/leader/switch/witness-route.js'
+import { machineWitnessDoor } from '../../../../src/core/leader/switch/witness-door.js'
 import { createWitnessDoorRouter } from '../../../../src/web/routes/witness-door.js'
-import { NO_RELAY_CODE, NO_WITNESS_HERE_CODE, WITNESS_DOOR_PATH, WITNESS_REQUEST_PATH, WITNESS_RELAY_SUB } from '../../../../src/core/leader/switch/witness-wire.js'
-import { waysOf, type RemoteCallResult } from '../../../../src/core/leader/switch/witness-transport.js'
-import { createRelayHub, PARKED_PER_WITNESS, keyedWitnesses, parseRelayHello, relayHub, startHostWitnessRelay, _resetRelayHub, type RelayParker } from '../../../../src/core/leader/switch/witness-relay.js'
-import { parseSwitchSettings, type RemoteWitnessPlace } from '../../../../src/core/leader/switch/settings.js'
+import { NO_RELAY_CODE, NO_WITNESS_HERE_CODE, WITNESS_DOOR_PATH, WITNESS_REQUEST_PATH, WITNESS_RELAY_SUB, relayUrlOf } from '../../../../src/core/leader/switch/witness-wire.js'
+import { permitWays, waysOf, type RemoteCall, type RemoteCallResult } from '../../../../src/core/leader/switch/witness-transport.js'
+import { openPermitClient, readStanding } from '../../../../src/core/leader/switch/permit-ops.js'
+import { startPermitRuntime } from '../../../../src/core/leader/switch/runtime.js'
+import { createRelayHub, PARKED_PER_HOST, PARKED_PER_WITNESS, keyedWitnesses, startWitnessRelayParker, parseRelayHello, relayHub, startHostWitnessRelay, _resetRelayHub, type RelayParker } from '../../../../src/core/leader/switch/witness-relay.js'
+import { parseSwitchSettings, type LeaderSwitchSettings, type RemoteWitnessPlace } from '../../../../src/core/leader/switch/settings.js'
 import { runTargetJob } from '../../../../src/core/leader/switch/target-job.js'
 import type { SwitchSide } from '../../../../src/core/leader/switch/side.js'
 import type { CheckReport } from '../../../../src/core/leader/switch/ticket.js'
@@ -55,6 +58,8 @@ let companionPort = 0
 let bridge: net.Server
 let bridgePort = 0
 const bridgeFault = { refuse: false }
+/** Posts to the companion's relay (any caller). */
+const relayPosts = { n: 0 }
 let deadPort = 0
 let places: RemoteWitnessPlace[] = []
 let parker: RelayParker | null = null
@@ -74,6 +79,7 @@ beforeAll(async () => {
     expect(r.status).toBe(200)
   }
   const app = express()
+  app.use((req, _res, next) => { if (req.path.startsWith(`${WITNESS_DOOR_PATH}${WITNESS_RELAY_SUB}/`)) relayPosts.n++; next() })
   app.use(WITNESS_DOOR_PATH, createWitnessDoorRouter({ root: roots['w-k'] }))
   companion = http.createServer(app)
   companionPort = await listen(companion)
@@ -86,7 +92,7 @@ beforeAll(async () => {
   places = [
     { id: 'w-a', machine: 'machine-a', host: 'machine-a', url: `http://127.0.0.1:${deadPort}/a${WITNESS_DOOR_PATH}`, key: keys['w-a'] },
     // The other dev box: its own door out of reach, its relay the companion's door.
-    { id: 'w-b', machine: 'machine-b', host: 'machine-b', url: `http://127.0.0.1:${deadPort}/b${WITNESS_DOOR_PATH}`, key: keys['w-b'], relay: 'w-k', relayUrl: `${kDoor}${WITNESS_RELAY_SUB}` },
+    { id: 'w-b', machine: 'machine-b', host: 'machine-b', url: `http://127.0.0.1:${deadPort}/b${WITNESS_DOOR_PATH}`, key: keys['w-b'], relay: 'w-k', relayUrl: relayUrlOf(kDoor, 'machine-b') },
     { id: 'w-k', url: kDoor, key: keys['w-k'] },
   ]
 })
@@ -163,9 +169,35 @@ describe('a Mac-shaped candidate at its commit (the old leader stopped, no link 
     for (let i = 0; i < 5; i++) {
       const r = await readOnce(viaRelayAt(places[1]!.relayUrl!))
       expect(r?.status, JSON.stringify(r?.body)).toBe(200)
+      // A stream the door got a request on counts as served: the next is parked at once, no back-off.
+      await until(() => relayHub().parked(WALNUT, 'w-b') >= 2, 800)
     }
-    await until(() => relayHub().parked(WALNUT, 'w-b') >= 2)
+    // Both ways in: the relay without a host, and the one naming it.
+    expect(places[1]!.relayUrl).toBe(`http://127.0.0.1:${companionPort}${WITNESS_DOOR_PATH}${WITNESS_RELAY_SUB}/to/machine-b`)
+    expect((await readOnce(viaRelayAt(`http://127.0.0.1:${companionPort}${WITNESS_DOOR_PATH}${WITNESS_RELAY_SUB}`)))?.status).toBe(200)
   }, 30_000)
+
+  it('against a companion before the relay (its own port answers the hello and closes): the parker backs off, no hot loop', async () => {
+    // The pre-relay companion's bridge splices a follower stream into its own HTTP port (review round 1's script).
+    const old = http.createServer((_req, res) => { res.end('ok') })
+    const port = await listen(old)
+    let opens = 0
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-old-'))
+    const p = startWitnessRelayParker({
+      walnutId: 'w', witnesses: () => ['w-o'], door: machineWitnessDoor({ root }), perWitness: 2,
+      open: async () => { opens++; return net.connect(port, '127.0.0.1') },
+    })
+    try {
+      await new Promise((r) => setTimeout(r, 5_000))
+      // Two slots backing off 1 s, 2 s, 4 s, ... (one count for the witness): a handful, where it was about 200.
+      expect(opens).toBeGreaterThanOrEqual(2)
+      expect(opens).toBeLessThanOrEqual(8)
+    } finally {
+      p.stop()
+      await new Promise<void>((r) => { old.closeAllConnections?.(); old.close(() => r()) })
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }, 20_000)
 })
 
 describe('a hostile relay can make no vote count', () => {
@@ -292,6 +324,73 @@ describe('the hub', () => {
     hub.close()
   })
 
+  it('a post naming the witness\'s host takes that host\'s stream, not the newest; a host never seen there takes any', async () => {
+    const hub = createRelayHub({ takeWaitMs: 300 })
+    const hello = '{"v":1,"walnutId":"w","witness":"w-b"}\n'
+    // Each "host" answers the one request on its stream with its own name.
+    const park = async (from: string): Promise<net.Socket> => {
+      const [c, s] = pair()
+      hub.park(from, await s)
+      c.write(hello)
+      c.once('data', () => { const b = JSON.stringify({ ok: true, from }); c.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${b.length}\r\nconnection: close\r\n\r\n${b}`) })
+      return c
+    }
+    const socks = [await park('machine-b'), await park('machine-x')]
+    await until(() => hub.parked('w', 'w-b') === 2)
+    expect((await hub.post('w', 'w-b', '/challenge', {}, { host: 'machine-b' }))?.json).toEqual({ ok: true, from: 'machine-b' })
+    // machine-b has parked for w-b: a post naming it waits for its streams and never takes machine-x's.
+    expect(await hub.post('w', 'w-b', '/challenge', {}, { host: 'machine-b' })).toBeNull()
+    expect(hub.parked('w', 'w-b')).toBe(1)
+    // A host that never parked for it (an alias the bridge does not use): any stream, the newest.
+    expect((await hub.post('w', 'w-b', '/challenge', {}, { host: 'machine-z' }))?.json).toEqual({ ok: true, from: 'machine-x' })
+    hub.close()
+    for (const c of socks) c.destroy()
+  })
+
+  it('one host\'s streams over all its witnesses are capped on their own: made-up witness ids crowd no other host out', async () => {
+    const hub = createRelayHub()
+    const socks: net.Socket[] = []
+    const park = async (from: string, witness: string): Promise<net.Socket> => {
+      const [c, s] = pair()
+      hub.park(from, await s)
+      c.write(`{"v":1,"walnutId":"w","witness":"${witness}"}\n`)
+      socks.push(c)
+      return c
+    }
+    for (let i = 0; i < PARKED_PER_HOST; i++) await park('machine-x', `w-made-${Math.floor(i / 4)}-${i % 4}`)
+    await until(() => Array.from({ length: PARKED_PER_HOST / 4 }, (_, j) => [0, 1, 2, 3].reduce((n, k) => n + hub.parked('w', `w-made-${j}-${k}`), 0)).reduce((a, b) => a + b, 0) === PARKED_PER_HOST)
+    const refused = await park('machine-x', 'w-made-new')
+    await closed(refused)
+    await park('machine-b', 'w-b')
+    await until(() => hub.parked('w', 'w-b') === 1)
+    hub.close()
+    for (const c of socks) c.destroy()
+  })
+
+  it('the far door brakes each relayed caller on its own: one address spends no other caller\'s share', async () => {
+    const hub = createRelayHub()
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wr-brake-'))
+    expect((await setUpMachineWitness(root, { v: 1, walnutId: WALNUT, witness: 'w-b', list: LIST, evidence: blankEvidence(LIST, 'w-b'), key: keys['w-b'] })).status).toBe(200)
+    const open = (): Promise<net.Socket> => new Promise((resolve) => {
+      const srv = net.createServer((s) => { srv.close(); hub.park('machine-b', s) })
+      srv.listen(0, '127.0.0.1', () => { const c = net.connect((srv.address() as net.AddressInfo).port, '127.0.0.1'); c.once('connect', () => resolve(c)) })
+    })
+    const p = startWitnessRelayParker({ walnutId: WALNUT, witnesses: () => ['w-b'], door: machineWitnessDoor({ root, limits: { maxPerCaller: 2 } }), open })
+    try {
+      const challenge = { v: 1, walnutId: WALNUT, witness: 'w-b', digest: 'a'.repeat(64), cnonce: 'b'.repeat(64) }
+      const ask = async (caller: string) => {
+        await until(() => hub.parked(WALNUT, 'w-b') >= 1)
+        return (await hub.post(WALNUT, 'w-b', '/challenge', challenge, { caller }))?.status
+      }
+      expect([await ask('198.51.100.7'), await ask('198.51.100.7'), await ask('198.51.100.7')]).toEqual([200, 200, 429])
+      expect(await ask('203.0.113.9')).toBe(200)
+    } finally {
+      p.stop()
+      hub.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }, 20_000)
+
   it('a host parking under another machine\'s witness id cannot crowd that machine out, and is said', async () => {
     const said: Array<Record<string, unknown> | undefined> = []
     const hub = createRelayHub({ log: (level, _msg, data) => { if (level === 'warn') said.push(data) } })
@@ -388,4 +487,52 @@ describe('the candidate\'s check', () => {
     expect(on.notes?.[0]).toMatch(/the commit majority goes through w-k's door alone \(w-k itself, and w-b through w-k\): with w-k down this machine reaches only the witnesses it dials itself, 0 of 3 \(2 needed\)/)
     expect(spy.links).toEqual([])
   }, 40_000)
+})
+
+describe('the permit itself (not only the preflight)', () => {
+  it('a relayed no_witness_here is not reached, never absent; the same over the direct door is absent', async () => {
+    const nothingHere: RemoteCall = (_p, _path, _body, done) => { done({ status: 404, body: { ok: false, error: NO_WITNESS_HERE_CODE } }) }
+    const others: RemoteWitnessPlace[] = [{ id: 'w-a', url: `http://127.0.0.1:${deadPort}/a`, key: keys['w-a'] }, { id: 'w-k', url: `http://127.0.0.1:${deadPort}/k`, key: keys['w-k'] }]
+    const absentWith = async (wb: RemoteWitnessPlace): Promise<string[]> => {
+      const h = openPermitClient('reader', [others[0]!, wb, others[1]!], DEFAULT_PERMIT_PARAMS, undefined, { direct: nothingHere, walnutId: WALNUT })
+      return (await readStanding(h, 600)).absent
+    }
+    expect(await absentWith({ id: 'w-b', url: 'http://door.invalid/leader-witness', key: keys['w-b'] })).toContain('w-b')
+    expect(await absentWith({ id: 'w-b', relay: 'w-k', relayUrl: 'http://relay.invalid/leader-witness/relay', key: keys['w-b'] })).not.toContain('w-b')
+  })
+
+  it('relay_commit off: a Mac-shaped permit runtime never leads through the relay; on, it does', async () => {
+    startParker()
+    await until(() => relayHub().parked(WALNUT, 'w-b') >= 2)
+    const settings = (relayCommit: boolean): LeaderSwitchSettings => ({
+      witnesses: places,
+      machines: ['machine-a', 'machine-m'].map((id, i) => ({ id, home: path.join(base, `rt-${id}`), standbyDir: path.join(base, `rt-${id}-standby`), port: 4910 + i })),
+      backWindowHours: 24, params: { ...DEFAULT_PERMIT_PARAMS }, relayCommit,
+    }) as LeaderSwitchSettings
+    const start = async (relayCommit: boolean) => {
+      const home = path.join(base, `rt-${relayCommit}`)
+      fs.mkdirSync(home, { recursive: true })
+      return startPermitRuntime({ home, holderId: 'machine-m', settings: settings(relayCommit), trial: false, net: { walnutId: WALNUT, here, direct: directWitnessCall({ timeoutMs: 5_000 }) } })
+    }
+    relayPosts.n = 0
+    const off = await start(false)
+    try {
+      // Its boot reads and grant reach w-k by its door only (w-b only through the relay, w-a out of reach): 1 of 3, it
+      // waits, and it never posts through the relay at all. One way per read, the next after a miss: the boot's reads
+      // reach the relay's turn within about 20 s (the "on" runtime below leads then), so it waits longer than that.
+      await new Promise((r) => setTimeout(r, 25_000))
+      expect(relayPosts.n).toBe(0)
+      expect(off.mayAct()).toBe(false)
+    } finally {
+      await off.stop()
+    }
+    const on = await start(true)
+    try {
+      await until(() => on.mayAct(), 20_000)
+    } finally {
+      await on.stop()
+    }
+    expect(permitWays(false)).not.toContain('relay')
+    expect(spy.links).toEqual([])
+  }, 90_000)
 })

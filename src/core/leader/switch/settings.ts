@@ -40,7 +40,7 @@ import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../permit/types.js'
 import { checkTiming } from '../permit/rules.js'
 import { experimentalEnabled, type ExperimentalFlags } from '../../experimental.js'
 import { log } from '../../../logging/index.js'
-import { WITNESS_RELAY_SUB } from './witness-wire.js'
+import { relayUrlOf } from './witness-wire.js'
 
 /** A witness whose record is a directory on this computer (one-computer rehearsals and tests). */
 export interface LocalWitnessPlace { id: string; dir: string }
@@ -184,7 +184,7 @@ function resolveRelays(witnesses: WitnessPlace[]): string | null {
     if (!via || via === w) return `leader_switch.witnesses: ${w.id}'s relay names no other witness of the list (${w.relay})`
     if (!isRemoteWitness(via) || !via.url) return `leader_switch.witnesses: ${w.id}'s relay ${via.id} has no door url to relay through`
     if (via.relay) return `leader_switch.witnesses: ${w.id}'s relay ${via.id} is itself relayed (one hop only)`
-    w.relayUrl = `${via.url}${WITNESS_RELAY_SUB}`
+    w.relayUrl = relayUrlOf(via.url, w.host)
   }
   return null
 }

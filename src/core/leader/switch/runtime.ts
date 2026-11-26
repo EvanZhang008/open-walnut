@@ -34,6 +34,7 @@ import path from 'node:path'
 import { appendMayAct, markerRefusal, readMarker, readOpOutcomes, recordOpOutcomes, summarize, writeUnresolvedOps } from './records.js'
 import { changeListAndWait, openPermitClient, proposeAndWait, readStanding, PROPOSE_WAIT_MS, READ_WAIT_MS, type PermitHandle } from './permit-ops.js'
 import { sightingsOf, type WitnessSighting } from './witness-setup.js'
+import { permitWays } from './witness-transport.js'
 import { DEFERRED_DOOR_WORK_FILE, notifyOutwardDoorsOpened, setOutwardDoorChecker, setOutwardSender, type OutwardDoorKind } from './doors.js'
 import type { LeaderSwitchSettings, WitnessPlace } from './settings.js'
 import { majorityOf, type PermitParams, type PermitRecord, type PermitReply } from '../permit/types.js'
@@ -313,7 +314,10 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     dropSaid.set(key, Date.now())
     log('info', 'leader permit: a witness did not answer', { witness: d.witness, way: d.way, why: dropWhy, ...(d.status ? { status: d.status } : {}), ...(d.error ? { error: d.error } : {}) })
   }
-  const h = openPermitClient(me, settings.witnesses, settings.params, () => !lock || lock.held(), { daemonLink: () => !opts.trial && everLed, ...opts.net, onDrop })
+  // The relay is a way of this permit only with leader_switch.relay_commit on (witness-transport.ts permitWays): off, no
+  // grant, renew or commit of this server ever counts a relayed witness, so a machine that reaches a majority only
+  // through a relay (the Mac with no witness of its own) cannot lead in this phase, whatever started its runtime.
+  const h = openPermitClient(me, settings.witnesses, settings.params, () => !lock || lock.held(), { ways: permitWays(settings.relayCommit), daemonLink: () => !opts.trial && everLed, ...opts.net, onDrop })
   let why: string | undefined
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = false

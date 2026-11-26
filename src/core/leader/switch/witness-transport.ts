@@ -73,6 +73,14 @@ export type RemoteCall = (place: RemoteWitnessPlace, path: string, body: Witness
 export type WitnessWay = 'here' | 'host-link' | 'direct' | 'link' | 'relay'
 export const WITNESS_WAYS: readonly WitnessWay[] = ['here', 'host-link', 'direct', 'link', 'relay']
 
+/**
+ * The ways of a permit runtime (the one client that grants, renews and commits, runtime.ts): every way, the relay only
+ * with leader_switch.relay_commit on. A candidate's probe keeps the relay for its report (witness-reach.ts).
+ */
+export function permitWays(relayCommit: boolean): readonly WitnessWay[] {
+  return relayCommit ? WITNESS_WAYS : WITNESS_WAYS.filter((w) => w !== 'relay')
+}
+
 /** This process's own machine, for way a. */
 export interface HereMachine {
   /** This machine's id (machine-id.ts permitHolderId), null when it cannot be had. */

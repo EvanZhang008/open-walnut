@@ -7,7 +7,7 @@
  *   POST /leader-witness/challenge, /leader-witness/request
  *       the witness's direct door (core/leader/switch/witness-door.ts): a caller proves the witness's
  *       own key by challenge-response, nothing else lets it in;
- *   POST /leader-witness/relay/challenge, /leader-witness/relay/request
+ *   POST /leader-witness/relay[/to/<host>]/challenge, /leader-witness/relay[/to/<host>]/request
  *       the relay to ANOTHER witness's door (core/leader/switch/witness-relay.ts), over a stream that witness's
  *       machine parked here over its bridge; the caller proves that witness's key to that witness, end to end;
  *   POST /bridge/witness-setup
@@ -44,7 +44,8 @@ export function createWitnessDoorRouter(o: { root?: string } = {}): Router {
   })
   // The relay to another witness's door, over a stream that witness's machine parked here (core/leader/switch/witness-relay.ts).
   // With nothing parked (any server but the companion) every call is 503 no_relay.
-  router.post(['/relay/challenge', '/relay/request'], (req: Request, res: Response, next) => {
+  // `/relay/to/<host>/...` names the hosts alias of the relayed witness's machine: its streams are taken (witness-wire.ts relayUrlOf).
+  router.post(['/relay/challenge', '/relay/request', '/relay/to/:host/challenge', '/relay/to/:host/request'], (req: Request, res: Response, next) => {
     void import('../../core/leader/switch/witness-relay.js').then(({ relayHub, serveRelayHttp, WITNESS_RELAY_SUB }) => {
       if (!serveRelayHttp(relayHub(), req.path.slice(WITNESS_RELAY_SUB.length), req, res, req.ip ?? req.socket.remoteAddress ?? 'unknown')) next()
     }).catch(next)
