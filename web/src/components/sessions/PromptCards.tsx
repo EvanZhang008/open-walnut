@@ -355,6 +355,9 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
   const failReason = stored?.failReason;
   useEffect(() => { if (failReason) setPicked(null); }, [failReason]);
   const heldChoice = failReason && stored?.failed ? stored.optionId : undefined;
+  // The choice the server held, by its option id: the plain Allow / Deny carry none, so they are
+  // never it (an undefined held id once matched both, red and with an empty alert).
+  const isHeld = (c: PromptChoice) => heldChoice !== undefined && heldChoice === c.optionId;
   // A digit for an Allow while a note is typed: said in the hint for a moment.
   const [noteBlocked, setNoteBlocked] = useState(false);
   const blockTimer = useRef<number | null>(null);
@@ -424,6 +427,10 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
       { key: 'allow', label: allowLabel, allow: true, takesNote: false, remembers: false },
       { key: 'deny', label: denyLabel, allow: false, takesNote: true, remembers: false },
     ];
+  // The main action, always filled (the team's rule, 11-26: one look keeps its main action in the
+  // main colour): the first yes that is not a standing rule, else the first yes (`strongChoiceId`).
+  const firstYes = choices.findIndex((c) => c.allow && !c.remembers);
+  const strongIdx = firstYes >= 0 ? firstYes : choices.findIndex((c) => c.allow);
   const noteChoice = choices.find((c) => c.takesNote) ?? null;
   const keys = choiceKeys(choices.map((c) => c.optionId));
   const noteText = note.trim();
@@ -544,7 +551,7 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
             <button
               key={c.key}
               type="button"
-              className={`btn btn-sm permission-request-btn ${c.allow ? 'permission-request-btn--allow' : 'permission-request-btn--deny'}${c.allow && !asRows && !c.remembers && !noteText ? ' btn-primary' : ''}${asRows ? ' permission-request-choice' : ''}${c.remembers ? ' is-remembering' : ''}${picked === i ? ' is-picked' : ''}${noteText ? (c.takesNote ? ' btn-danger is-noted' : ' is-muted') : ''}${heldChoice === c.optionId && picked !== i ? ' btn-danger is-failed' : ''}${btnBusy(c.key)}`}
+              className={`btn btn-sm permission-request-btn ${c.allow ? 'permission-request-btn--allow' : 'permission-request-btn--deny'}${i === strongIdx && !noteText ? ' btn-primary' : ''}${asRows ? ' permission-request-choice' : ''}${c.remembers ? ' is-remembering' : ''}${picked === i ? ' is-picked' : ''}${noteText ? (c.takesNote ? ' btn-danger is-noted' : ' is-muted') : ''}${isHeld(c) && picked !== i ? ' btn-danger is-failed' : ''}${btnBusy(c.key)}`}
               data-on={picked === i ? 'true' : undefined}
               data-choice={c.optionId ?? c.key}
               data-choice-index={i}
@@ -568,7 +575,7 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
                   {/* Every rule the choice adds, one per line, in full: the grant is read before it is given. */}
                   {c.detail && <span className="permission-choice-detail"><RuleDetail text={c.detail} /></span>}
                   {/* The server held this choice: why, where it was picked. */}
-                  {heldChoice === c.optionId && picked !== i ? <span className="permission-choice-failed" role="alert">{failReason}</span>
+                  {isHeld(c) && picked !== i ? <span className="permission-choice-failed" role="alert">{failReason}</span>
                     : c.savedTo && <span className={`permission-choice-saved${picked === i ? ' perm-option-confirm' : ''}`} title={`Saves to ${c.savedTo}`}>{picked === i ? <>Click again or press Enter to save to <span className="perm-saved-file">{c.savedTo}</span></> : <>Saves to <span className="perm-saved-file">{c.savedTo}</span></>}</span>}
                 </span>
               ) : (

@@ -2752,8 +2752,8 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 /* A pick by key shows and goes at once: a fading ring read as still picked after Esc. */
 .permission-request-btn.permission-request-choice { transition: none; }
 .permission-request-btn.permission-request-choice .prompt-key { margin-right: 0; }
-/* A list that names rules stays neutral, as in the toast: no choice looks picked before the person picks. */
-.permission-request-choice .permission-choice-label { color: var(--fg); }
+/* A row's name reads in the text colour; the main action's row (btn-primary) keeps its own ink. */
+.permission-request-choice:not(.btn-primary) .permission-choice-label { color: var(--fg); }
 .permission-request-btn.permission-request-choice { align-items: flex-start; }
 .permission-request-choice .prompt-key { margin-top: 1px; }
 .permission-choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }

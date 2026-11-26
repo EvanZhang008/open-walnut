@@ -116,6 +116,9 @@ test.describe('Claude prompt choices on the desktop card', () => {
     await expect(rows.nth(1)).toContainText('Allow for this session')
     await expect(rows.nth(1)).toContainText('Bash(npm test:*)')
     await expect(rows.nth(2)).toContainText('Always allow in this project')
+    // A list that names rules still fills its main action: the first plain yes.
+    await expect(card.locator('button.btn-primary')).toHaveCount(1)
+    await expect(rows.nth(0)).toHaveClass(/btn-primary/)
     await expect(card.locator('.prompt-key')).toHaveText(['1', '2', '3', '4'])
     await expect(card.locator('.permission-request-keyhint')).toContainText('1–4 to choose, Enter to send')
     await shot(page, 'rule-pending', 'req-rule-1')
@@ -172,9 +175,14 @@ test.describe('Claude prompt choices on the desktop card', () => {
     const answers = await setup(page)
     await inject(page, bashAsk('req-plain-1'))
     const card = cardOf(page, 'req-plain-1')
-    // The same numbered list as a card with rules: no solid yes that looks chosen.
+    // The same numbered list as a card with rules, its main action filled: Allow is the one
+    // btn-primary, in the accent, never the held failure's red (an undefined held id once
+    // matched both plain choices: a red Allow and an empty alert under each).
     await expect(card.locator('button.permission-request-btn')).toHaveCount(2)
     await expect(card.locator('.permission-request-choice')).toHaveCount(2)
+    await expect(card.locator('button.btn-primary')).toHaveCount(1)
+    await expect(card.locator('button.btn-primary')).toContainText('Allow')
+    await expect(card.locator('.btn-danger, .is-failed, .permission-choice-failed')).toHaveCount(0)
     await expect(card.locator('.prompt-key')).toHaveText(['1', '2'])
     await expect(card.getByTestId('permission-note-input')).toBeVisible()
     await shot(page, 'plain-pending', 'req-plain-1')

@@ -408,6 +408,10 @@ describe('iOS UI standard: one look per kind of control', () => {
     })
 
     it("the web's permission prompts fill their main action through strongChoiceId, whatever the list names", () => {
+      // The session card (PromptCards) fills its strongIdx, the same rule written over its choices.
+      const card = readWeb('components/sessions/PromptCards.tsx')
+      expect(card).toMatch(/\$\{i === strongIdx && !noteText \? ' btn-primary' : ''\}/)
+      expect(card).not.toMatch(/!asRows && !c\.remembers[^}]*btn-primary/)
       for (const rel of ['components/common/PermissionPromptControls.tsx', 'components/common/NotificationToaster.tsx']) {
         const src = readWeb(rel)
         expect(src, rel).toMatch(/const strong = strongChoiceId\(acpOptions\)/)
