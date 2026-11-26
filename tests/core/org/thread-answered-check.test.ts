@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { emptyThreads, fileMessage, normalizeThreads, setAnswers, updateThread, type ThreadAnswer, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 import { expandAnswerRefs, storedMessages } from '../../../src/core/org/thread-answer-refs.js'
 import {
-  answerCandidates, answeredJudgeInput, markAnswered, markAnsweredGroup, readAnsweredList, readByNode, replyKey, replyProse, turnReply, REPLY_MAX,
+  answerCandidates, answeredJudgeInput, markAnswered, markAnsweredGroup, readAnsweredList, readByNode, replyKey, replyProse, turnReply, JUDGED_REOPEN_MS, LIST_MAX, REPLY_MAX,
 } from '../../../src/core/org/thread-answered-check.js'
 import { cardView, listedForHim, sharedAnswers } from '../../../src/core/org/thread-view.js'
 import type { AnswerRow } from '../../../src/core/org/thread-answers.js'
@@ -333,5 +333,103 @@ describe('the write', () => {
     const same = setAnswers(w.f, new Map([[w.message, { text: INTERIM, at: at(1) }]]), { replace: true })
     expect(same.changed).toEqual([])
     expect(setAnswers(w.f, new Map([[w.message, reply(REAL, 20)]]), { replace: true }).changed).toEqual([w.thread])
+  })
+})
+
+describe('an answer the check wrote is open to a better one for a while only (review 2026-11-26)', () => {
+  const WINDOW_MIN = JUDGED_REOPEN_MS / 60_000
+  const DAY = 24 * 60
+  /** His train question, answered by the check at minute 20. */
+  const judgedTrain = () => {
+    const w = working()
+    return { ...w, f: markAnswered(w.f, w.thread, reply(REAL, 20), at(21), at(19)).file }
+  }
+
+  it('the window is two hours', () => {
+    expect(JUDGED_REOPEN_MS).toBe(2 * 3600_000)
+  })
+
+  it('past the window it is no candidate, and a related reply does not replace the answer he may have read', () => {
+    const j = judgedTrain()
+    expect(answerCandidates(j.f, at(20 + WINDOW_MIN - 1)).map((c) => [c.thread.id, c.rejudge])).toEqual([[j.thread, true]])
+    for (const m of [20 + WINDOW_MIN + 1, DAY, 3 * DAY, 4.9 * DAY]) expect(answerCandidates(j.f, at(m)), String(m)).toEqual([])
+    const late = 'Update: the Saturday 7:10 is cancelled for works, the 7:40 bus replaces it this week.'
+    const r = markAnswered(j.f, j.thread, reply(late, 3 * DAY), at(3 * DAY + 1), at(3 * DAY - 1))
+    expect(r.out).toBe(false)
+    expect(r.file).toBe(j.f)
+    expect(r.file.threads[0].messages[0].answer?.text).toBe(REAL)
+  })
+
+  it('a later word of his anywhere in the chat ends it: the answer is his', () => {
+    const j = judgedTrain()
+    const b = ask(j.f, 'Is the bakery by the coast station open early?', 30)
+    expect(answerCandidates(b.file, at(40)).map((c) => c.thread.id)).toEqual([b.thread.id])
+  })
+
+  it('an old question still waiting is listed and judged ahead of twelve newer answers the check wrote', () => {
+    let f = ask(emptyThreads(NODE), 'When does the hardware shop near the station close on Sunday?', 0).file
+    const old = f.threads[0].id
+    f = updateThread(f, old, { state: 'working' }, `task:${NODE}`, at(1), undefined, { line: true }).file
+    const plots: string[] = []
+    for (let i = 1; i <= 12; i++) {
+      const q = ask(f, `How many fence posts does garden plot ${i} need?`, 1 + i)
+      plots.push(q.thread.id)
+      f = q.file
+    }
+    // All twelve answered by the check after his last word, so each is still open to a better reply.
+    for (let i = 1; i <= 12; i++) f = markAnswered(f, plots[i - 1], reply(`Garden plot ${i} needs ${i * 4} fence posts, delivered on Thursday.`, 20 + i), at(21 + i), at(19 + i)).file
+    const cands = answerCandidates(f, at(60))
+    expect(cands).toHaveLength(13)
+    expect(cands.filter((c) => c.rejudge)).toHaveLength(12)
+    expect(cands[0]).toMatchObject({ thread: { id: old }, rejudge: false })
+    const listed = cands.slice(0, LIST_MAX)
+    expect(listed.map((c) => c.thread.id)).toContain(old)
+    expect(answeredJudgeInput(listed, 'The hardware shop near the station closes at five on Sunday and opens at nine on Monday.', '<<m>>'))
+      .toMatch(/^1\. Thread: [^\n]+\n {3}He asked: When does the hardware shop near the station close on Sunday\?/m)
+    const r = markAnswered(f, old, reply('The hardware shop near the station closes at five on Sunday and opens at nine on Monday.', 60), at(61), at(59))
+    expect(r.out).toBe(true)
+  })
+
+  it('a fresh question named with an answer the check wrote keeps its own card and title; the other is left as it was', () => {
+    // He asks two things; an interim reply was taken for the train's answer; the real reply names both.
+    const a = ask(emptyThreads(NODE), Q_TRAIN, 0)
+    const b = ask(a.file, Q_BIKE, 5)
+    let f = updateThread(b.file, b.thread.id, { state: 'working' }, `task:${NODE}`, at(6), undefined, { line: true }).file
+    f = markAnswered(f, a.thread.id, reply(INTERIM, 10), at(11), at(9)).file
+    const before = f.threads.find((t) => t.id === a.thread.id)!
+    const both = `${REAL} The bike ride to the north fence takes about forty minutes.`
+    const cands = answerCandidates(f, at(40))
+    expect(cands.map((c) => [c.thread.id, c.rejudge])).toEqual([[b.thread.id, false], [a.thread.id, true]])
+    const r = markAnsweredGroup(f, [a.thread.id, b.thread.id], reply(both, 40), at(41), at(39))
+    expect(r.out).toEqual({ marked: b.thread.id, merged: [], left: [a.thread.id] })
+    expect(r.file.threads.map((t) => t.id).sort()).toEqual([a.thread.id, b.thread.id].sort())
+    const bike = r.file.threads.find((t) => t.id === b.thread.id)!
+    expect(bike).toMatchObject({ state: 'answered', title: b.thread.title })
+    expect(bike.messages.map((m) => [m.text, m.answer?.text])).toEqual([[Q_BIKE, both]])
+    expect(r.file.threads.find((t) => t.id === a.thread.id)).toEqual(before)
+    expect(sharedAnswers(r.file.threads).size).toBe(0)
+  })
+
+  it('days later, his new question and the old answered one named together: the new one is answered alone, the old card untouched', () => {
+    const j = judgedTrain()
+    const b = ask(j.f, Q_BIKE, 3 * DAY)
+    const f = updateThread(b.file, b.thread.id, { state: 'working' }, `task:${NODE}`, at(3 * DAY + 1), undefined, { line: true }).file
+    const r = markAnsweredGroup(f, [j.thread, b.thread.id], reply(`From the coast station (the 7:10 still arrives 8:42) the bike ride takes about forty minutes.`, 3 * DAY + 30), at(3 * DAY + 31), at(3 * DAY + 29))
+    expect(r.out).toEqual({ marked: b.thread.id, merged: [], left: [] })
+    expect(r.file.threads.find((t) => t.id === b.thread.id)).toMatchObject({ state: 'answered', title: b.thread.title })
+    expect(r.file.threads.find((t) => t.id === j.thread)).toEqual(f.threads.find((t) => t.id === j.thread))
+  })
+
+  it('two answers the check wrote, named together with nothing waiting: never merged, only the oldest question\'s answer is replaced', () => {
+    const a = ask(emptyThreads(NODE), Q_TRAIN, 0)
+    const b = ask(a.file, Q_BIKE, 5)
+    let f = markAnswered(b.file, a.thread.id, reply(INTERIM, 10), at(11), at(9)).file
+    f = markAnswered(f, b.thread.id, reply(INTERIM.replace('the timetable', 'the bike map'), 12), at(13), at(11)).file
+    const both = `${REAL} The bike ride to the north fence takes about forty minutes.`
+    const r = markAnsweredGroup(f, [a.thread.id, b.thread.id], reply(both, 40), at(41), at(39))
+    expect(r.out).toEqual({ marked: a.thread.id, merged: [], left: [b.thread.id] })
+    expect(r.file.threads).toHaveLength(2)
+    expect(r.file.threads.find((t) => t.id === a.thread.id)!.messages[0].answer?.text).toBe(both)
+    expect(sharedAnswers(r.file.threads).size).toBe(0)
   })
 })

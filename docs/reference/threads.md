@@ -567,12 +567,16 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   (an answer he wrote after stays his; the reply goes under his later words), the thread reads
   answered (his Done), and the summary written while it was out of his sight is cleared unless the
   node wrote one after its status answer was stored, so the card's line is Walnut's stand-in from
-  the answer itself (`thread-view.ts` `cardView`). While he has not reacted (no Acknowledge, mark or
-  word of his there) a thread the check answered stays a candidate, so a later reply the model names
-  replaces an interim reply it took for the answer. An older build keeps the `judged` field and
+  the answer itself (`thread-view.ts` `cardView`). For two hours after the reply it took for the
+  answer (`JUDGED_REOPEN_MS`), and only while he has not reacted (no Acknowledge, mark, or word of his
+  anywhere in that chat since), a thread the check answered stays a candidate, so a later reply the
+  model names replaces an interim reply it took for the answer; such a thread never takes part in a
+  merge (beside a question still waiting it is left as it was, alone only its answer is replaced), so
+  his fresh question keeps its own card (review 2026-11-26). An older build keeps the `judged` field and
   reads the answer as before. Bounds: one call per reply (each reply judged once per node, in memory, bounded), at
-  most 12 questions in the list (newest first; older ones wait until newer ones are answered or
-  closed), each title cut to 200 characters, his question to 300, his last later word there to 200,
+  most 12 questions in the list (the questions still waiting first, newest first, then those answers
+  the check wrote that may still be replaced, which the cap cuts first; older waiting ones wait until
+  newer ones are answered or closed), each title cut to 200 characters, his question to 300, his last later word there to 200,
   the reply to 3,000; none for an agent acknowledgement or a reply under 40 characters. A call reads
   about 1.8 KB typically (two questions, a 600-character reply) and at most about 13,100 characters
   (12 questions at their cuts, a full reply). One log line per reply (`org threads:

@@ -21,7 +21,8 @@
  * run change nothing.
  *
  * Bounds: one call per reply (a reply judged once per node), at most LIST_MAX questions in its list
- * (his newest first; older ones wait until newer ones are answered or closed), the reply cut to
+ * (the questions still waiting first, newest first, then the answers this check wrote that a later
+ * reply may still replace, JUDGED_REOPEN_MS; the cap cuts those first), the reply cut to
  * REPLY_MAX; nothing for an agent acknowledgement or a reply under REPLY_MIN characters. The memory
  * of judged replies is in memory and bounded. Never awaited by the status answer; never throws.
  */
@@ -47,6 +48,13 @@ const JUDGE_SYSTEM = 'You judge which of a user\'s questions a reply answers. An
 
 /** His open questions the model reads beside one reply, at most. */
 export const LIST_MAX = 12;
+/**
+ * How long after the reply this check took for a question's answer a later reply may still replace
+ * it (review 2026-11-26: with no limit, a thread answered days ago stayed a candidate, a related
+ * reply replaced an answer he had long read, a dozen of them crowded a still-waiting question out of
+ * the list, and every turn read the transcript and called the model).
+ */
+export const JUDGED_REOPEN_MS = 2 * 3600_000;
 /** A reply shorter than this answers nothing worth a call ("On it.", "Done, see above."). */
 export const REPLY_MIN = 40;
 /** How much of the reply, each title, his question and his last later word there the model reads. */
@@ -86,43 +94,51 @@ export function turnReply(rows: readonly AnswerRow[], endedAtMs: number): number
   return -1;
 }
 
-/** A thread his question opened, and that question. */
-export interface AnswerCandidate { thread: OrgThread; question: ThreadMessage }
+/** A thread his question opened, and that question; `rejudge`: the thread reads answered by this check, and a later reply may replace that answer (judgedUnseen). */
+export interface AnswerCandidate { thread: OrgThread; question: ThreadMessage; rejudge: boolean }
 
 /** The states he does not see (thread-groups.ts folds them): a reply may answer such a thread. */
 const OUT_OF_SIGHT: ReadonlySet<OrgThread['state']> = new Set(['new', 'working', 'pending']);
 
 /**
  * A thread this check moved to answered that he has not reacted to yet: its question's answer is the
- * check's (`judged`), older than this reply, with no Acknowledge, mark, reaction or later word of his
- * since and no summary the node wrote after it. A later reply judged its answer replaces it, so an
- * interim reply the model took for the answer does not stay the answer. Pure.
+ * check's (`judged`), older than this reply by at most JUDGED_REOPEN_MS, with no word of his in this
+ * chat since (`hisLastAt`: his newest message in any of its threads), no Acknowledge, mark or
+ * reaction, and no summary the node wrote after it. A later reply judged its answer replaces it, so
+ * an interim reply the model took for the answer does not stay the answer. Pure.
  */
-function judgedUnseen(t: OrgThread, q: ThreadMessage, replyAt: string): boolean {
+function judgedUnseen(t: OrgThread, q: ThreadMessage, replyAt: string, hisLastAt: string): boolean {
   const a = q.answer;
   if (t.state !== 'answered' || !a?.judged || a.at >= replyAt) return false;
+  if (Date.parse(replyAt) - Date.parse(a.at) > JUDGED_REOPEN_MS || hisLastAt > a.at) return false;
   if (t.ackedAt || t.known || (t.reactedAt && t.reactedAt >= a.at) || (t.replyAt && t.replyAt > a.at)) return false;
-  return !t.messages.some((m) => m.at > a.at || (!!m.readAt && m.readAt >= a.at));
+  return !t.messages.some((m) => !!m.readAt && m.readAt >= a.at);
 }
 
 /**
  * The threads a reply written at `replyAt` may answer: his question opened it (ownQuestionOf), it is
  * open and here (not moved, not snoozed), it reads new, working or waiting (a node's line that moved
- * it to answered or needs wins), or this check answered it and he has not reacted (judgedUnseen); he
- * has not acknowledged its result, his question came before the reply, no newer answer is on it, and
- * he wrote nothing there since. His newest questions first. Pure.
+ * it to answered or needs wins), or this check answered it lately and he has not reacted
+ * (judgedUnseen, `rejudge`); he has not acknowledged its result, his question came before the reply,
+ * no newer answer is on it, and he wrote nothing there since. The questions still waiting first, then
+ * the rejudge ones, each newest first, so the list's cap never leaves a waiting question out for an
+ * answer already given. Pure.
  */
 export function answerCandidates(file: ThreadsFile, replyAt: string, nowMs: number = Date.now()): AnswerCandidate[] {
   const out: AnswerCandidate[] = [];
+  let hisLastAt = '';
+  for (const t of file.threads) for (const m of t.messages) if (m.at > hisLastAt) hisLastAt = m.at;
   for (const t of file.threads) {
     if (t.closed || movedAway(t) || snoozedNow(t, nowMs) || ackHoldsResult(t)) continue;
     const question = ownQuestionOf(t);
-    if (!question || question.at >= replyAt || !(OUT_OF_SIGHT.has(t.state) || judgedUnseen(t, question, replyAt))) continue;
+    if (!question || question.at >= replyAt) continue;
+    const rejudge = !OUT_OF_SIGHT.has(t.state);
+    if (rejudge && !judgedUnseen(t, question, replyAt, hisLastAt)) continue;
     // Never an older reply over a newer answer (a check that waited in line behind a later turn).
     if ((question.answer && question.answer.at > replyAt) || t.messages.some((m) => m.at > replyAt)) continue;
-    out.push({ thread: t, question });
+    out.push({ thread: t, question, rejudge });
   }
-  return out.sort((a, b) => b.question.at.localeCompare(a.question.at));
+  return out.sort((a, b) => Number(a.rejudge) - Number(b.rejudge) || b.question.at.localeCompare(a.question.at));
 }
 
 /**
@@ -185,7 +201,10 @@ export interface AnsweredWrite { marked: string | null; merged: string[]; left: 
  * combine them"): the oldest question's thread keeps, the others merge into it (threads-model.ts
  * mergeThreads, which carries his messages with their answers, tasks, watch and pointers;
  * `questionMoves: false` lets a thread his question opened move, as the question rule would refuse).
- * One that cannot merge (a letter or a choice it holds) is left as it was. Then that thread reads
+ * One that cannot merge (a letter or a choice it holds) is left as it was. A thread this check
+ * answered earlier (`rejudge`) never takes part in a merge (review 2026-11-26: a card he may have read
+ * took his fresh question in, under its old title): beside a question still waiting it is left as it
+ * was, and alone only its answer is replaced (the oldest of them, when several). Then that thread reads
  * answered (answerOne), unless another thread already carries this reply: one reply never sits under
  * two threads. Nothing changes when no thread is left to write. Pure.
  */
@@ -195,11 +214,13 @@ export function markAnsweredGroup(file: ThreadsFile, threadIds: readonly string[
     .filter((c) => threadIds.includes(c.thread.id) && !(c.thread.replyAt && c.thread.replyAt > since))
     .sort((a, b) => a.question.at.localeCompare(b.question.at));
   if (!named.length) return { file, out: none };
-  const into = named[0];
+  const waiting = named.filter((c) => !c.rejudge);
+  const group = waiting.length ? waiting : named.slice(0, 1);
+  const into = group[0];
   let next = file;
   const merged: AnswerCandidate[] = [];
   const left: string[] = [];
-  for (const c of named.slice(1)) {
+  for (const c of group.slice(1)) {
     try {
       next = mergeThreads(next, c.thread.id, into.thread.id, 'agent', at, { questionMoves: false }).file;
       merged.push(c);
@@ -208,6 +229,7 @@ export function markAnsweredGroup(file: ThreadsFile, threadIds: readonly string[
       left.push(c.thread.id);
     }
   }
+  for (const c of named) if (!group.includes(c)) left.push(c.thread.id);
   // Never one reply under two threads (thread-view.ts sharedAnswers reads that as misfiled and hides both).
   const carried = next.threads.some((t) => t.id !== into.thread.id && t.messages.some((m) => m.answer?.at === answer.at && m.answer.text === answer.text));
   if (carried) return { file, out: { ...none, left: named.map((c) => c.thread.id) } };
@@ -297,7 +319,7 @@ async function checkOnce(taskId: string, sessionId: string, turnEndedMs: number,
   }
   const [{ getTask }, { keepsThreads }, store] = await Promise.all([import('../task-manager.js'), import('./keeps-threads.js'), import('./threads-store.js')]);
   if (!keepsThreads(await getTask(taskId).catch(() => null))) return 0;
-  // No question of his out of his sight: no transcript read, no call (most turns end here).
+  // No question of his out of his sight (an answer the check wrote past its window is none): no transcript read, no call (most turns end here).
   const endedAt = new Date(turnEndedMs + END_SLACK_MS).toISOString();
   const open = answerCandidates(await store.readThreads(taskId), endedAt);
   if (!open.length) return 0;
