@@ -5,6 +5,7 @@
  * engines read in the pane's width; the best value of a row is marked when two or more
  * engines finished work. The engine split that assigns new tasks is named above the table.
  */
+import { META_LINE } from '@/utils/meta-line';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SettingsGroup, SettingsNotice } from '@/components/settings/SettingsSection';
@@ -123,7 +124,7 @@ const METRICS: Metric[] = [
     // No reviews, or none of a known company: nothing to show, never a 0%.
     value: (r) => (r.reviewsPerTask === 0 ? null : r.crossReviewedShare ?? null), show: share,
     sub: (r) => (r.crossReviewedShare != null && r.crossKnownDone !== undefined && r.crossKnownDone < r.done ? `of ${r.crossKnownDone} with a known reviewer` : null) },
-  { id: 'score', label: 'Reviewer score (function · UX · UI)', help: 'Out of 10: each finished task\'s latest verdict (the lower of two companies), then the median. Ranked by the lowest.',
+  { id: 'score', label: 'Reviewer score (function, UX, UI)', help: 'Out of 10: each finished task\'s latest verdict (the lower of two companies), then the median. Ranked by the lowest.',
     // Ranked only on all three: a missing UI score is unknown, never a 10.
     value: (r) => (r.reviewScore && SCORE_DIMS.every((d) => r.reviewScore![d] !== undefined) ? Math.min(...SCORE_DIMS.map((d) => r.reviewScore![d]!)) : null),
     show: (_n, r) => scoreText(r.reviewScore), higher: true, samples: (r) => r.scoredDone ?? 0,
@@ -246,7 +247,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                   <tr>
                     <th />
                     {data.rows.map((r) => (
-                      <th key={r.key} className="num" data-key={r.key} title={r.done < FEW ? `Only ${r.done} finished: too few to judge yet` : undefined}>
+                      <th key={r.key} className="num" data-key={r.key} {...META_LINE} title={r.done < FEW ? `Only ${r.done} finished: too few to judge yet` : undefined}>
                         {r.label}{r.done < FEW && <span className="usage-ec-few">few</span>}
                       </th>
                     ))}
@@ -259,7 +260,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                       {data.rows.map((r) => (
                         <td key={r.key} className="num" data-best={best.get(m.id) === r.key || undefined}
                           data-partial={(m.partial && m.partial(r) > 0) || undefined} title={(m.partial && m.partial(r) > 0 ? m.partialNote?.(m.partial(r)) : undefined) ?? m.excluded?.(r)}>
-                          <span className="usage-ec-val">{m.show(m.value(r), r)}</span>{m.partial && m.partial(r) > 0 && m.value(r) !== null && <span className="usage-ec-partial">+?</span>}
+                          <span className="usage-ec-val" {...META_LINE}>{m.show(m.value(r), r)}</span>{m.partial && m.partial(r) > 0 && m.value(r) !== null && <span className="usage-ec-partial">+?</span>}
                           {m.sub?.(r) && <span className="usage-ec-cellsub">{m.sub(r)}</span>}
                         </td>
                       ))}
@@ -290,7 +291,7 @@ export function EngineCompareCard({ range, refreshKey = '', ready = true }: { ra
                   {data.tasks.map((t) => (
                     <tr data-peek-row="" key={t.taskId} className="usage-line" data-task={t.taskId}>
                       <td><button type="button" className="usage-ec-open" onClick={() => openTaskHere(t.taskId, navigate)}>{t.title}</button>
-                        <span className="usage-ec-sub">{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : t.notStarted ? 'never started' : 'open', t.split ? 'split' : '',
+                        <span className="usage-ec-sub" {...META_LINE}>{[label(t.key), t.project || 'Inbox', t.done ? hours(t.hours) : t.notStarted ? 'never started' : 'open', t.split ? 'split' : '',
                           t.reviews ? `${t.reviews} review${t.reviews === 1 ? '' : 's'}${t.reviewCostUsd ? ` (${money(t.reviewCostUsd)})` : ''}` : '',
                           t.score ? `scored ${scoreNamed(t.score)}${scoredByText(t.scoredFamilies)}${t.scorePartial ? ' (partial, not in the median)' : ''}` : '', t.followUps ? `${t.followUps} of your messages` : '',
                           t.reopens ? `reopened ${t.reopens}x` : '', t.errored ? 'error' : ''].filter(Boolean).join(' · ')}</span></td>

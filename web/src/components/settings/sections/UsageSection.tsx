@@ -18,6 +18,7 @@ import { collectUsage, type CostLine, type CostOrigin, type CostReport, type Cos
 import { openSessionOnHome } from '@/utils/open-session';
 import { projectDisplayName } from '@/utils/project-display';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
+import { META_LINE } from '@/utils/meta-line';
 import '@/styles/settings-sections-addons.css';
 import '@/styles/usage-breakdown.css';
 
@@ -191,7 +192,7 @@ function Headline({ report, days, origin }: { report: CostReport; days: string[]
           Billed directly: Codex requests on an account of its own, not through a proxy. They are part of the total.
         </p>
       )}
-      <p className="settings-addons-muted usage-headline-note" data-testid="usage-volume">
+      <p className="settings-addons-muted usage-headline-note" data-testid="usage-volume" {...META_LINE}>
         {`${formatTokens(totalTokens(t))} tokens · ${count(t.requests, 'request')}: in ${formatTokens(t.tokens.input)} · out ${formatTokens(t.tokens.output)} · cache read ${formatTokens(t.tokens.cacheRead)} · cache write ${formatTokens(t.tokens.cacheWrite)}.`}
       </p>
       {unpriced && <p className="settings-addons-muted usage-headline-note" data-testid="usage-unpriced">{unpriced}</p>}
@@ -214,8 +215,8 @@ function LineRow({ line, share, label, help, onOpen }: { line: CostLine; share?:
   return (
     <SettingsRow
       className="usage-line"
-      label={<span className="usage-line-label">{label ?? line.label}</span>}
-      help={help ?? `${volume(line.requests, totalTokens(line))}${share !== undefined ? ` · ${share.toFixed(share < 10 ? 1 : 0)}% of the cost` : ''}${line.unpriced ? ` · ${line.unpriced.toLocaleString('en-US')} without a price` : ''}`}
+      label={<span className="usage-line-label" {...META_LINE}>{label ?? line.label}</span>}
+      help={<span {...META_LINE}>{help ?? `${volume(line.requests, totalTokens(line))}${share !== undefined ? ` · ${share.toFixed(share < 10 ? 1 : 0)}% of the cost` : ''}${line.unpriced ? ` · ${line.unpriced.toLocaleString('en-US')} without a price` : ''}`}</span>}
       control={onOpen ? <SettingsButton onClick={onOpen}>{amount}</SettingsButton> : amount}
     />
   );
@@ -233,9 +234,9 @@ function TaskList({ report, heading }: { report: CostReport; heading: string }) 
     <SettingsGroup heading={heading} data-testid="usage-group-task">
       {tasks.map(row)}
       {report.moreTasks && <SettingsRow label={`${count(report.moreTasks.count, 'more task')}`}
-        help={volume(report.moreTasks.requests, report.moreTasks.tokens)} control={<span className="usage-line-cost">{money(report.moreTasks.costUsd)}</span>} />}
+        help={<span {...META_LINE}>{volume(report.moreTasks.requests, report.moreTasks.tokens)}</span>} control={<span className="usage-line-cost">{money(report.moreTasks.costUsd)}</span>} />}
       {report.shortSessions && <details className="usage-more" data-testid="usage-short-sessions">
-        <summary>{`${count(report.shortSessions.count, 'short session')} (tests and one-offs) · ${money(report.shortSessions.costUsd)}`}</summary>
+        <summary {...META_LINE}>{`${count(report.shortSessions.count, 'short session')} (tests and one-offs) · ${money(report.shortSessions.costUsd)}`}</summary>
         {report.shortSessions.lines.map(row)}
       </details>}
     </SettingsGroup>
@@ -253,10 +254,10 @@ function HowCounted({ report }: { report: CostReport }) {
           title={`From the ${report.prices.source === 'litellm' ? 'LiteLLM' : 'built-in'} price list${asOf ? `, ${asOf}` : ''}.`} />
         <SettingsRow label="Sources" help="Claude Code from each host's transcripts, Codex and OpenCode from their session records, Walnut from its own records." />
         <SettingsRow label="Up to date" help={report.countedUntil.length
-          ? report.countedUntil.map((u) => `${hostName(u.host)}: ${u.until ? new Date(u.until).toLocaleString('en-US') : 'not read yet'}`).join(' · ')
+          ? <span {...META_LINE}>{report.countedUntil.map((u) => `${hostName(u.host)}: ${u.until ? new Date(u.until).toLocaleString('en-US') : 'not read yet'}`).join(' · ')}</span>
           : 'Nothing read yet. Update now reads every host.'} />{/* empty-state-ok: row help text */}
         {report.checks.filter((c) => c.source === 'Canonical transcript' || c.source === 'Upstream token log' || c.source === 'Host collection').map((c) => (
-          <SettingsRow key={`${c.host}:${c.source}`} label={`${c.source} · ${hostName(c.host)}`}
+          <SettingsRow key={`${c.host}:${c.source}`} label={<span {...META_LINE}>{`${c.source} · ${hostName(c.host)}`}</span>}
             help={`${c.status === 'matched' ? 'Matched' : c.status === 'partial' ? 'Partly matched' : 'Not checked'}. ${c.detail}`} />
         ))}
       </SettingsGroup>

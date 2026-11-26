@@ -753,7 +753,11 @@ function auditPane(root: Element, provided: string[]): PaneAudit {
     const text = provided.reduce((t, p) => t.split(p).join(''), n.textContent ?? '')
     if (!parent || !text.trim() || !shown(parent) || exempt(parent)) continue
     for (const word of text.match(/\b[A-Z]{4,}\b/g) ?? []) if (!ABBR.has(word)) out.upper.push(word)
-    if (GLYPHS.test(text)) out.glyphs.push(text.trim().slice(0, 80))
+    // A meta line joins a record's facts with " · " (standard.md:475, "On a line of words"), and
+    // the product marks it data-meta-line (web/src/utils/meta-line.ts). There, and only there, the
+    // spaced separator is no glyph; any other glyph, or a dot without its spaces, still is.
+    const words = parent.closest('[data-meta-line]') ? text.split(' \u00b7 ').join(' ') : text
+    if (GLYPHS.test(words)) out.glyphs.push(text.trim().slice(0, 80))
     if (/\p{Extended_Pictographic}/u.test(text)) out.emoji.push(text.trim().slice(0, 80))
   }
   out.checkboxes = Array.from(root.querySelectorAll('input[type="checkbox"]'))
@@ -761,6 +765,33 @@ function auditPane(root: Element, provided: string[]): PaneAudit {
   out.legacy = root.querySelectorAll('.form-group, details.settings-collapsible').length
   return out
 }
+
+test('the copy audit lets the spaced dot through only on a marked meta line', async ({ page }) => {
+  await openSettings(page)
+  await page.locator('.settings-pane').evaluate((pane) => {
+    const lines: Array<[string, boolean]> = [
+      ['Claude Code \u00b7 Opus', true],
+      ['Reviewer score (function \u00b7 UX \u00b7 UI)', false],
+      ['1 request\u00b70 tokens', true],
+      ['Claude Code \u00b7 Opus \u2192 Sonnet', true],
+    ]
+    const box = document.createElement('div')
+    box.dataset.auditProbe = ''
+    for (const [words, marked] of lines) {
+      const p = document.createElement('p')
+      if (marked) p.dataset.metaLine = ''
+      p.textContent = words
+      box.append(p)
+    }
+    pane.append(box)
+  })
+  const audit = await page.locator('.settings-pane [data-audit-probe]').evaluate(auditPane, [])
+  expect(audit.glyphs).toEqual([
+    'Reviewer score (function \u00b7 UX \u00b7 UI)',
+    '1 request\u00b70 tokens',
+    'Claude Code \u00b7 Opus \u2192 Sonnet',
+  ])
+})
 
 test('C8 C10 C14 C19 C20 C80: owned panes are sentence case, glyph free, switches only', async ({ page }) => {
   test.setTimeout(180_000)

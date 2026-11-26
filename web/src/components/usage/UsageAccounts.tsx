@@ -1,3 +1,4 @@
+import { META_LINE } from '@/utils/meta-line';
 import { SettingsGroup } from '@/components/settings/SettingsSection';
 import type { CostAccountLine } from '@/api/usage';
 
@@ -24,12 +25,12 @@ export function UsageAccounts({ accounts }: { accounts?: CostAccountLine[] }) {
       <ul className="usage-accounts-list">
         {accounts.map((a) => (
           <li key={a.key} className="usage-account" data-direct={a.direct || undefined} data-account={a.key}>
-            <span className="usage-account-name">
+            <span className="usage-account-name" {...META_LINE}>
               {a.label}
               {a.direct && <span className="usage-account-flag" title="These requests are billed to the account Codex is signed in to, not through a proxy.">Billed directly</span>}
             </span>
             <span className="usage-account-cost">{money(a.costUsd)}</span>
-            <span className="usage-account-meta">
+            <span className="usage-account-meta" {...META_LINE}>
               {`${a.requests.toLocaleString('en-US')} requests · ${tokensText(a.tokens)} tokens`}
               {a.outsideRequests > 0 && ` · ${a.outsideRequests.toLocaleString('en-US')} outside Walnut`}
             </span>

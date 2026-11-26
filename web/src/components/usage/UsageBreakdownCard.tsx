@@ -1,3 +1,4 @@
+import { META_LINE } from '@/utils/meta-line';
 import { useMemo, useState } from 'react';
 import { useMinuteValue } from '@/utils/minute-clock';
 import { SettingsGroup } from '@/components/settings/SettingsSection';
@@ -137,7 +138,7 @@ export function UsageBreakdownCard({ report, days, loading, onPick }: {
             {rows.map((r) => (
               <tr key={r.line.key} className="usage-line" data-key={r.line.key}
                 title={byToken ? `${tokensText(totalTokens(r.line))} tokens` : `${r.line.requests.toLocaleString('en-US')} requests · ${tokensText(totalTokens(r.line))} tokens${r.line.unpriced ? ` · ${r.line.unpriced.toLocaleString('en-US')} without a price` : ''}`}>
-                <td><span className="usage-bd-name"><i className="usage-bd-swatch" style={{ background: r.color }} /><span>{r.label}</span></span></td>
+                <td><span className="usage-bd-name"><i className="usage-bd-swatch" style={{ background: r.color }} /><span {...META_LINE}>{r.label}</span></span></td>
                 {/* A cost reported with no tokens (a web search) has no token share. */}
                 {byToken && <td className="num muted">{totalTokens(r.line) ? tokensText(totalTokens(r.line)) : '-'}</td>}
                 {byToken && <td className="num muted">{tokenTotal > 0 && totalTokens(r.line) ? pct(totalTokens(r.line) / tokenTotal * 100) : '-'}</td>}
@@ -150,7 +151,7 @@ export function UsageBreakdownCard({ report, days, loading, onPick }: {
           </tbody>
         </table>
         {hidden > 0 && (
-          <button type="button" className="usage-bd-more" onClick={() => setOpen(true)} data-testid="usage-breakdown-more">
+          <button type="button" className="usage-bd-more" onClick={() => setOpen(true)} data-testid="usage-breakdown-more" {...META_LINE}>
             {`${hidden} more · ${money(data.rows.slice(VISIBLE).reduce((n, r) => n + r.line.costUsd, 0))}`}
           </button>
         )}
