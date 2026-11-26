@@ -270,6 +270,13 @@ describe('the recorder', () => {
     expect(answer(503, { error: { code: 'host_reconnecting', message: 'x' } })).toBe(true)
     expect(answer(503, { error: 'store busy' })).toBe(false)
     expect(answer(200, { code: 'host_reconnecting' })).toBe(false)
+    // Every code that says a machine is away, in both body shapes (tests/web/host-away-503-ratchet.test.ts).
+    const { HOST_AWAY_CODES } = await import('../../../src/web/middleware/host-unreachable-answer.js')
+    for (const code of HOST_AWAY_CODES) {
+      expect(answer(503, { error: 'away', code }), code).toBe(true)
+      expect(answer(503, { error: { code, message: 'away' } }), code).toBe(true)
+    }
+    expect(answer(503, { error: 'x', code: 'budget_unavailable' })).toBe(false)
   })
 
   it('records nothing until started (a replica, a CLI process)', () => {

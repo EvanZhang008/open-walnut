@@ -595,7 +595,7 @@ filesRouter.get('/references', async (req: Request, res: Response, next: NextFun
       if (err instanceof HostReconnectingError) {
         markHandledFailure(res).status(503).json({ error: err.message, code: HOST_RECONNECTING })
       } else {
-        res.status(503).json({ error: `${hostDisplayName(host, hostDef.label)} is unreachable` })
+        res.status(503).json({ error: `${hostDisplayName(host, hostDef.label)} is unreachable`, code: HOST_RECONNECTING })
       }
       return
     }

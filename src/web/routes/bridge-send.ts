@@ -1,4 +1,5 @@
 import express, { Router, type Request, type Response } from 'express'
+import { HOST_RECONNECTING } from '../../core/hosts/remote-read-bound.js'
 import { authenticate, parseErrors } from './bridge-ingest.js'
 import { bridgeHasCapability, bridgeRequest, bridgeRequestPrepared, BridgeOfflineError } from '../ws/bridge-registry.js'
 import { decodeCloudSessionSend, InvalidCloudSessionPayloadError } from '../../lib/cloud-session-payload.js'
@@ -63,7 +64,8 @@ async function send(req: Request, res: Response): Promise<void> {
       return
     }
     const sent = !(err instanceof BridgeOfflineError)
-    res.status(503).json({ error: sent ? 'delivery_unconfirmed' : 'host_unavailable', sent })
+    // Never sent (the bridge is offline): its host is not reachable now; one that may have gone keeps its own word.
+    res.status(503).json({ error: sent ? 'delivery_unconfirmed' : 'host_unavailable', ...(sent ? {} : { code: HOST_RECONNECTING }), sent })
   }
 }
 

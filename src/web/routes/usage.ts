@@ -7,6 +7,7 @@ import { DEFAULT_PRICING, PRICING_VERSION } from '../../core/usage/index.js'
 import type { UsagePeriod, UsageFilter } from '../../core/usage/types.js'
 import { reconciledOverview, collectUsage, collectionState, INCREMENTAL, responseUsageStore } from '../../core/usage/collection.js'
 import { usageMachines } from '../../core/usage/usage-machines.js'
+import { sendLinkFailure } from '../middleware/link-failure-answer.js'
 
 export const usageRouter = Router()
 
@@ -135,6 +136,8 @@ usageRouter.get('/sessions/:sid', async (req: Request, res: Response) => {
     const { getSessionBudget } = await import('../../core/usage/session-budget.js')
     res.json(await getSessionBudget(String(req.params.sid)))
   } catch (error) {
+    // The session's host not reachable now is the host's answer (503 host_reconnecting), never this route's error.
+    if (sendLinkFailure(req, res, error)) return
     const failure = error as Error & { code?: string; status?: number }
     // No budget here is an answer, not an error: an engine without per-request usage, or
     // a session whose record is not written yet (its panel mounts first) or that its
@@ -157,6 +160,8 @@ usageRouter.patch('/sessions/:sid/budget', async (req: Request, res: Response) =
     const { configureSessionBudget } = await import('../../core/usage/session-budget.js')
     res.json(await configureSessionBudget(String(req.params.sid), { limitUsd, revision }))
   } catch (error) {
+    // A change its host never got (503) or may have run (504): the host's answer, never this route's error.
+    if (sendLinkFailure(req, res, error)) return
     const failure = error as Error & { code?: string; status?: number }
     res.status(failure.status ?? 503).json({ error: failure.message, code: failure.code ?? 'budget_unavailable' })
   }

@@ -13,6 +13,7 @@ import { WALNUT_HOME } from '../../constants.js';
 import { getConfig } from '../config-manager.js';
 import { getSessionByClaudeId } from '../session-tracker.js';
 import { link } from '../hosts/link.js';
+import { markLinkFailure } from '../../providers/link-failure.js';
 import { currentPriceSnapshot, ensurePriceBook } from './price-book.js';
 import type { PriceSnapshot } from './price-data.js';
 import type { BudgetPrices, BudgetState } from '../../providers/usage-budget-runtime.js';
@@ -49,10 +50,15 @@ export async function budgetPrices(): Promise<BudgetPrices> {
   return { snapshot, ...(overrides ? { overrides } : {}), hash };
 }
 
+/** No connection to the session's host is the link's failure, tagged so its route answers it as the host's (link-failure.ts). */
 async function hostConnection(host: string) {
-  const conn = await link(host);
-  await conn.connect();
-  return conn;
+  try {
+    const conn = await link(host);
+    await conn.connect();
+    return conn;
+  } catch (err) {
+    throw markLinkFailure(err, 'no-link');
+  }
 }
 
 async function target(sid: string) {
@@ -98,7 +104,10 @@ function response(session: SessionRecord, engine: string, snapshot: { budget: Bu
 async function deadline<T>(work: Promise<T>, milliseconds: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(fail('budget_timeout', 'The budget host did not answer in time. Refresh before retrying a change.', 503)), milliseconds);
+    // The host's link failing this read or change ('no-answer'): a read answers host_reconnecting, a change
+    // host_no_answer (it may have run there), never the route's own error (2026-11-26: five 503s an hour
+    // while clouddev was unreachable).
+    timer = setTimeout(() => reject(markLinkFailure(new Error('The budget host did not answer in time.'), 'no-answer')), milliseconds);
   });
   try { return await Promise.race([work, timeout]); } finally { clearTimeout(timer!); }
 }

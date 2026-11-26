@@ -23,19 +23,25 @@ const failures: Record<string, { code: string; status: number }> = {
   denied: { code: 'NOT_OWNED', status: 403 },
   unknown: { code: 'new_failure_kind', status: 503 },
 }
-vi.mock('../../src/core/usage/session-budget.js', () => ({
-  getSessionBudget: async (sid: string) => {
+// The session's host not reachable now (link-failure.ts): no connection, or no answer in time.
+const linkDown: Record<string, 'no-link' | 'no-answer'> = { hostaway: 'no-link', hostsilent: 'no-answer' }
+vi.mock('../../src/core/usage/session-budget.js', async () => {
+  const { markLinkFailure } = await import('../../src/providers/link-failure.js')
+  const answer = async (sid: string) => {
+    if (linkDown[sid]) throw markLinkFailure(new Error(`Connection to devbox failed 7s ago: devbox is not online`), linkDown[sid]!)
     const f = failures[sid]
     if (!f) return { sessionId: sid, engine: 'claude' }
     throw Object.assign(new Error(f.code), f)
-  },
-}))
+  }
+  return { getSessionBudget: answer, configureSessionBudget: answer }
+})
 
 const { usageRouter } = await import('../../src/web/routes/usage.js')
 let server: Server
 let base = ''
 beforeAll(async () => {
   const app = express()
+  app.use(express.json())
   app.use('/api/usage', usageRouter)
   server = await new Promise<Server>((r) => { const s = app.listen(0, () => r(s)) })
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/usage/sessions`
@@ -87,5 +93,27 @@ describe('a session with no budget', () => {
     expect(await get('unadopted?absent=null')).toEqual({ status: 200, body: null })
     expect((await get('unadopted')).status).toBe(404)
     expect(await get('claude-1?absent=null')).toEqual({ status: 200, body: { sessionId: 'claude-1', engine: 'claude' } })
+  })
+
+  // 2026-11-26: while clouddev was unreachable this route answered five 503s an hour as its own
+  // server errors (code budget_unavailable). A host not reachable now is the host's answer.
+  it('a host not reachable now answers host_reconnecting for a read, with or without absent=null', async () => {
+    for (const sid of Object.keys(linkDown)) {
+      for (const query of ['', '?absent=null']) {
+        const got = await get(`${sid}${query}`)
+        expect(got.status, sid).toBe(503)
+        expect((got.body as { code?: string }).code, sid).toBe('host_reconnecting')
+      }
+    }
+  })
+
+  it('a change its host never got is a 503 to try again; one that may have run there is a 504', async () => {
+    const patch = (sid: string) => fetch(`${base}/${sid}/budget`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ limitUsd: 5, revision: 1 }) })
+    const never = await patch('hostaway')
+    expect(never.status).toBe(503)
+    expect((await never.json()).code).toBe('host_reconnecting')
+    const maybe = await patch('hostsilent')
+    expect(maybe.status).toBe(504)
+    expect((await maybe.json()).code).toBe('host_no_answer')
   })
 })

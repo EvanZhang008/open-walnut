@@ -20,6 +20,7 @@
  * A follower answers 404 `leader_only`: its own copies are not a leader's view.
  */
 
+import { HOST_RECONNECTING } from '../../core/hosts/remote-read-bound.js'
 import { Router, type Request, type Response } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import { needCapability } from '../../providers/daemon-capability-need.js'
@@ -126,7 +127,7 @@ replicasStatusRouter.get('/replicas/logs', async (req: Request, res: Response) =
     import('../../constants.js'),
   ])
   const conn = getConnectedDaemonConnection(host)
-  if (!conn) { res.status(503).json({ ok: false, error: 'host_not_connected', message: `${host} is not connected to this Walnut right now` }); return }
+  if (!conn) { res.status(503).json({ ok: false, error: 'host_not_connected', code: HOST_RECONNECTING, message: `${host} is not connected to this Walnut right now` }); return }
   if (!needCapability(conn, 'replica-logs-v1')) { res.status(409).json({ ok: false, error: 'daemon_needs_upgrade', message: `${host}'s daemon is older than logs.tail; it updates on its next connect` }); return }
   try {
     const reply = await conn.send('logs.tail', { home: WALNUT_HOME, sources: list(req.query.sources) ?? ['replica', 'journal'], n, ...(list(req.query.match) ? { match: list(req.query.match) } : {}) }, 10_000)

@@ -191,3 +191,50 @@ describe('every route that answers 500 itself answers a link failure first', () 
     }
   })
 })
+
+/**
+ * Every place a route answers a caught error with its own status falling back to a 5xx
+ * (`err.status ?? 503`): a link failure carries no status, so it would fall to that 5xx and read
+ * as the route's own server error (2026-11-26: GET /api/usage/sessions/:sid answered five 503s an
+ * hour, code budget_unavailable, while clouddev was unreachable). Each answers a link failure first,
+ * or is listed with why no host link failure reaches it.
+ */
+const NO_LINK_5XX_FALLBACK: Record<string, string> = {
+  'sessions.ts|planPreserved': 'a task write on this Mac (the plan-execute sibling task); no host command',
+  'transfer-v1.ts|err instanceof Error': 'answers only a TransferError or an error with a status; a link failure has none and goes on to next(err)',
+  'transfer-v1.ts|job.error?.status': 'a finished background job\'s stored error, not a thrown one',
+}
+const FALLBACK_5XX = /\bstatus\s*\?\?\s*5\d\d\b/
+
+describe('every route that answers a caught error with a 5xx fallback answers a link failure first', () => {
+  const dir = path.join(ROOT, 'src/web/routes')
+  const sites: Array<{ key: string; file: string; line: string; context: string }> = []
+  for (const name of fs.readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
+    const lines = codeOnly(fs.readFileSync(path.join(dir, name), 'utf8')).split('\n')
+    lines.forEach((line, i) => {
+      if (!FALLBACK_5XX.test(line)) return
+      sites.push({ key: `${name}:${i + 1}`, file: name, line: line.trim(), context: lines.slice(Math.max(0, i - 14), i + 2).join('\n') })
+    })
+  }
+  const exemptFor = (site: { file: string; context: string }) => Object.keys(NO_LINK_5XX_FALLBACK).find((k) => {
+    const [file, words] = k.split('|')
+    return file === site.file && site.context.includes(words)
+  })
+
+  it('finds the sites', () => {
+    expect(sites.length).toBeGreaterThanOrEqual(5)
+  })
+
+  it.each(sites.map((s) => [s.key, s]))('%s', (_key, site) => {
+    if (exemptFor(site)) return
+    expect(/sendLinkFailure\(|handsToAppErrorHandler\(/.test(site.context),
+      `${site.line}: answer a link failure first with sendLinkFailure(req, res, err), or list it in NO_LINK_5XX_FALLBACK with why no host link failure reaches it`).toBe(true)
+  })
+
+  it('every exemption still names a real site', () => {
+    for (const key of Object.keys(NO_LINK_5XX_FALLBACK)) {
+      const [file, words] = key.split('|')
+      expect(sites.some((s) => s.file === file && s.context.includes(words)), key).toBe(true)
+    }
+  })
+})
