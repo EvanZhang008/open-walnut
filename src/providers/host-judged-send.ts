@@ -109,6 +109,23 @@ function scheduleRedeliver(sid: string): void {
   w.timer.unref?.()
 }
 
+/**
+ * A send whose lines park on the gone folder instead of reaching the host still is the task's input,
+ * at send time and before the park's error, as the runner's handleSend makes it for a session it
+ * runs (syncPhaseAfterSend runs before its spawn parks): a person's or a peer's message reopens a
+ * COMPLETE task, and the folder-gone error that follows hands it back as Needs you, the usual way.
+ * 2026-11-25 and 11-26: two forced task_sends to completed tasks parked on a removed workspace; the
+ * redelivery after the folder came back carries the source 'folder-moved', which reopens nothing, so
+ * each task worked on while it read COMPLETE and its asker's request was settled as completed with
+ * no answer. A send kept from an earlier try (`kick` on its wait) counts as this one.
+ */
+async function inputEdgeBeforePark(sid: string, o: Pick<DeliverOpts, 'kick' | 'source' | 'endsWait'>): Promise<void> {
+  const kept = waiting.get(sid)?.kick
+  if (!o.kick && !kept) return
+  const { noteHostSessionSend } = await import('../core/session-channel/leader-tasks.js')
+  await noteHostSessionSend(sid, kept?.source ?? o.source, o.endsWait || kept?.endsWait === true)
+}
+
 interface DeliverOpts {
   /** The send event's own payload (a send); a redelivery or a hand makes its own. */
   body?: Record<string, unknown>
@@ -141,6 +158,7 @@ async function deliver(sid: string, host: string, o: DeliverOpts): Promise<void>
   if (wakes) {
     const folder = await prepareHostSessionFolder(sid, host, { remakeWaitMs: 0 })
     if (!folder.ok) {
+      await inputEdgeBeforePark(sid, o)
       await parkWaitingOnGoneFolder(sid, folder.error ?? 'Working directory not available', folder.folder, folder.remake === 'pending')
       settle(sid)
       return

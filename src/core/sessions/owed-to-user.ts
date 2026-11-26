@@ -213,7 +213,9 @@ export type CloseAdmission =
   /** Its own session closing it while it holds a request someone waits on (requests-held.ts). */
   | HeldRequestRefusal
   /** A task that shipped a change and names nothing real use should show (usage-watch/gate.ts). */
-  | import('../usage-watch/gate.js').ShipWatchRefusal;
+  | import('../usage-watch/gate.js').ShipWatchRefusal
+  /** Its own session closing it while its own work still runs or is still watched (own-work-open.ts). */
+  | import('./own-work-open.js').OwnWorkRefusal;
 
 interface Closer { taskId: string; /** The resolved session's own id, never the header's text. */ sessionId?: string }
 
@@ -416,6 +418,11 @@ export async function admitSessionClose(
     const { admitShipWatch, gateDeps } = await import('../usage-watch/gate.js');
     const unwatched = await admitShipWatch(task, gateDeps).catch(() => null);
     if (unwatched) return unwatched;
+    // Its own work has ended: no land or test run of its session still runs, no trigger still
+    // watches for it, and its result says nothing still waits on a run or a deploy (own-work-open.ts).
+    const { admitOwnWorkEnded } = await import('./own-work-open.js');
+    const open = await admitOwnWorkEnded(task, closer.sessionId ?? callerSid, opts).catch(() => null);
+    if (open) return open;
   }
   const items = await owedToUser(task, opts.fields);
   if (!items.length) return closer.taskId === task.id ? admitOwnNote(task, opts.fields) : { ok: true };
