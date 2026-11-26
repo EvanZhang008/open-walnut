@@ -1653,7 +1653,14 @@ export class AcpSession {
     const toolSet = (servers: AcpMcpServer[]): AcpMcpServer[] =>
       walnutMcpToolSet(this.engineId, session) === 'core' ? servers.map(withCoreWalnutTools) : servers
     if (this.cfg.walnutMcpServer) {
-      if (this.engineId === 'pi') throw new Error('Pi does not support MCP mounts; use the walnut CLI instead.')
+      if (this.engineId === 'pi') {
+        // A lane is the Main Agent's chat, which is not one without Walnut's tools: it does not start.
+        // An ask or a subagent is a degraded session without them (claude-code-session.ts
+        // buildAcpStartExtras): it starts, with the walnut CLI, as an attach after a restart does.
+        if (this.cfg.lane && !isSubagentLane(this.cfg.lane)) throw new Error('Pi does not support MCP mounts; use the walnut CLI instead.')
+        log.session.warn('Pi does not support MCP mounts; the walnut CLI remains available', { runtimeId: this.runtimeId })
+        return []
+      }
       return toolSet([{
         ...this.cfg.walnutMcpServer,
         args: [...this.cfg.walnutMcpServer.args],

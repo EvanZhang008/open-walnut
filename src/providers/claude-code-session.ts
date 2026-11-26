@@ -274,6 +274,33 @@ export async function buildAcpStartExtras(data: { lane?: string; walnutAgent?: b
   }
 }
 
+/**
+ * The start an ACP session is, as buildAcpStartExtras reads it: its lane, and whether it is an ask,
+ * which the launch says (`walnutAgent`) or its task does (`walnut_agent`, stamped on an ask's task at
+ * its launch: core/sessions/quick-start.ts, core/org/org-store.ts). A start (handleAcpStart) and an
+ * attach from the record (attachAcpSessionFromRecord, after a restart: a deploy above all) both build
+ * their extras from this, so a session has the same Walnut tools at its start and after every restart,
+ * each naming this install's own entry. Until 2026-11-26 the attach read the lane alone: an ask on an
+ * ACP engine that loaded its thread again after a deploy had no Walnut tools. Every field
+ * buildAcpStartExtras takes is derived here (tests/providers/acp-attach-mount.test.ts).
+ */
+export function acpStartOf(
+  lane: string | undefined,
+  task: { walnut_agent?: boolean } | null | undefined,
+  launchedAsAsk = false,
+): { lane?: string; walnutAgent?: boolean } {
+  return {
+    ...(lane ? { lane } : {}),
+    ...(launchedAsAsk || task?.walnut_agent === true ? { walnutAgent: true } : {}),
+  }
+}
+
+/** The task an ACP start or attach names, or null (none, or not readable): acpStartOf reads its marker. */
+async function acpTaskOf(taskId: string | undefined): Promise<{ walnut_agent?: boolean } | null> {
+  if (!taskId) return null
+  return sessionPort().tasks.loadTaskManager().then(({ getTask }) => getTask(taskId)).catch(() => null)
+}
+
 // ── JSONL types from `claude -p --output-format stream-json --verbose` ──
 
 /**
@@ -13802,6 +13829,8 @@ export class SessionRunner {
     // choice: it re-attaches as Walnut's default, never moved off full access
     // (core/sessions/acp-recorded-mode.ts).
     const recorded = recordedSessionMode(record)
+    // Whether its task is an ask, which mounts Walnut's tools as its start did (acpStartOf).
+    const recordTask = await acpTaskOf(record.taskId)
     try {
       session = new AcpSession({
         taskId: record.taskId ?? '',
@@ -13816,7 +13845,7 @@ export class SessionRunner {
         providerSessionId: record.claudeSessionId,
         runtimeId: record.acpRuntimeId,
         acpConfig: record.acpConfig,
-        ...(record.lane ? await buildAcpStartExtras({ lane: record.lane }) : {}),
+        ...await buildAcpStartExtras(acpStartOf(record.lane, recordTask)),
         directWsUrl: this._testDaemonUrl,
         artifacts: this._testAcpArtifacts,
         onWorkerDead: (s) => this.scheduleAcpDrainAfterDeath(s),
@@ -14196,7 +14225,7 @@ export class SessionRunner {
       ? { model: draftModelBase, ...(draftModelEffort ? { reasoning_effort: draftModelEffort } : {}) }
       : undefined
     const startAt = Date.now()
-    const extras = await buildAcpStartExtras(data)
+    const extras = await buildAcpStartExtras(acpStartOf(data.lane, await acpTaskOf(data.taskId), data.walnutAgent === true))
     const extrasMs = Date.now() - startAt
     const modeNamed = !!data.mode && VALID_SESSION_MODE_IDS.has(data.mode)
     const session = new AcpSession({
