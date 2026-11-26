@@ -23,6 +23,7 @@ import { SENT, attempt, gate, needSession, passwordKeyOf, run } from './vault-v1
 import { isFollower } from '../../core/server-role.js'
 import { isPersonNotAutomation } from './person-caller.js'
 import { markAnswerNotKept } from '../../lib/answer-not-kept.js'
+import { sendVaultRefusal } from './vault-answer.js'
 
 export const vaultNotesV1Router = Router()
 
@@ -46,7 +47,7 @@ async function answer(res: Response, next: NextFunction, work: () => Promise<unk
     res.json(await work())
   } catch (err) {
     const known = (await store()).lockedNoteErrorBody(err)
-    if (known) { res.status(known.status).json(known.body); return }
+    if (known) { sendVaultRefusal(res, known.status, known.body); return }
     next(err)
   }
 }
@@ -144,7 +145,7 @@ vaultNotesV1Router.post('/vault/notes/restore-key', async (req, res, next) => {
 
 function agentHere(res: Response): boolean {
   if (isFollower()) {
-    res.status(503).json({ error: 'Locked notes open only on your Mac, which keeps Passwords.', code: 'vault_not_here' })
+    sendVaultRefusal(res, 503, { error: 'Locked notes open only on your Mac, which keeps Passwords.', code: 'vault_not_here' })
     return false
   }
   return true
@@ -186,7 +187,7 @@ async function askAnswer(res: Response, next: NextFunction, work: () => Promise<
     const { ApprovalError } = await import('../../core/approvals/store.js')
     if (err instanceof ApprovalError) { res.status(err.status).json({ error: err.message, code: err.code }); return }
     const known = (await store()).lockedNoteErrorBody(err)
-    if (known) { res.status(known.status).json(known.body); return }
+    if (known) { sendVaultRefusal(res, known.status, known.body); return }
     next(err)
   }
 }

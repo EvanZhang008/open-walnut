@@ -20,6 +20,7 @@
 import crypto from 'node:crypto'
 import { Router } from 'express'
 import { gate } from './vault-v1.js'
+import { sendVaultRefusal } from './vault-answer.js'
 
 export const vaultSealedV1Router = Router()
 
@@ -43,7 +44,7 @@ vaultSealedV1Router.get('/vault/sealed', async (req, res, next) => {
   try {
     const st = await stateMod()
     const f = await st.loadFile()
-    if (!f) { res.status(409).json({ error: 'No vault yet: set Passwords up on your Mac first.', code: 'vault_not_set_up' }); return }
+    if (!f) { sendVaultRefusal(res, 409, { error: 'No vault yet: set Passwords up on your Mac first.', code: 'vault_not_set_up' }); return }
     const after = typeof req.query.after === 'string' ? req.query.after : ''
     const ids = Object.keys(f.items).sort()
     const start = after ? ids.findIndex((id) => id > after) : 0
@@ -77,7 +78,7 @@ vaultSealedV1Router.post('/vault/sealed/items', async (req, res, next) => {
     }
     const st = await stateMod()
     const f = await st.loadFile()
-    if (!f) { res.status(409).json({ error: 'No vault yet: set Passwords up on your Mac first.', code: 'vault_not_set_up' }); return }
+    if (!f) { sendVaultRefusal(res, 409, { error: 'No vault yet: set Passwords up on your Mac first.', code: 'vault_not_set_up' }); return }
     const items: Record<string, unknown> = {}
     const missing: string[] = []
     let bytes = 64

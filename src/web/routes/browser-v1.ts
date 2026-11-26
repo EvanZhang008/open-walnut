@@ -29,6 +29,7 @@ import { onCredentialsRevoked } from '../../core/device-auth.js'
 import { mountBrowserView, _resetBrowserViewForTesting } from './browser-view-v1.js'
 import { missingIsNull } from '../../lib/id-ref.js'
 import { IS_DEMO } from '../../constants.js'
+import { sendVaultRefusal } from './vault-answer.js'
 
 export const browserV1Router = Router()
 
@@ -90,7 +91,7 @@ async function run(res: Response, next: NextFunction, work: () => Promise<unknow
     res.json(out)
   } catch (err) {
     const { BrowserError } = await hub()
-    if (err instanceof BrowserError) { res.status(err.status).json({ error: err.message, code: err.code, ...err.extra }); return }
+    if (err instanceof BrowserError) { sendVaultRefusal(res, err.status, { error: err.message, code: err.code, ...err.extra }); return }
     next(err)
   }
 }

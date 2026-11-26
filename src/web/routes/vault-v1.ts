@@ -45,6 +45,7 @@ import { onCredentialsRevoked } from '../../core/device-auth.js'
 import { currentExposeStatus } from '../../core/expose/status.js'
 import { derivePasswordKey, toB64, type KdfParams } from '../../core/vault/crypto.js'
 import type { VaultItem, VaultItemInput } from '../../core/vault/types.js'
+import { sendVaultRefusal } from './vault-answer.js'
 
 export const vaultV1Router = Router()
 
@@ -69,7 +70,7 @@ function param(v: unknown): string {
 export function gate(req: Request, res: Response, readStatus = false): boolean {
   res.setHeader('Cache-Control', 'no-store')
   if (isFollower()) {
-    res.status(503).json({ error: 'Passwords are kept on your Mac and open only from it, its own network or Tailscale.', code: 'vault_not_here' })
+    sendVaultRefusal(res, 503, { error: 'Passwords are kept on your Mac and open only from it, its own network or Tailscale.', code: 'vault_not_here' })
     return false
   }
   if (ambientTestRun() && !readStatus) {
@@ -118,7 +119,7 @@ export async function needSession(req: Request, res: Response, touch = true): Pr
   // a page's logins as the person browses) never keeps the vault unlocked.
   const quiet = header(req, 'x-walnut-vault-quiet') === '1'
   if (s.useSession(header(req, s.SESSION_HEADER), touch && !quiet, deviceOf(req))) return true
-  res.status(401).json({ error: 'The vault is locked in this window: unlock it with the master password.', code: 'vault_session_needed' })
+  sendVaultRefusal(res, 401, { error: 'The vault is locked in this window: unlock it with the master password.', code: 'vault_session_needed' })
   return false
 }
 
@@ -157,7 +158,7 @@ export async function run(res: Response, next: NextFunction, work: () => Promise
   } catch (err) {
     const { VaultError } = await store()
     const { ImportError } = await import('../../core/vault/import.js')
-    if (err instanceof VaultError) { res.status(err.status).json({ error: err.message, code: err.code }); return }
+    if (err instanceof VaultError) { sendVaultRefusal(res, err.status, { error: err.message, code: err.code }); return }
     if (err instanceof ImportError) { res.status(400).json({ error: err.message, code: 'bad_import' }); return }
     const { PasskeyError } = await import('../../core/vault/passkey.js')
     if (err instanceof PasskeyError) { res.status(err.status).json({ error: err.message, code: err.code }); return }

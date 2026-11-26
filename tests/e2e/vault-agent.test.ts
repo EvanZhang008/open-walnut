@@ -32,7 +32,7 @@ async function http(method: string, p: string, body?: unknown, headers: Record<s
     headers: { 'content-type': 'application/json', ...headers },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
-  return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, any> }
+  return { status: res.status, headers: res.headers, body: await res.json().catch(() => ({})) as Record<string, any> }
 }
 const person = (method: string, p: string, body?: unknown) => http(method, p, body, { 'x-walnut-vault-session': session })
 const agent = (method: string, p: string, body?: unknown) => http(method, p, body, AGENT)
@@ -158,6 +158,23 @@ describe('an agent and the vault', () => {
     const r = await agent('POST', '/vault/agent/use', { item: 'STRIPE_API_KEY', purpose: 'run the billing test suite' })
     expect(r.status).toBe(423)
     expect(r.body.code).toBe('vault_locked')
+  })
+
+  it('an agent polling the locked vault gets the same 423 each time, and only the first is a warn line', async () => {
+    // 2026-11-26: a trigger's check asked password_list every 2 minutes all night while the vault
+    // stayed locked, one warn line each, until the log-spike alarm rang (src/web/routes/vault-answer.ts).
+    const first = await agent('GET', '/vault/agent/items')
+    expect(first.status).toBe(423)
+    expect(first.body.code).toBe('vault_locked')
+    expect(first.headers.get('x-walnut-repeat-answer')).toBeNull()
+    const again = await agent('GET', '/vault/agent/items')
+    expect(again.status).toBe(423)
+    expect(again.body.code).toBe('vault_locked')
+    expect(again.headers.get('x-walnut-repeat-answer')).toBe('1')
+    // Each route counts on its own: the case above already got this refusal from /vault/agent/use once.
+    const use = await agent('POST', '/vault/agent/use', { item: 'STRIPE_API_KEY', purpose: 'run the billing test suite' })
+    expect(use.status).toBe(423)
+    expect(use.headers.get('x-walnut-repeat-answer')).toBe('1')
   })
 
   it('the person reads the log of every use, sealed, with no secret in it', async () => {

@@ -29,6 +29,7 @@ import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import type { ApprovalCreator, ApprovalWaiter } from '../../core/vault/agent.js'
 import { vaultSyncV1Router } from './vault-sync-v1.js'
+import { sendVaultRefusal } from './vault-answer.js'
 
 export const vaultAgentV1Router = Router()
 vaultAgentV1Router.use(vaultSyncV1Router)
@@ -46,7 +47,7 @@ function param(v: unknown): string {
 function here(res: Response): boolean {
   res.setHeader('Cache-Control', 'no-store')
   if (isFollower()) {
-    res.status(503).json({ error: 'Passwords are kept on the Mac, which does not answer right now.', code: 'vault_not_here' })
+    sendVaultRefusal(res, 503, { error: 'Passwords are kept on the Mac, which does not answer right now.', code: 'vault_not_here' })
     return false
   }
   if (ambientTestRun()) {
@@ -68,7 +69,7 @@ async function person(req: Request, res: Response): Promise<boolean> {
   const { deviceOf } = await import('./vault-v1.js')
   await (await import('../../core/vault/session-store.js')).sessionsRestored()
   if (s.useSession(header(req, s.SESSION_HEADER), true, deviceOf(req))) return true
-  res.status(401).json({ error: 'The vault is locked in this window: unlock it with the master password.', code: 'vault_session_needed' })
+  sendVaultRefusal(res, 401, { error: 'The vault is locked in this window: unlock it with the master password.', code: 'vault_session_needed' })
   return false
 }
 
@@ -78,7 +79,7 @@ async function run(res: Response, next: NextFunction, work: () => Promise<unknow
   } catch (err) {
     const { VaultError } = await import('../../core/vault/store.js')
     const { ApprovalError } = await import('../../core/approvals/store.js')
-    if (err instanceof VaultError || err instanceof ApprovalError) { res.status(err.status).json({ error: err.message, code: err.code }); return }
+    if (err instanceof VaultError || err instanceof ApprovalError) { sendVaultRefusal(res, err.status, { error: err.message, code: err.code }); return }
     next(err)
   }
 }

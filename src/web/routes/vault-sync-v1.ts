@@ -23,6 +23,7 @@ import { ambientTestRun } from '../../core/test-run.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
+import { sendVaultRefusal } from './vault-answer.js'
 
 export const vaultSyncV1Router = Router()
 
@@ -35,7 +36,7 @@ function header(req: Request, name: string): string | undefined {
 function here(res: Response): boolean {
   res.setHeader('Cache-Control', 'no-store')
   if (isFollower()) {
-    res.status(503).json({ error: 'Passwords are kept on your Mac and open only from it, its own network or Tailscale.', code: 'vault_not_here' })
+    sendVaultRefusal(res, 503, { error: 'Passwords are kept on your Mac and open only from it, its own network or Tailscale.', code: 'vault_not_here' })
     return false
   }
   if (ambientTestRun()) {
@@ -65,7 +66,7 @@ async function person(req: Request, res: Response, needSession: boolean): Promis
     return false
   }
   if (needSession && !(await hasSession(req))) {
-    res.status(401).json({ error: 'The vault is locked in this window: unlock it with the master password.', code: 'vault_session_needed' })
+    sendVaultRefusal(res, 401, { error: 'The vault is locked in this window: unlock it with the master password.', code: 'vault_session_needed' })
     return false
   }
   return true
@@ -78,7 +79,7 @@ async function run(res: Response, next: NextFunction, work: () => Promise<unknow
   } catch (err) {
     const { VaultError } = await import('../../core/vault/store.js')
     const { ImportError } = await import('../../core/vault/import.js')
-    if (err instanceof VaultError) { res.status(err.status).json({ error: err.message, code: err.code }); return }
+    if (err instanceof VaultError) { sendVaultRefusal(res, err.status, { error: err.message, code: err.code }); return }
     if (err instanceof ImportError) { res.status(400).json({ error: err.message, code: 'bad_import' }); return }
     next(err)
   }
