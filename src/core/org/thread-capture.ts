@@ -26,6 +26,7 @@ import { threadsKeptNow } from './threads-kept.js';
 import { eachQuestionOn, isQuestionThread } from './thread-question.js';
 import { cardTagLine } from '../../lib/card-tag.js';
 import { letterThreadId } from './letter-thread-model.js';
+import { cardAnswerThread } from './card-answer-thread.js';
 import { threadsSwitchedText, threadsSwitchIn, type ThreadsWordSwitch } from './threads-word-switch.js';
 import { lookupsSettled, relatedForNewThread, relatedThreadsText, threadsRelatedOn, type RelatedThread } from './thread-related.js';
 
@@ -158,7 +159,9 @@ export async function prepareThreadCapture(input: {
   const messageId = newThreadMessageId();
   // His note answering a letter a thread of this node holds (letters_as_threads) goes under that thread.
   const letterThread = !input.threadId && words.letter ? cur.threads.find((t) => t.id === letterThreadId(words.letter!) && !movedAway(t)) : undefined;
-  const named = input.threadId ?? letterThread?.id;
+  // His answer from a card names no thread: it goes under the one that asked it, never a new one (card-answer-thread.ts).
+  const cardThread = !input.threadId && !letterThread && words.via === 'chat' ? cardAnswerThread(cur.threads.filter((t) => !movedAway(t)), words.text) : null;
+  const named = input.threadId ?? letterThread?.id ?? cardThread?.id;
   const draft: FileMessageInput = {
     text: words.text, images: words.images, via: input.threadId ? 'follow-up' : words.via,
     ...(words.about ? { about: words.about } : {}),

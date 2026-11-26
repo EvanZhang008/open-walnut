@@ -206,11 +206,16 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     // His words on a thread holding a live decision letter answer that letter, once by the qm- id
     // (a resend of it finds the same answer), never from an automated client (core/org/letter-follow-up.ts).
     // The 202 is an ordinary accepted send to an older app: its thread Follow up keeps no chat bubble.
-    const sentThread = threadIdOf(req.body?.threadId) ? req.body.threadId as string : undefined
+    const namedThread = threadIdOf(req.body?.threadId) ? req.body.threadId as string : undefined
+    // His answer from a card names no thread: the decision letter its thread holds is answered with
+    // his words, the same way (core/org/card-answer-thread.ts).
+    const cardLetter = !namedThread && record.taskId && routeSource('mobile', req.headers) === 'mobile'
+      ? await (await import('../../core/org/card-answer-thread.js')).cardAnswerLetter(record.taskId, text) : null
+    const sentThread = namedThread ?? cardLetter?.threadId
     if (sentThread && record.taskId && routeSource('mobile', req.headers) === 'mobile') {
       const { answerLetterOnThread } = await import('../../core/org/letter-follow-up.js')
       const answered = await answerLetterOnThread({
-        taskId: record.taskId, threadId: sentThread, text,
+        taskId: record.taskId, threadId: sentThread, text: cardLetter?.words ?? text,
         ...(savedPaths.length ? { images: savedPaths } : {}), ...(clientMessageId ? { clientId: clientMessageId } : {}),
       })
       if (answered?.delivery.status === 'failed') {
@@ -224,7 +229,7 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       }
       // A thread holding a live Board choice: his words answer the choice on its Board (core/boards/choice-follow-up.ts).
       const { answerChoiceOnThread } = await import('../../core/boards/choice-follow-up.js')
-      const chose = await answerChoiceOnThread({ taskId: record.taskId, threadId: sentThread, text, ...(savedPaths.length ? { images: savedPaths } : {}) })
+      const chose = !namedThread ? null : await answerChoiceOnThread({ taskId: record.taskId, threadId: namedThread, text, ...(savedPaths.length ? { images: savedPaths } : {}) })
       if (chose) {
         res.status(202).json({ messageId: clientMessageId ?? `choice-${chose.threadId}`, answeredChoice: { board: chose.board, id: chose.choiceId, threadId: chose.threadId } })
         return

@@ -243,12 +243,17 @@ export function registerSessionChatRpc(): void {
     // A send that names a thread holding a live decision letter answers that letter with his words,
     // once by the send's own id, instead of reaching the chat as a follow-up (core/org/letter-follow-up.ts).
     // Before the retry branch: a Retry or a resend after a lost receipt finds the same answer.
-    const sentThread = typeof data.threadId === 'string' && /^th-[a-f0-9]{6,32}$/.test(data.threadId) ? data.threadId : undefined
+    const namedThread = typeof data.threadId === 'string' && /^th-[a-f0-9]{6,32}$/.test(data.threadId) ? data.threadId : undefined
+    // His answer from a card names no thread: the decision letter its thread holds is answered with
+    // his words, the same way (core/org/card-answer-thread.ts; 2026-11-25: such a letter stayed open).
+    const cardLetter = !namedThread && record?.taskId
+      ? await (await import('../../core/org/card-answer-thread.js')).cardAnswerLetter(record.taskId, data.message as string) : null
+    const sentThread = namedThread ?? cardLetter?.threadId
     if (sentThread && record?.taskId) {
       const { answerLetterOnThread } = await import('../../core/org/letter-follow-up.js')
       const confirmOnly = data.confirmLetterAnswer === true
       const answered = await answerLetterOnThread({
-        taskId: record.taskId, threadId: sentThread, text: data.message as string,
+        taskId: record.taskId, threadId: sentThread, text: cardLetter?.words ?? data.message as string,
         ...(savedPaths.length ? { images: savedPaths } : {}), ...(userUuid ? { clientId: userUuid } : {}),
         ...(confirmOnly ? { confirmOnly } : {}),
       })
@@ -259,8 +264,8 @@ export function registerSessionChatRpc(): void {
       if (answered) return { messageId: `letter-${answered.letterId}`, answeredLetter: { id: answered.letterId, threadId: answered.threadId } }
       // A thread holding a live Board choice: his words answer the choice on its Board (core/boards/choice-follow-up.ts).
       const { answerChoiceOnThread } = await import('../../core/boards/choice-follow-up.js')
-      const chose = await answerChoiceOnThread({
-        taskId: record.taskId, threadId: sentThread, text: data.message as string,
+      const chose = !namedThread ? null : await answerChoiceOnThread({
+        taskId: record.taskId, threadId: namedThread, text: data.message as string,
         ...(savedPaths.length ? { images: savedPaths } : {}), ...(confirmOnly ? { confirmOnly } : {}),
       })
       if (chose) return { messageId: `choice-${chose.threadId}`, answeredChoice: { board: chose.board, id: chose.choiceId, threadId: chose.threadId } }

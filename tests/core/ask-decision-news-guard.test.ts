@@ -594,6 +594,7 @@ describe('every path that tells an ask changed compares the decision', () => {
       'src/core/org/team-note.ts': 'the user\'s and peers\' messages into a team, not a task\'s ask of the user',
       'src/core/org/thread-held-decision.ts': 'a teammate\'s fold under a decision its holder carries on a thread: the decision id decides; the words only where an older build stored none (the key a pointer kept), and it tells no ask change',
       'src/core/org/thread-task-ask.ts': 'a legacy thread linked to a task has no shared decision id; a conservative match establishes an owner pointer, never an ask-change notification',
+      'src/core/org/card-answer-thread.ts': 'his answer from a card quotes the ask in words and carries no decision id; the words find the thread that asked it, never an ask-change notification',
       'src/core/decision-owner.ts': 'an explicit owner reference stored before decision ids uses the exact saved ask key; stable decision ids are compared first, never ask-change notifications',
     }
     const users = filesWith(WORDS)

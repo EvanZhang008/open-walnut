@@ -11,6 +11,10 @@
  *   3. A send naming an ordinary thread stays a follow-up in the chat.
  *   4. An agent answering for him with his "K" picks the recommended option only once Walnut reads
  *      his "K" on that card; a "K" it only quotes, or one for another option, is refused.
+ *   3b. His answer from a card (`Answer to "<ask>": <label>`, sent by a tap on the task's own ask)
+ *      names no thread: it answers the letter whose option he picked, once, and opens no thread
+ *      (core/org/card-answer-thread.ts; 2026-11-25: such an answer became a second card and the
+ *      letter stayed open). With the one-card setting off it is filed under that letter's thread.
  *   5. Review findings (2026-11-20): a browser under automation never answers as him; a Retry, a
  *      resend after a lost receipt and the phone's resend of its qm- id answer once; a letter
  *      answered in the inbox meanwhile leaves his words a plain follow-up; a failed delivery comes
@@ -77,10 +81,10 @@ const op = async (name: string, args: Record<string, unknown>, sid: string) => {
 }
 
 /** A decision letter from the lead, as its session sends one; its thread waits on him. */
-async function decide(subject: string, recommended = true): Promise<string> {
+async function decide(subject: string, recommended = true, labels: [string, string] = ['Release it', 'Not yet']): Promise<string> {
   const out = await op('human_inbox_send', {
     subject, type: 'action_required', markdown: `${subject} I recommend releasing it.`,
-    actions: [{ id: 'release', label: 'Release it', ...(recommended ? { recommended: true } : {}) }, { id: 'hold', label: 'Not yet' }],
+    actions: [{ id: 'release', label: labels[0], ...(recommended ? { recommended: true } : {}) }, { id: 'hold', label: labels[1] }],
     user_kind: 'user_own', user_kind_why: 'It ships his own app to him',
   }, vp.sid)
   const id = out.letterId as string
@@ -187,6 +191,34 @@ describe('his words on a thread holding a letter answer the letter', () => {
     expect(r.ok, r.error).toBe(true)
     expect(r.result?.answeredLetter).toBeUndefined()
     await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('Start with the pears') && !m.includes('[Letter reply]'))).toBe(true), { timeout: 10_000, interval: 200 })
+  })
+
+  it('his answer from a card names no thread: the console\'s send answers the letter whose option he picked', async () => {
+    const letter = await decide('Send the orchard newsletter?', true, ['Send it today', 'Hold it a week'])
+    const threads = (await readThreads(vp.taskId)).threads.length
+    const before = queued.get(vp.sid)?.length ?? 0
+    // The task's own ask in other words, quoted with its question mark, then the label he tapped.
+    const r = await rpc('session:send', { sessionId: vp.sid, message: 'Answer to "The newsletter is ready to go out, shall I?": Send it today', userUuid: randomUUID() })
+    expect(r.ok, r.error).toBe(true)
+    expect(r.result?.answeredLetter).toMatchObject({ id: letter, threadId: letterThreadId(letter) })
+    await expectAnsweredByWords(letter, 'Send it today', before)
+    // No second card for the matter, and the quoted ask never reached the chat as a message of his.
+    expect((await readThreads(vp.taskId)).threads).toHaveLength(threads)
+    expect(rowsSince(before).some((m) => m.includes('Answer to "'))).toBe(false)
+  })
+
+  it('his answer from a card on the phone does the same, and a card answer no thread asks stays a chat message', async () => {
+    const letter = await decide('Order the winter mulch?', true, ['Order ten bags', 'Skip this year'])
+    const before = queued.get(vp.sid)?.length ?? 0
+    const r = await api<{ answeredLetter?: { id: string } }>('POST', `/sessions/${vp.sid}/messages`, { text: 'Answer to "Mulch for the winter beds?": Order ten bags', messageId: 'qm-card-answer-1' })
+    expect(r.status).toBe(202)
+    expect(r.json.answeredLetter?.id).toBe(letter)
+    await expectAnsweredByWords(letter, 'Order ten bags', before)
+    // An answer to an ask no thread holds goes to the chat as before.
+    const plain = await rpc('session:send', { sessionId: vp.sid, message: 'Answer to "Which gate gets the new latch?": the east gate', userUuid: randomUUID() })
+    expect(plain.ok, plain.error).toBe(true)
+    expect(plain.result?.answeredLetter).toBeUndefined()
+    await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('the east gate') && !m.includes('[Letter reply]'))).toBe(true), { timeout: 10_000, interval: 200 })
   })
 
   it('an agent answering for him with his "K" picks the recommended option only once his "K" is on that card', async () => {
@@ -301,6 +333,21 @@ describe('with the one-card setting off (threads_one_card), his words on it stay
     await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('Sounds right to me') && !m.includes('[Letter reply]'))).toBe(true), { timeout: 10_000, interval: 200 })
     expect(await humanTurns(letter)).toHaveLength(0)
     expect((await getLetter(letter))?.answered).toBeFalsy()
+  })
+
+  it('his answer from a card is filed under the letter\'s thread, never a new one', async () => {
+    const letter = await decide('Repair the greenhouse door?', true, ['Repair it now', 'Leave it till spring'])
+    const threads = (await readThreads(vp.taskId)).threads.length
+    const before = queued.get(vp.sid)?.length ?? 0
+    const r = await rpc('session:send', { sessionId: vp.sid, message: 'Answer to "The greenhouse door sticks, fix it?": Repair it now', userUuid: randomUUID() })
+    expect(r.ok, r.error).toBe(true)
+    expect(r.result?.answeredLetter).toBeUndefined()
+    await vi.waitFor(() => expect(rowsSince(before).some((m) => m.includes('Repair it now'))).toBe(true), { timeout: 10_000, interval: 200 })
+    await vi.waitFor(async () => {
+      const all = (await readThreads(vp.taskId)).threads
+      expect(all).toHaveLength(threads)
+      expect(all.find((t) => t.id === letterThreadId(letter))?.messages.some((m) => m.text.endsWith('Repair it now'))).toBe(true)
+    }, { timeout: 10_000, interval: 200 })
   })
 
   it('his "K" on the card is the strict old rule: no words line, and no agent picks for him with it', async () => {

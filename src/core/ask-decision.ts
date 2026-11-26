@@ -271,6 +271,9 @@ export function optionsChanged(was: Pick<AskMemory, 'kind' | 'options'>, now: Pi
 /** An option that is only a yes or a no ("Yes", "No (recommended)", and the same in Chinese). */
 const ANSWER_ONLY = /^\s*(?:yes|no|ok|okay|sure|go ahead|\u53ef\u4ee5|\u597d|\u884c|\u540c\u610f|\u4e0d|\u4e0d\u8981|\u4e0d\u540c\u610f)\s*[.!\u3002\uff01]?\s*(?:[(\uff08](?:recommended|\u63a8\u8350)[)\uff09])?\s*$/i;
 
+/** A label that only says yes or no, with no words of its own (ANSWER_ONLY). */
+export const answersOnly = (label: string): boolean => ANSWER_ONLY.test(label);
+
 /** Every option only says yes or no: the question as it was, with two buttons for its answers. Any
  *  option with words of its own may bring a new target, direction or number, so it is news
  *  (review 2026-11-11: "Yes, run tests on the production cluster" on a question about staging). */
