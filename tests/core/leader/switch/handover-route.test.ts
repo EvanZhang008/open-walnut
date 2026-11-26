@@ -214,10 +214,10 @@ describe('the begin a source job asks on loopback', () => {
     writeDurableJson(forwardedBeginFile(WALNUT_HOME, kept), { switchId: kept, to: 'machine-b', by: { machine: 'machine-b', via: 'forwarded' }, hostKey: 'machine-b', at: new Date().toISOString() })
     try {
       // Kept by the door: its job's begin answers who began it, and records nothing again.
-      expect((await begin({ to: 'machine-b', switchId: kept })).json).toEqual({ ok: true, startedBy: { machine: 'machine-b', via: 'forwarded' } })
+      expect((await begin({ to: 'machine-b', switchId: kept })).json).toEqual({ ok: true, startedBy: { machine: 'machine-b', via: 'forwarded' }, homeSessions: 'no session works in the data home' })
       // No record kept: a body that says it was forwarded is this machine's own command.
       const other = await begin({ to: 'machine-b', switchId: '20261124T000000-cccccc', forwardedBy: 'machine-b', startedBy: { machine: 'machine-b', via: 'forwarded' } })
-      expect(other.json).toEqual({ ok: true, startedBy: { machine: 'machine-a', via: 'cli' } })
+      expect(other.json).toEqual({ ok: true, startedBy: { machine: 'machine-a', via: 'cli' }, homeSessions: 'no session works in the data home' })
       expect(began).toEqual([{ switchId: '20261124T000000-cccccc', from: 'machine-a', to: 'machine-b', by: { machine: 'machine-a', via: 'cli' } }])
     } finally { fs.rmSync(forwardedBeginFile(WALNUT_HOME, kept), { force: true }) }
   })

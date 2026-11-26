@@ -51,7 +51,7 @@ import { randomUUID } from 'node:crypto'
 import { bus, EventNames } from './event-bus.js'
 import type { BusEvent } from './event-bus.js'
 import type { RestartLossCause, SessionRecord, SessionRestartLoss, StatusReason } from './types.js'
-import { heldBySwitch } from './leader/switch/session-hold.js'
+import { heldBySwitch } from './sessions/switch-hold.js'
 import type { SessionSnapshot } from '../providers/daemon-fold.js'
 import { isInfraSessionError } from './session-error-kind.js'
 import {
@@ -200,7 +200,7 @@ export class SessionAutoRecover {
     if (!this.enabled) return { ok: false, reason: 'disabled' }
     if (this.tracked(record.claudeSessionId)) return { ok: false, reason: 'already-tracked' }
     if (record.archived) return { ok: false, reason: 'archived' }
-    // A leader switch stopped it in the data home: resumed once the switch settles (leader/switch/session-hold.ts).
+    // A leader switch stopped it in the data home: resumed once the switch settles (sessions/switch-hold.ts).
     if (heldBySwitch(record)) return { ok: false, reason: 'leader-switch' }
     // This death was decided already (a runtime site re-reports it every tick).
     const prior = record.restartLoss

@@ -1,6 +1,6 @@
 /**
  * Sessions in the data home across a leader switch (src/core/leader/switch/home-sessions.ts, session-hosts.ts
- * moveHomeRows, session-hold.ts): the class is chosen by folder (never by a name's prefix), the old leader's stop
+ * moveHomeRows, sessions/switch-hold.ts): the class is chosen by folder (never by a name's prefix), the old leader's stop
  * stamps and stops each one (a turn it ends is a pending restart loss, a CLI that outlives it fails the stop), the
  * promotion moves each row to the new home (archived ones too) or ends it with why, and a rollback settles them.
  */
@@ -14,7 +14,7 @@ import {
   type HomeStopDeps,
 } from '../../../../src/core/leader/switch/home-sessions.js'
 import { moveSessionHosts } from '../../../../src/core/leader/switch/session-hosts.js'
-import { heldBySwitch } from '../../../../src/core/leader/switch/session-hold.js'
+import { heldBySwitch } from '../../../../src/core/sessions/switch-hold.js'
 import type { SessionRecord } from '../../../../src/core/types.js'
 
 let root = ''

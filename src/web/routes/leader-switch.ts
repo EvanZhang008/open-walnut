@@ -544,9 +544,10 @@ leaderSwitchRouter.post('/switch/begin', thisMachineOnly, async (req, res) => {
   const [{ homeStopRuntimeRefusal }, { planHomeSessions, planLine }, { listSessions }] = await Promise.all([
     import('../../core/leader/switch/home-session-runtime.js'), import('../../core/leader/switch/home-sessions.js'), import('../../core/session-tracker.js'),
   ])
-  const cannot = await homeStopRuntimeRefusal()
+  const plan = planHomeSessions(await listSessions(), WALNUT_HOME)
+  const cannot = await homeStopRuntimeRefusal(plan.live.turn + plan.live.idle)
   if (cannot) { res.status(409).json({ ok: false, why: cannot, code: 'home_stop_unavailable', machine: p.machine }); return }
-  const homeSessions = planLine(planHomeSessions(await listSessions(), WALNUT_HOME))
+  const homeSessions = planLine(plan)
   if (fwd) { res.json({ ok: true, startedBy: fwd.by, homeSessions }); return }
   const startedBy = { machine: p.machine, via: 'cli' as const }
   await recordBegin({ switchId, from: p.machine, to, by: startedBy })

@@ -532,7 +532,7 @@ holds `/a/b/c`, never `/a/b-c`). A VP or lead runs in its own task folder and is
 - **Starts refused** from then on: the daemon twins' `start` and `acpStart` refuse a folder in a marked home
   (`HOME_HANDED_OVER`, naming the machine the lead went to); routine placement does not pick the old leader's
   handed-over home on that machine (`moved-home.ts handedOverHomeOnHost`). Restart recovery and the message queue
-  leave a session the switch holds (`session-hold.ts`).
+  leave a session the switch holds (`sessions/switch-hold.ts`).
 - **Records** (the engine's own: transcripts, subagent transcripts, large tool results, the folder's memory, the task
   list) travel with the standby copy into `<standby dir>/carry` ([Standby copy](./standby-copy.md), a carry), never
   into the new machine's engine dir before the commit. The final batch sends them until unchanged after the home's,

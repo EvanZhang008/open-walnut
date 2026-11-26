@@ -79,6 +79,8 @@ describe('the sessions in the data home: found by folder at one place', () => {
     const server = code(read('src/web/server.ts'))
     const settle = server.indexOf('settleHomeSessionsAtLead(WALNUT_HOME)')
     expect(settle).toBeGreaterThan(0)
+    // Only where the permit is wired: with the experiment off nothing of the switch loads.
+    expect(server.slice(Math.max(0, settle - 600), settle)).toMatch(/bootPolicy\('session-reconcile'\) && leaderPermitHandle\)/)
     expect(settle).toBeLessThan(server.indexOf('await reconcileSessions()'))
   })
 

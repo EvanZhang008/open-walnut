@@ -4114,8 +4114,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // its last projected status is restart recovery's fallback fact.
   const beforeReconcile = new Map<string, import('../core/types.js').SessionRecord>()
   // The sessions a leader switch left here go on first: their records in place on a new leader, or settled in place
-  // after a switch that rolled back (core/leader/switch/home-session-runtime.ts). Nothing when no switch marked one.
-  if (bootPolicy('session-reconcile')) {
+  // after a switch that rolled back (core/leader/switch/home-session-runtime.ts). Only where the write permission is
+  // wired (a switch can have run): with the experiment off nothing of the switch is loaded.
+  if (bootPolicy('session-reconcile') && leaderPermitHandle) {
     try {
       const { settleHomeSessionsAtLead } = await import('../core/leader/switch/home-session-runtime.js')
       await settleHomeSessionsAtLead(WALNUT_HOME)

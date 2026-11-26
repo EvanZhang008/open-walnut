@@ -25,11 +25,15 @@ async function save(sid: string, patch: Partial<SessionRecord>): Promise<void> {
   await (await store()).updateSessionRecord(sid, patch as never)
 }
 
-/** Why this machine's own session runtime cannot take the switch's stop now, or null (the preflight asks it too). */
-export async function homeStopRuntimeRefusal(): Promise<string | null> {
+/**
+ * Why this machine's own session runtime cannot take the switch's stop now, or null (the preflight asks it). `live`:
+ * CLIs of the class running now. A runtime not connected stops nothing and starts nothing: refused only when such a
+ * CLI runs (nothing could stop it).
+ */
+export async function homeStopRuntimeRefusal(live: number): Promise<string | null> {
   const { getConnectedDaemonConnection } = await import('../../../providers/daemon-connection.js')
   const conn = getConnectedDaemonConnection('__local__')
-  if (!conn?.connected) return 'this machine\'s session runtime (its own daemon) is not connected, so the sessions in the data home could not be stopped for the switch'
+  if (!conn?.connected) return live ? `this machine's session runtime (its own daemon) is not connected, so the ${live} session(s) running in the data home could not be stopped for the switch` : null
   if (!conn.capabilitiesKnown) return 'this machine\'s session runtime has not said what it can do yet'
   if (!conn.hasCapability(HOME_STOP_CAPABILITY)) return `this machine's session runtime lacks ${HOME_STOP_CAPABILITY} (update Walnut here): it cannot stop the sessions in the data home for a switch, nor refuse new ones there`
   return null
@@ -105,7 +109,7 @@ export async function placeDeps(): Promise<PlaceDeps> {
  */
 export async function settleHomeSessionsAtLead(home: string): Promise<void> {
   const { listSessions } = await store()
-  const { heldBySwitch } = await import('./session-hold.js')
+  const { heldBySwitch } = await import('../../sessions/switch-hold.js')
   const held = (await listSessions()).filter(heldBySwitch)
   if (!held.length) return
   const { log } = await import('../../../logging/index.js')

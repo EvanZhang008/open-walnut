@@ -450,7 +450,7 @@ async function quietVerdict(sid: string): Promise<QuietVerdict> {
   const task = rec.taskId ? await getTask(rec.taskId).catch(() => null) : null;
   const target = targetName(sid, rec.taskId, task?.title);
   const sw = await import('./engine-switch.js');
-  const { heldBySwitch } = await import('../leader/switch/session-hold.js');
+  const { heldBySwitch } = await import('./switch-hold.js');
   if (sw.switchingFrom(sid) || sw.movingFrom({ sessionId: sid }) || (rec.taskId && sw.isSwitching(rec.taskId)) || heldBySwitch(rec)) {
     return { act: 'wait', wait: 'switching', target };
   }

@@ -5,7 +5,7 @@
  * recovery does not take it on and a message for it is held (as for a task that moves to another host), so nothing
  * starts it where it cannot run. Leaf module: types only.
  */
-import type { SessionRecord } from '../../types.js'
+import type { SessionRecord } from '../types.js'
 
 export function heldBySwitch(r: Pick<SessionRecord, 'leaderSwitch' | 'archived'> | null | undefined): boolean {
   const st = r?.leaderSwitch
