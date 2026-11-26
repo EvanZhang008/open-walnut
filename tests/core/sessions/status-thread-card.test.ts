@@ -11,15 +11,19 @@
  *   a result      a working or waiting line on a result he has not read writes no progress over it
  *   still lines   his new word, a first answer, a state that moves, a done: written as before
  *   every block   that lists a carded thread carries the rule (kept by Walnut or not, node or task)
+ *   an answer     that puts new words on more than CARDS_RESTATED_MAX cards that hold says its list
+ *                 again: none of those words is written (2026-11-26, the thread monitor: 6 of 6)
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-status-thread-card'))
 
 import { setThreadsKept } from '../../../src/core/org/threads-kept.js'
-import { listForQuestion, patchForLine, settleStateFromThreads, threadQuestionBlock, type ListedThread, type StatusThreadLine } from '../../../src/core/sessions/status-threads.js'
-import { CARD_KEEPS_LINE, CARD_SHOWN_MAX, cardPart, cardWords, keepsCardWords } from '../../../src/core/sessions/status-thread-card.js'
+import { listForQuestion, patchForLine, planThreadWrites, settleStateFromThreads, threadQuestionBlock, type ListedThread, type StatusThreadLine } from '../../../src/core/sessions/status-threads.js'
+import { CARD_KEEPS_LINE, CARD_SHOWN_MAX, CARDS_RESTATED_MAX, cardHolds, cardPart, cardWords, keepsCardWords, restatesCard } from '../../../src/core/sessions/status-thread-card.js'
 import { emptyThreads, fileMessage, openThread, SAME_CONVERSATION_MS, setAnswers, updateThread, type OrgThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 import type { StatusReport } from '../../../src/core/user-status.js'
 
@@ -164,5 +168,92 @@ describe('the question with the cards', () => {
     const { block } = threadQuestionBlock([{ id: 'th-card00009', title: 'Hose fixed', state: 'pending', acked: true, card: 'The hose is fixed.' }])
     expect(block).not.toContain('card: "The hose is fixed."')
     expect(block).toContain('a line only closes it (done)')
+  })
+})
+
+describe('an answer that says its cards again', () => {
+  /** `n` questions of his, far enough apart to be `n` threads, each answered with a summary on its card. */
+  function cards(n: number): ThreadsFile {
+    let f = emptyThreads('lead-1')
+    const day = Date.UTC(2026, 10, 23, 6)
+    const plots = ['north bed', 'herb spiral', 'apple row', 'pond edge', 'tool shed', 'compost bay', 'vine arch']
+    for (let i = 0; i < n; i++) {
+      const filed = fileMessage(f, { text: `what is left to do at the ${plots[i]}?`, via: 'chat', at: new Date(day + i * 3 * SAME_CONVERSATION_MS).toISOString() })
+      f = updateThread(filed.file, filed.thread.id, { title: `The ${plots[i]}`, state: 'answered', reply: `The ${plots[i]} is finished: see /srv/garden/${i}.png for how it looks.` }, NODE, new Date(day + i * 3 * SAME_CONVERSATION_MS + 60_000).toISOString()).file
+    }
+    expect(f.threads.filter((t) => t.state === 'answered' && cardHolds(t))).toHaveLength(n)
+    return f
+  }
+  const again = (t: OrgThread, state: StatusThreadLine['state'] = 'answered') => line(t, state, `${t.title} is all done now.`)
+  const wrote = (f: ThreadsFile, lines: StatusThreadLine[], side: boolean) => planThreadWrites(f, lines, [], {}, side)
+
+  it('new words on more held cards than CARDS_RESTATED_MAX in one answer: none is written, and the cards keep their proof', () => {
+    const f = cards(CARDS_RESTATED_MAX + 1)
+    // A done line on his own request stays answered with the line's words: the same rewrite.
+    const lines = f.threads.map((t, i) => again(t, i === 0 ? 'done' : 'answered'))
+    const plan = wrote(f, lines, true)
+    expect(plan.writes).toEqual([])
+    expect(plan.restated.sort()).toEqual(f.threads.map((t) => t.id).sort())
+  })
+
+  it('up to CARDS_RESTATED_MAX at once are results that moved on: written (2,049 real answers: one, two or three in 268, more in 1)', () => {
+    const f = cards(CARDS_RESTATED_MAX)
+    const plan = wrote(f, f.threads.map((t) => again(t)), true)
+    expect(plan.writes.map((w) => w.patch.reply)).toEqual(f.threads.map((t) => `${t.title} is all done now.`))
+    expect(plan.restated).toEqual([])
+  })
+
+  it('his reply\'s own card lines speak for what the reply says: never held back', () => {
+    const f = cards(CARDS_RESTATED_MAX + 2)
+    const plan = wrote(f, f.threads.map((t) => again(t)), false)
+    expect(plan.writes).toHaveLength(CARDS_RESTATED_MAX + 2)
+    expect(plan.restated).toEqual([])
+  })
+
+  it('every other write of that answer stays: a state that moves, a card that did not hold, a hidden thread\'s line', () => {
+    let f = cards(CARDS_RESTATED_MAX + 1)
+    const [first, ...rest] = f.threads
+    // A word of his after the summary: that card holds no more, so its line is the answer to it.
+    f = fileMessage(f, { text: 'and the gate there?', via: 'follow-up', at: new Date(Date.UTC(2026, 10, 24, 9)).toISOString(), threadId: first.id }).file
+    // A thread still in work, hidden from him.
+    const work = fileMessage(f, { text: 'order the seeds for spring', via: 'chat', at: new Date(Date.UTC(2026, 10, 24, 12)).toISOString() })
+    f = updateThread(work.file, work.thread.id, { title: 'Spring seeds', state: 'working' }, NODE, new Date(Date.UTC(2026, 10, 24, 12, 1)).toISOString()).file
+    const now = (id: string) => f.threads.find((t) => t.id === id)!
+    expect(restatesCard(now(first.id), { state: 'answered', reply: 'x' })).toBe(false)
+    const lines = [again(now(first.id)), ...rest.map((t) => again(t)), line(now(work.thread.id), 'answered', 'The seeds are ordered.')]
+    // Three held cards rewritten beside the two others: within the limit, all five written.
+    const plan = wrote(f, lines, true)
+    expect(plan.writes).toHaveLength(5)
+    expect(plan.restated).toEqual([])
+    // One more held card in the same answer: the held ones are left, the two others still written.
+    const more = cards(CARDS_RESTATED_MAX + 2)
+    const extra = fileMessage(more, { text: 'order the seeds for spring', via: 'chat', at: new Date(Date.UTC(2026, 10, 24, 12)).toISOString() })
+    const g = updateThread(extra.file, extra.thread.id, { title: 'Spring seeds', state: 'working' }, NODE, new Date(Date.UTC(2026, 10, 24, 12, 1)).toISOString()).file
+    const held = g.threads.filter((t) => t.state === 'answered')
+    const out = wrote(g, [...held.map((t) => again(t)), line(g.threads.find((t) => t.id === extra.thread.id)!, 'answered', 'The seeds are ordered.')], true)
+    expect(out.writes.map((w) => w.id)).toEqual([extra.thread.id])
+    expect(out.restated.sort()).toEqual(held.map((t) => t.id).sort())
+  })
+
+  // Class guard: a model's status lines reach his cards through one function, and each caller says
+  // whether its lines are the side question's (held to the limit) or his reply's own card lines.
+  it('class guard: every path that writes status lines on cards is listed with its kind', () => {
+    const KINDS: Record<string, 'side question' | 'reply card lines'> = {
+      'src/core/sessions/status-question.ts': 'side question',
+      'src/core/org/reply-card.ts': 'reply card lines',
+    }
+    const root = path.resolve(__dirname, '../../..')
+    const files: string[] = []
+    const walk = (dir: string) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else if (e.name.endsWith('.ts')) files.push(p) } }
+    walk(path.join(root, 'src'))
+    const calls = (name: string) => files.flatMap((f) => {
+      const text = fs.readFileSync(f, 'utf8')
+      return [...text.matchAll(new RegExp(`(?<!function )\\b${name}\\(([^\\n]*)`, 'g'))].map((m) => ({ file: path.relative(root, f), args: m[1] }))
+    })
+    // The plan is made in one place, and it passes on which kind the lines are.
+    expect(calls('planThreadWrites')).toEqual([{ file: 'src/core/sessions/status-threads.ts', args: expect.stringMatching(/^cur, a\.lines, opened, a\.marks, !from\)/) }])
+    const appliers = calls('applyThreadLines')
+    expect([...new Set(appliers.map((c) => c.file))].sort()).toEqual(Object.keys(KINDS).sort())
+    for (const c of appliers) expect(c.args.includes("'reply card lines'"), `${c.file}: ${c.args}`).toBe(KINDS[c.file] === 'reply card lines')
   })
 })

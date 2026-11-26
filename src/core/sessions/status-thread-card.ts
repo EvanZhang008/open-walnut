@@ -10,6 +10,9 @@
  *   a line         working or waiting on a result he has not read (Walnut keeps it answered) writes
  *                  no progress over that result (status-threads.ts patchForLine)
  *
+ *   an answer      puts new words on at most CARDS_RESTATED_MAX answered cards that still hold:
+ *                  more at once is the list said again, and none of those words is written
+ *
  * Working and waiting threads are hidden from him: their lines go on as before, words included
  * (2026-11-22: "its words still go on, quietly"), and the task's own state is read from them.
  *
@@ -17,7 +20,7 @@
  * of his waits (a message joined only by timing included) or a summary is owed (thread-view.ts).
  */
 import { cardView, summaryOwed, uncheckedJoin } from '../org/thread-view.js';
-import type { OrgThread } from '../org/threads-model.js';
+import type { OrgThread, ThreadPatch } from '../org/threads-model.js';
 import { cutEnd } from '../text-cut.js';
 
 /** How much of a card the question quotes: enough to tell whether it still holds. */
@@ -57,4 +60,34 @@ export function cardPart(card: string | undefined): string {
  */
 export function keepsCardWords(t: OrgThread, state: OrgThread['state'], named: OrgThread['state']): boolean {
   return state === 'answered' && t.state === 'answered' && named !== 'answered' && cardHolds(t);
+}
+
+/**
+ * One status answer puts new words on at most this many answered cards that still hold. The rule
+ * beside the line format is the model's to follow, not a brake (2026-11-26, the thread monitor: one
+ * answer wrote all 6 answered cards it was asked about anew, 5 of them quoted to it as holding, and
+ * his cards lost their detail and two the links of their result). Measured on the saved versions of
+ * every node's threads, 2,049 status answers since the 11-23 fix: 239 put new words on one such
+ * card, 26 on two, 3 on three (the ones read were results that had moved on), and that one on six.
+ * More than three at once is the list said again, never that many results changed in a turn whose
+ * reply spoke of none of them.
+ */
+export const CARDS_RESTATED_MAX = 3;
+
+/** A write that only puts new words on an answered card that still holds: no state moves, nothing closes. Pure. */
+export function restatesCard(t: OrgThread, patch: Pick<ThreadPatch, 'state' | 'reply' | 'close'>): boolean {
+  return !patch.close && !!patch.reply && t.state === 'answered' && (patch.state ?? 'answered') === 'answered' && cardHolds(t);
+}
+
+/**
+ * The writes of one status answer without the list said again: with more than CARDS_RESTATED_MAX
+ * writes that restate a card, none of them is made (`restated`: their threads), and his cards keep
+ * what they said. Every other write of the answer stays: a state that moves, a close, a title, a
+ * card that did not hold. Pure.
+ */
+export function withoutRestated<W extends { id: string; patch: ThreadPatch }>(threads: readonly OrgThread[], writes: readonly W[]): { writes: W[]; restated: string[] } {
+  const by = new Map(threads.map((t) => [t.id, t]));
+  const hit = new Set(writes.filter((w) => { const t = by.get(w.id); return !!t && restatesCard(t, w.patch); }));
+  if (hit.size <= CARDS_RESTATED_MAX) return { writes: [...writes], restated: [] };
+  return { writes: writes.filter((w) => !hit.has(w)), restated: [...hit].map((w) => w.id) };
 }

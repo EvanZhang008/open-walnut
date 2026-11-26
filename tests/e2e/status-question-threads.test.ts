@@ -8,6 +8,11 @@
  * answers the user's finished one (he closes it), parks the waiting one as pending with its
  * progress, opens the new one, and the task reads Waiting on the rollout: not "It answered your
  * question", not Needs you.
+ *
+ * An answer that says its cards again (2026-11-26, the thread monitor: one answer wrote all 6
+ * answered cards it was asked about anew, and his cards lost their detail and links): five cards
+ * that hold, all five given a line with new words, keep what they said, while the hidden thread
+ * of the same answer still moves; two of them in a later answer are results that moved on.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -143,5 +148,63 @@ describe('the status question keeps the threads', () => {
     expect(await askStatus(taskId, SID, Date.now())).toBe(true)
     const after = (await readThreads(taskId)).threads.map((t) => [t.id, t.updatedAt])
     expect(after).toEqual(before)
+  })
+})
+
+describe('an answer that says its cards again', () => {
+  const BEDS = ['North bed', 'Herb spiral', 'Apple row', 'Pond edge', 'Tool shed']
+  const cardId = (i: number) => `th-bed0000${i}`
+  const SEEDS = 'th-5eed0001'
+  let node = ''
+
+  it('five held cards rewritten in one answer keep their words and their place; the hidden thread still moves', async () => {
+    await settleStatusQuestion(SID, 10_000)
+    node = (await addTask({ title: 'Look after the garden beds', project: 'Orchard' })).task.id
+    await updateTaskRaw(node, { phase: 'IN_PROGRESS' }, { source: 'test' })
+    const held: OrgThread[] = BEDS.map((bed, i) => ({
+      id: cardId(i), title: bed, titled: true, state: 'answered', createdAt: ago(300 - i * 20), updatedAt: ago(290 - i * 20),
+      messages: [{ id: `tm-bed0000${i}`, at: ago(300 - i * 20), text: `What is left to do at the ${bed.toLowerCase()}?`, via: 'chat', answer: { text: `Nothing: the ${bed.toLowerCase()} is finished.`, at: ago(295 - i * 20) } }],
+      reply: `${bed}: finished on Monday, photo at /srv/garden/bed-${i}.png, the soil test is at https://garden.example/soil/${i}`,
+      replyAt: ago(290 - i * 20), reply_by: `task:${node}`,
+    }))
+    const seeds: OrgThread = { id: SEEDS, title: 'Spring seeds', titled: true, state: 'working', createdAt: ago(20), updatedAt: ago(20),
+      messages: [{ id: 'tm-5eed0001', at: ago(20), text: 'Order the seeds for spring', via: 'chat' }] }
+    await fs.writeFile(path.join(WALNUT_HOME, 'org', 'threads', `${node}.json`), JSON.stringify({ version: 1, taskId: node, threads: [...held, seeds] }))
+    const before = new Map((await readThreads(node)).threads.map((t) => [t.id, t]))
+
+    const fake = fakeSession((q) => [
+      'FOR_USER_STATE: waiting',
+      'FOR_USER_WAITING_ON: outside: the seed shop',
+      ...BEDS.map((bed) => `FOR_USER_THREAD: ${refOf(q, bed)} | answered | The ${bed.toLowerCase()} is all done.`),
+      `FOR_USER_THREAD: ${refOf(q, 'Spring seeds')} | waiting | The shop ships the seeds on Friday.`,
+    ].join('\n'))
+    expect(await askStatus(node, SID, Date.now())).toBe(true)
+    // The question quoted each card as one that holds: the rule was there, and the answer ignored it.
+    const prompt = fake.askSideQuestion.mock.calls[0][0] as string
+    for (const bed of BEDS) expect(prompt).toMatch(new RegExp(`"${bed}" \\(answered[^)]*card: "`))
+
+    const after = new Map((await readThreads(node)).threads.map((t) => [t.id, t]))
+    for (let i = 0; i < BEDS.length; i++) {
+      expect(after.get(cardId(i))?.reply).toBe(before.get(cardId(i))?.reply)
+      expect(after.get(cardId(i))?.replyAt).toBe(before.get(cardId(i))?.replyAt)
+      expect(after.get(cardId(i))?.updatedAt).toBe(before.get(cardId(i))?.updatedAt)
+    }
+    expect(after.get(SEEDS)).toMatchObject({ state: 'pending', reply: 'The shop ships the seeds on Friday.' })
+  })
+
+  it('two of them in a later answer are results that moved on: written', async () => {
+    await settleStatusQuestion(SID, 10_000)
+    await updateTaskRaw(node, { phase: 'IN_PROGRESS' }, { source: 'test' })
+    fakeSession((q) => [
+      'FOR_USER_STATE: waiting',
+      'FOR_USER_WAITING_ON: outside: the seed shop',
+      `FOR_USER_THREAD: ${refOf(q, 'North bed')} | answered | The north bed was replanted after the frost: /srv/garden/bed-0-new.png`,
+      `FOR_USER_THREAD: ${refOf(q, 'Apple row')} | answered | The apple row lost two trees to the storm; both are replaced.`,
+    ].join('\n'))
+    expect(await askStatus(node, SID, Date.now())).toBe(true)
+    const byId = new Map((await readThreads(node)).threads.map((t) => [t.id, t]))
+    expect(byId.get(cardId(0))?.reply).toBe('The north bed was replanted after the frost: /srv/garden/bed-0-new.png')
+    expect(byId.get(cardId(2))?.reply).toBe('The apple row lost two trees to the storm; both are replaced.')
+    expect(byId.get(cardId(1))?.reply).toContain('finished on Monday')
   })
 })

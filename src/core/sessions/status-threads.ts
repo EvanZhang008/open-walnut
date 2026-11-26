@@ -38,7 +38,7 @@ import { markerRe } from './status-marker.js';
 import { JOINS_ASKED_MAX, readSplitLines, splitQuestionPart, type JoinedMessage } from './status-thread-split.js';
 import { MERGE_UNTITLED_LINE, MERGES_ASKED_MAX, mergeQuestionPart, readMergeLines, type HeldTitle } from './status-thread-title.js';
 import { answerSteps } from './status-thread-pre.js';
-import { CARD_KEEPS_LINE, cardPart, keepsCardWords } from './status-thread-card.js';
+import { CARD_KEEPS_LINE, cardPart, keepsCardWords, withoutRestated } from './status-thread-card.js';
 import { ASKED_MARK, CARD_ASKS_MARK, askedRule, noteLineAsks } from './status-thread-asked.js';
 import { inStateOrder, OVERDUE_WORDS, REMIND_LIST_MAX, reminderItem, reminderPart, type ReminderMark } from './status-thread-remind.js';
 // The question's read side lives in status-thread-question.ts; its names stay importable from here.
@@ -423,9 +423,10 @@ function wroteSinceQuestion(file: ThreadsFile, hisAt: string | undefined): boole
  * the timing still holds: threads-model.ts knownThrough), then the line. A done line on his own
  * request he reacted to, still answered, closes it as acknowledged (checkClose still decides).
  * Nothing is written to a thread that waits on him, is closed, or has words of his newer than the
- * question. Pure.
+ * question. `side`: the lines are the status question's (not his reply's card lines), so an answer
+ * that says its list of cards again writes none of those words (`restated`, status-thread-card.ts). Pure.
  */
-export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThreadLine[], opened: readonly StatusThreadNew[], marks: ThreadMarks = {}): { writes: OwnThreadWrite[]; opens: OwnThreadOpen[]; held: string[]; asked: string[] } {
+export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThreadLine[], opened: readonly StatusThreadNew[], marks: ThreadMarks = {}, side = false): { writes: OwnThreadWrite[]; opens: OwnThreadOpen[]; held: string[]; asked: string[]; restated: string[] } {
   const writes: OwnThreadWrite[] = [];
   // Lines that wrote nothing on a thread whose result he acknowledged (logged by applyThreadLines).
   const held: string[] = [];
@@ -460,7 +461,8 @@ export function planThreadWrites(file: ThreadsFile, lines: readonly StatusThread
   }
   // A new subject's words that ask him, or say nothing on their own, are not its first post either: it opens with its title (status-thread-asked.ts).
   const opens = opened.map((n) => ({ title: n.title, text: n.progress && !asksHimNow(n.progress) ? lineWords(undefined, n.progress) ?? n.title : n.title, state: TARGET[n.state] }));
-  return { writes, opens, held, asked };
+  const kept = side ? withoutRestated(file.threads, writes) : { writes, restated: [] };
+  return { writes: kept.writes, opens, held, asked, restated: kept.restated };
 }
 
 /**
@@ -504,12 +506,14 @@ export async function applyThreadLines(taskId: string, report: Pick<StatusReport
     const unseen = claimed.length ? await (await import('../org/thread-seen-check.js')).unseenClaims(taskId, claimed) : undefined;
     let held: string[] = [];
     let asked: string[] = [];
+    let restated: string[] = [];
     let written: string[] = [];
     const changed = await writeOwnThreads(taskId, (cur) => {
       const a = steps.after(lines, marks);
-      const p = planThreadWrites(cur, a.lines, opened, a.marks);
+      const p = planThreadWrites(cur, a.lines, opened, a.marks, !from);
       held = p.held;
       asked = p.asked;
+      restated = p.restated;
       written = p.writes.map((w) => w.id);
       return p;
     }, by, ask !== undefined ? { ask, ...(report.ask_thread ? { named: report.ask_thread } : {}) } : undefined, steps.pre, unseen);
@@ -521,6 +525,7 @@ export async function applyThreadLines(taskId: string, report: Pick<StatusReport
     const onlyAsk = !lines.length && !opened.length && !marked && !joins && !checks;
     if (changed.length) log.session.info(from ? 'reply card lines: threads kept current' : onlyAsk ? 'status question: the ask\'s place on a thread moved, no thread line written' : 'status question: threads kept current', { taskId, changed, ...(from ? {} : { lines: lines.length }) });
     if (held.length) log.session.info('status question: lines left out on threads whose result he acknowledged', { taskId, held });
+    if (restated.length) log.session.info('status question: an answer that said its cards again, those words not written', { taskId, restated });
     noteLineAsks(taskId, asked, written);
     if (asked.length) log.session.info('status question: lines that asked the user to decide, not written', { taskId, asked });
     return changed;
