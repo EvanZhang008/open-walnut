@@ -201,11 +201,14 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   and is named beside another thing that does. So does a state line with no thread id where one
   belongs (`thread="none"`, a placeholder, a made-up id: `unnamed` in `lib/card-tag.ts`,
   `CARD_STOP_NO_HOLD`): the session was given no id in that turn, so there is nothing to send back
-  for; the line leaves his screen like any card line, nothing is written, the turn's end logs
-  `reply card lines: no thread named`, and the status question asks about the open threads as it
-  does with no line. A decision line with no thread id is still sent back (it would be lost): a
-  decision with no thread of his is opened with `thread_create`. The rule in the prompt says the
-  id is the one the note on his message gives, and that no id means no line. Each thing is named at most twice. A message this turn read is one filed after the
+  for; the line leaves his screen like any card line, nothing is written, the turn's end logs it
+  (`reply card lines: no thread named` when the reply held nothing else to read, else the
+  `unnamed` field of the applied or not-read row), and the status question asks about the open
+  threads as it does with no line. A decision line with no thread id (state needs, or any
+  attribute only a decision carries) is still sent back, since it would be lost: its thread's id
+  comes from `thread_list`, and a decision with no thread of his is opened with `thread_create`.
+  The rule in the prompt says the id is one Walnut gave (the note on his message, `thread_create`,
+  `thread_list`), and that no id means no line. Each thing is named at most twice. A message this turn read is one filed after the
   newest of his messages that an earlier turn's end saw (kept in memory per session), so a thread
   the session answered in before is not asked for a line again while nothing keeps the answer under
   that message (an isolated server, a slow read); after a restart, the task's stored report says

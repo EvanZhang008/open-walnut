@@ -106,7 +106,7 @@ describe('on: the rule says the line for a thread is the card line that ends the
     expect(THREADS_TAG_RULE).toContain(`at most ${CARD_MAX}`)
     expect(THREADS_TAG_RULE).toContain('&quot;')
     // 2026-11-26, real use: in a turn no message of his started, sessions wrote thread="none" or a placeholder.
-    expect(THREADS_TAG_RULE).toContain('The thread id is the one the note on his message gives: with none at hand, write no line, never a made-up id.')
+    expect(THREADS_TAG_RULE).toContain('The thread id is one Walnut gave you (the note on his message, thread_create, thread_list): with none at hand, write no line, never a made-up id.')
     // A sample on a line of its own would be read as a real line (and sent back as no thread of the task).
     expect(THREADS_TAG_RULE).toContain('A card line shown as an example goes in backticks or a code block.')
     expect(THREADS_TAG_RULE).toMatch(/Call thread_update yourself only for what the line cannot do: a close he asked for in his own words/)

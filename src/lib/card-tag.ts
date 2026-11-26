@@ -151,8 +151,11 @@ function parseCardLine(raw: string): { card: CardTag } | { error: string; unname
   if (rest) return { error: `the card line could not be read from "${rest.slice(0, 40)}": each attribute is name="value", and a quote inside a value is &quot;` };
   const thread = got.get('thread') ?? '';
   if (!THREAD_ID.test(thread)) {
-    // A decision must reach him: without a thread of his it is a thread of its own, which a line cannot open.
-    if (got.get('state') === 'needs') return { error: `a decision line names its thread by id (th- and hex digits), not "${thread}": with no thread of his for it, open one with thread_create` };
+    // A decision must reach him (a line that carries what only a decision does is one, whatever its state says):
+    // without a thread id it has nowhere to go, and a line cannot open a thread.
+    if (got.get('state') === 'needs' || NEEDS_ONLY.some((a) => got.has(a))) {
+      return { error: `a decision line names its thread by id (th- and hex digits), not "${thread}": find the thread's id with thread_list, or with no thread of his for it open one with thread_create` };
+    }
     return { error: `thread is a thread id (th- and hex digits), not "${thread}"`, unnamed: thread };
   }
   const merge = got.get('merge');

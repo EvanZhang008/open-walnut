@@ -58,8 +58,8 @@ export const THREADS_TAG_RULE =
   + 'summary, state and known mark with thread_update every turn, or give its line only when asked (those no longer apply): '
   + `answer him in the chat, and end that reply with one hidden line of its own for each thread it speaks for, ${CARD_TAG_FORM} `
   + '(state working: you are on it now; waiting: a team or something outside has it; answered: the result he asked for is in; '
-  + 'done: finished). The thread id is the one the note on his message gives: with none at hand, write no line, never a '
-  + 'made-up id. Walnut takes the line off before he reads the reply and writes the thread\'s card from it: one line per '
+  + 'done: finished). The thread id is one Walnut gave you (the note on his message, thread_create, thread_list): with none '
+  + 'at hand, write no line, never a made-up id. Walnut takes the line off before he reads the reply and writes the thread\'s card from it: one line per '
   + 'thread, at most 6, after your words. Your reply holds no other list of threads and no word of what you did to one (its '
   + 'line, a split, a merge, a mark) unless he asks: his cards show it. The line may add '
   + 'summary="where it stands for him, latest first, with the proof\'s path or URL" (240 characters; without it his card shows '
