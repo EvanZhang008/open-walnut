@@ -265,6 +265,18 @@ export type TriageRunsHandle = {
 
 let active: TriageRunsHandle | null = null;
 
+/**
+ * A run's journal line and the state's copy of it (the line the NEXT envelope shows) are written
+ * as one step, one run after another. Two runs settling together otherwise interleaved the two
+ * writes: run 1 appended, run 2 appended and recorded, then run 1 recorded, so the state carried
+ * run 1 while the newest run line was run 2's. Only this subscriber writes run lines (the
+ * primary's); the triage agent appends its own notes to the same Runs note (batch.ts), so the
+ * state equals the newest line THIS subscriber wrote, not the note's last line. Module level, so a
+ * subscriber started again (startTriageRuns stops the last one) queues behind a write the one
+ * before it had under way.
+ */
+let journalTail: Promise<unknown> = Promise.resolve();
+
 export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
   active?.stop();
   // Its handler reads the session's turn before anything awaits (turnMidWorkNow): the rows must be there.
@@ -297,14 +309,6 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
    */
   const runTasks = new Set<string>();
   let seeding: Promise<void> | null = null;
-  /**
-   * A run's journal line and the state's copy of it (the line the NEXT envelope shows) are written
-   * as one step, one run after another. Two runs settling together otherwise interleaved the two
-   * writes: run 1 appended, run 2 appended and recorded, then run 1 recorded, so the state carried
-   * run 1 while the journal's newest line was run 2's. One subscriber writes them (the primary's),
-   * so its own queue keeps the state equal to the journal's newest line.
-   */
-  let journalTail: Promise<unknown> = Promise.resolve();
   const writeJournal = (line: string, nowMs: number): Promise<string> => {
     const next = journalTail.then(async () => {
       const notePath = await appendJournal(line, nowMs);

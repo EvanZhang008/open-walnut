@@ -45,13 +45,21 @@ function fireLogWriteOffenders(files: Map<string, string>): string[] {
     const src = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
     const at = (n: ts.Node) => `${path.basename(file)}:${src.getLineAndCharacterOfPosition(n.getStart()).line + 1}`;
     const visit = (n: ts.Node, fn?: string): void => {
-      if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment
-        && isFireLog(n.left) && !FIRE_LOG_WRITERS.has(callee(n.right) ?? '')) out.push(`${at(n)}: ${n.getText().slice(0, 80)}`);
+      if (ts.isBinaryExpression(n) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+        // The list set from something else, or one of its rows written in place.
+        if (isFireLog(n.left) && !FIRE_LOG_WRITERS.has(callee(n.right) ?? '')) out.push(`${at(n)}: ${n.getText().slice(0, 80)}`);
+        if (ts.isElementAccessExpression(n.left) && isFireLog(n.left.expression)) out.push(`${at(n)}: ${n.getText().slice(0, 80)}`);
+      }
+      // `{ ...job.state, fireLog }`: a list made elsewhere, under the field's own name.
+      if (ts.isShorthandPropertyAssignment(n) && n.name.text === 'fireLog') out.push(`${at(n)}: ${n.getText().slice(0, 80)}`);
       if (ts.isPropertyAssignment(n) && (ts.isIdentifier(n.name) || ts.isStringLiteral(n.name)) && n.name.text === 'fireLog'
         && !FIRE_LOG_WRITERS.has(callee(n.initializer) ?? '')) out.push(`${at(n)}: ${n.getText().slice(0, 80)}`);
       if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && isFireLog(n.expression.expression)
         && ['push', 'unshift', 'splice', 'pop', 'shift', 'sort', 'reverse', 'fill', 'copyWithin'].includes(n.expression.name.text)) out.push(`${at(n)}: ${n.getText().slice(0, 80)}`);
-      const name = ts.isFunctionDeclaration(n) && n.name ? n.name.text : fn;
+      // A writer's name, declared as a function or as a const holding an arrow or function expression.
+      const name = ts.isFunctionDeclaration(n) && n.name ? n.name.text
+        : ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer)) ? n.name.text
+          : fn;
       if (path.basename(file) === 'trigger-audit.ts' && name && FIRE_LOG_WRITERS.has(name) && !APPENDERS.has(name)
         && ts.isCallExpression(n) && callee(n) === 'appendAudit') out.push(`${at(n)}: ${name} appends without appendFireRow`);
       ts.forEachChild(n, (c) => visit(c, name));
@@ -119,6 +127,26 @@ describe('a run\'s outcome and its fire row, in either order', () => {
     expect(mergeFireAttempt(early, { ...attempt(2), delivery: early[0]!.delivery }, MAX)).toHaveLength(1);
   });
 
+  it('a first attempt that failed, the run\'s outcome, then a retry that delivered: one row', () => {
+    // The failed attempt names no task, so the outcome finds no row and waits apart; the retry
+    // that delivered names the task, and its merge folds the outcome in.
+    const failed: TriggerAuditEntry = {
+      atMs: 100, outcome: 'fired', items: 5, seq: 9, epoch: 'e1', attempts: 1,
+      delivery: auditDelivery({ status: 'error', retry: true, error: 'the host did not answer' }),
+    };
+    const delivered = (): TriggerAuditEntry => ({ ...fire('t-4', 160, 5), seq: 9, epoch: 'e1', attempts: 2 });
+    let list = mergeFireAttempt([], failed, MAX);
+    list = mergeRunOutcome(list, outcome('t-4', 400), 't-4', MAX);
+    expect(list).toHaveLength(2);
+    list = mergeFireAttempt(list, delivered(), MAX);
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ seq: 9, items: 5, attempts: 2, delivery: { summary: 'Triage (task t-4) ended ok' } });
+    expect(list[0]!.outcomeOf).toBeUndefined();
+    // The same as the usual order: the retry delivered, then the outcome came.
+    const usual = mergeRunOutcome(mergeFireAttempt(mergeFireAttempt([], failed, MAX), delivered(), MAX), outcome('t-4', 400), 't-4', MAX);
+    expect(list).toEqual(usual);
+  });
+
   it('every write of a fireLog in src goes through a writer that folds an early outcome', () => {
     expect(fireLogWriteOffenders(SRC)).toEqual([]);
   });
@@ -130,8 +158,11 @@ describe('a run\'s outcome and its fire row, in either order', () => {
       ['c.ts', 'job.state = { ...job.state, fireLog: appendAudit([], e, 5) };'],
       ['d.ts', 'job.state.fireLog.unshift(e);'],
       ['trigger-audit.ts', 'export function mergeFireAttempt(list, entry, max) { if (x) return appendAudit(list, entry, max); return list; }'],
+      ['e.ts', 'const fireLog = [e];\njob.state = { ...job.state, fireLog };'],
+      ['f.ts', 'job.state.fireLog[0] = e;'],
+      ['g/trigger-audit.ts', 'export const mergeFireAttempt = (list, entry, max) => appendAudit(list, entry, max);'],
       ['ok.ts', 'job.state.fireLog = mergeFireAttempt(job.state.fireLog, e, 5);'],
     ]));
-    expect(offenders.map((o) => o.split(':')[0])).toEqual(['a.ts', 'b.ts', 'c.ts', 'd.ts', 'trigger-audit.ts']);
+    expect(offenders.map((o) => o.split(':')[0])).toEqual(['a.ts', 'b.ts', 'c.ts', 'd.ts', 'trigger-audit.ts', 'e.ts', 'f.ts', 'trigger-audit.ts']);
   });
 });

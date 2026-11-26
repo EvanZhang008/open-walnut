@@ -293,14 +293,23 @@ export function appendFireRow(
   entry: TriggerAuditEntry,
   max: number,
 ): TriggerAuditEntry[] {
-  const base = Array.isArray(list) ? list : [];
-  const summary = entry.delivery?.summary ?? '';
-  const early = entry.outcome === 'fired' && summary
-    ? base.findIndex((e) => !!e.outcomeOf && summary.includes(e.outcomeOf))
-    : -1;
-  if (early < 0) return appendAudit(base, entry, max);
-  const { outcomeOf, ...outcome } = base[early]!;
-  return mergeRunOutcome(appendAudit(base.filter((_, i) => i !== early), entry, max), outcome, outcomeOf!, max);
+  const appended = appendAudit(list, entry, max);
+  return entry.outcome === 'fired' ? foldEarlyOutcome(appended, entry.delivery?.summary, max) : appended;
+}
+
+/**
+ * The fire row whose summary is `fireSummary` is in `list` now: fold into it the outcome of its
+ * run that came first (kept apart as `outcomeOf` by mergeRunOutcome), as the usual order would
+ * have merged it. Both ways a fire's row is written call it: its first append (appendFireRow)
+ * and a later attempt's merge (mergeFireAttempt), since a first attempt that failed names no task
+ * yet, so the outcome can only be matched once a retry's summary names it.
+ */
+function foldEarlyOutcome(list: TriggerAuditEntry[], fireSummary: string | undefined, max: number): TriggerAuditEntry[] {
+  if (!fireSummary) return list;
+  const early = list.findIndex((e) => !!e.outcomeOf && fireSummary.includes(e.outcomeOf));
+  if (early < 0) return list;
+  const { outcomeOf, ...outcome } = list[early]!;
+  return mergeRunOutcome(list.filter((_, i) => i !== early), outcome, outcomeOf!, max);
 }
 
 /**
@@ -329,5 +338,7 @@ export function mergeFireAttempt(
     ...entry,
     attempts: entry.attempts ?? (base[at].attempts ?? 1) + 1,
   };
-  return merged.slice(0, Math.max(1, max));
+  // A retry that delivered names the run's task for the first time: an outcome that came while
+  // the failed attempt's row named none is folded in now.
+  return foldEarlyOutcome(merged.slice(0, Math.max(1, max)), merged[at].outcome === 'fired' ? merged[at].delivery?.summary : undefined, max);
 }
