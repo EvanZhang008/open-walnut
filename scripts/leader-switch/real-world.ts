@@ -220,7 +220,8 @@ export async function makeRealWorld(root: string, opts: RealOptions): Promise<Re
     stopped = true
     if (watcher) clearInterval(watcher)
     if (follower) clearInterval(follower)
-    await sampleListeners()
+    // The last sample, bounded: an agent that no longer answers must not hold the cleanup back.
+    await Promise.race([sampleListeners().catch(() => {}), new Promise((r) => setTimeout(r, 15_000))])
     evidence('listeners.txt', `${listen.samples} sample(s); seen ${[...listen.seen].sort().join(' ')}\nnot on loopback: ${[...listen.open].join('\n') || 'none'}\n`)
     await agent?.close().catch(() => {})
     unregister()
