@@ -44,7 +44,8 @@
 #   --udid U         drive that simulator on the Mac instead of the run's own one
 #   --clean          remove this task's build products on that Mac afterwards
 #   --audio WHY      the run touches voice, the microphone or audio (found from the tests or the
-#                    command it runs when not given): a Mac where a person sits does not take it
+#                    command it runs when not given): refused, since no Mac of the fleet may make a
+#                    sound; GitHub Actions' iOS UI job runs these tests
 #   --here-because W keep the run on that Mac when its simulator queue says its lane runs on
 #                    another Mac now (SIM_LANE_B_HERE there; W says why)
 #   --verbose        print the whole run log (default: the lines that matter; all of it
@@ -135,13 +136,15 @@ js() { python3 -c "import json,sys; d=json.load(sys.stdin); $1"; }
 # VP: the CEO's rule; an iPhone voice recording run went to another person's Mac). A run is one when
 # --audio or SIM_TEST_AUDIO says why, or by what it does (scripts/lib/ios-run-audio.py): the tests
 # it selects and what their sources call, or the command it runs. Never by the words of its task:
-# a board test was refused because its task quoted the user's "voice" message (2026-11-11). The Mac
-# half then refuses it on a Mac marked for no audio, as busy, so the next Mac is tried
-# (remote-run.sh --audio).
+# a board test was refused because its task quoted the user's "voice" message (2026-11-11).
+# No Mac of the fleet takes one (2026-11-26, the Walnut VP: the user's Macs, a colleague's and any
+# home computer never make a sound, so no Mac is one that may): it is refused here, and the Mac
+# half refuses it too for an older caller (remote-run.sh --audio). Such tests run in GitHub
+# Actions' iOS UI job, on a runner nobody sits at.
 if [ -z "$AUDIO_WHY" ]; then
   AUDIO_WHY=$(python3 "$(dirname "${BASH_SOURCE[0]}")/lib/ios-run-audio.py" "$ROOT/ios-native" "$MODE" ${ARGS[@]+"${ARGS[@]}"} 2>/dev/null) || AUDIO_WHY=
 fi
-[ -z "$AUDIO_WHY" ] || { say "this run touches voice, the microphone or audio ($AUDIO_WHY): a Mac where a person sits does not take it"; FLAGS+=(--audio "$AUDIO_WHY"); }
+[ -z "$AUDIO_WHY" ] || die "this run touches voice, the microphone or audio ($AUDIO_WHY): no Mac of the fleet runs one, since none may make a sound; GitHub Actions' iOS UI job runs these tests" 64
 # A call Walnut may drop while the Mac it runs on is loaded (hub_timeout, hub_unreachable,
 # throttled), or that found no Walnut to take it (the server or this host's daemon
 # restarting: a deploy), is asked again, nine times 10 s apart; any other refusal is final.

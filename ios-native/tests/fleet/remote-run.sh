@@ -127,10 +127,12 @@ DEPLOY=$(fleet_deploy_now)
 CALL=$(fleet_call_now)
 [ -z "$CALL" ] || refuse 75 "BUSY: a call is on this Mac ($CALL); try another Mac or later" busy
 fleet_lent_lane "$HOME/.config/walnut/fleet.env" || refuse 64 "$FLEET_LENT_ERROR" failed
-# A voice, microphone or audio run never runs where a person sits (2026-11-08, the CEO's rule): a
-# Mac marked ~/.config/walnut/no-audio, or whose lent simulator queue has QUIET-ONLY beside it.
-if [ -n "$AUDIO_WHY" ] && { [ -f "$HOME/.config/walnut/no-audio" ] || { [ -n "${FLEET_LENT_QUEUE:-}" ] && [ -f "$(dirname "$FLEET_LENT_QUEUE")/QUIET-ONLY" ]; }; }; then
-  refuse 75 "BUSY: this run touches voice, the microphone or audio ($AUDIO_WHY), and this Mac takes none (a person sits here); try another Mac" busy
+# A voice, microphone or audio run runs on no Mac (2026-11-08, the CEO's rule: never where a person
+# sits; 2026-11-26, the Walnut VP: the user's Macs, a colleague's and any home computer never make a
+# sound, so no Mac is one that may, ~/.config/walnut/no-audio or not). Refused as failed, not busy:
+# no other Mac takes it either. GitHub Actions' iOS UI job runs these tests.
+if [ -n "$AUDIO_WHY" ]; then
+  refuse 64 "this run touches voice, the microphone or audio ($AUDIO_WHY): no Mac of the fleet runs one, since none may make a sound; GitHub Actions' iOS UI job runs these tests" failed
 fi
 # A Mac on hold starts no run, and one that keeps its nights quiet none from 22:00 to 08:00 Pacific
 # (2026-11-08, the user: a computer at home made sound at night): HOLD (its first line says why)

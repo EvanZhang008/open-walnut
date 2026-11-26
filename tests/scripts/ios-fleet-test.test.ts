@@ -925,6 +925,14 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
       expect(r.calls.some((c) => c.op === 'task_get')).toBe(false)
       return (r.calls.find((c) => c.op === 'host_exec' && c.args.background)!.args.argv as string[])[2].replace(/\\/g, '')
     }
+    // An audio run is refused before any Mac is asked: no Mac of the fleet may make a sound.
+    const refused = (args: string[], taskText?: string) => {
+      fs.rmSync(path.join(dir, 'calls.jsonl'), { force: true })
+      const r = run(args, fakeWalnut(macs, outTgz(), { taskText }), SCRIPT)
+      expect(r.status, r.stderr).toBe(64)
+      expect(r.calls.some((c) => c.op === 'host_exec')).toBe(false)
+      return r.stderr
+    }
     // The judge itself (one python call each; the whole script is run only a few times below,
     // since a run of it costs seconds on a loaded CI runner).
     const why = (...args: string[]) => {
@@ -994,15 +1002,18 @@ describe('mac-share.sh (what the Mac half asks of the Mac before it takes anythi
     expect(why('run', 'bash', 'tests/voice/record.sh')).toBe('its command names "voice"')
     expect(why('run', 'bash', 'tests/passwords/autofill-e2e.sh')).toBe('')
 
-    // The script passes the judge's answer on, and the caller's own word still wins.
-    expect(sent(['ui', '--', '-only-testing:WalnutUITests/VoiceDictationUITests'], 'Board layout')).toMatch(/ui --audio .*it runs VoiceDictationUITests, a voice test/)
-    expect(sent(['--audio', 'records a memo', 'unit', '--', '-only-testing:WalnutTests/RepoTests'], 'Board layout')).toMatch(/unit --audio records a memo/)
+    // The script refuses what the judge names, and the caller's own word too, before any Mac is asked;
+    // a run judged no audio run still goes out, with no --audio.
+    expect(refused(['ui', '--', '-only-testing:WalnutUITests/VoiceDictationUITests'], 'Board layout')).toMatch(/it runs VoiceDictationUITests, a voice test\): no Mac of the fleet runs one/)
+    expect(refused(['--audio', 'records a memo', 'unit', '--', '-only-testing:WalnutTests/RepoTests'], 'Board layout')).toMatch(/records a memo\): no Mac of the fleet runs one.*GitHub Actions' iOS UI job/)
+    expect(sent(['ui', '--', '-only-testing:WalnutUITests/BoardRingTapUITests'], 'Board layout')).not.toContain('--audio')
   })
 
-  it('the Mac half refuses an audio run where a person sits, and a Mac on hold or in its quiet nights', () => {
+  it('the Mac half refuses an audio run on every Mac, and a Mac on hold or in its quiet nights', () => {
     const src = fs.readFileSync(REMOTE, 'utf8')
-    expect(src).toMatch(/if \[ -n "\$AUDIO_WHY" \] && \{ \[ -f "\$HOME\/\.config\/walnut\/no-audio" \]/)
-    expect(src).toContain('refuse 75 "BUSY: this run touches voice, the microphone or audio')
+    // Every Mac, marked or not, and as failed: a busy refusal would send it on to the next Mac.
+    expect(src).toMatch(/\nif \[ -n "\$AUDIO_WHY" \]; then\n  refuse 64 "this run touches voice, the microphone or audio \(\$AUDIO_WHY\): no Mac of the fleet runs one/)
+    expect(src).not.toMatch(/AUDIO_WHY[^\n]*no-audio|refuse 75 "BUSY: this run touches voice/)
     // A run judged no audio run says so to the lent queue, which must not guess from the task's words.
     expect(src).toContain('[ -n "$AUDIO_WHY" ] || export SIM_TEST_NOT_AUDIO=')
     // A Mac on hold, or in its quiet nights (2026-11-08, the user: a computer at home made sound at night).
