@@ -63,6 +63,16 @@ final class DirectorsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["chat.drawer.org.project:walnut"].waitForExistence(timeout: 20), "no Walnut VP row")
     }
 
+    /// Where a long press that brought no menu left the app: still on the drawer (the press was
+    /// lost, or the menu torn down), or on the row's chat (the press acted as a tap).
+    private func afterPress(_ app: XCUIApplication, _ id: String) -> String {
+        let drawer = app.segmentedControls["chat.drawer.viewSwitch"].exists
+        let row = element(app, "chat.drawer.director.\(id)").exists
+        let opened = element(app, "chat.orgFirstMessage.field").exists || element(app, "org.node.page").exists
+        return "after the press the drawer is \(drawer ? "out" : "gone"), the row \(row ? "shown" : "gone"), "
+            + (opened ? "and the row's chat opened: the press acted as a tap" : "and no chat opened")
+    }
+
     func testFoldRemoveAndNewDirectorFromTheDrawer() throws {
         let app = try launchPaired()
         openOrgDrawer(app)
@@ -90,7 +100,7 @@ final class DirectorsUITests: XCTestCase {
         // Long press: Remove from Directors, then it is gone and the server got `no`.
         longPress(element(app, "chat.drawer.director.d3"))
         let remove = app.buttons["Remove from Directors"]
-        XCTAssertTrue(remove.waitForExistence(timeout: 5), "no Remove from Directors on a long press")
+        XCTAssertTrue(remove.waitForExistence(timeout: 5), "no Remove from Directors on a long press; \(afterPress(app, "d3"))")
         attach(app, "ios-directors-longpress")
         remove.tap()
         XCTAssertTrue(element(app, "chat.drawer.director.d3").waitForNonExistence(timeout: 10), "the removed Director stayed")

@@ -88,11 +88,42 @@ enum VerticalPageHarness {
         }.joined(separator: "; ")
     }
 
+    /// What the window holds when it has no scroll view: whether the page is in it at all, a
+    /// spinner or an empty state in its place, and the accessibility ids it shows.
+    static func describeTree(_ hosted: Hosted) -> String {
+        var classes: [String: Int] = [:]
+        var ids: [String] = []
+        func walk(_ v: UIView) {
+            classes[String(describing: type(of: v)), default: 0] += 1
+            if let id = v.accessibilityIdentifier, !id.isEmpty { ids.append(id) }
+            v.subviews.forEach(walk)
+        }
+        walk(hosted.window)
+        let notable = classes.filter { $0.key.contains("Activity") || $0.key.contains("Text") || $0.key.contains("Hosting") }
+        return "page in window \(hosted.host.view.window === hosted.window), key \(hosted.window.isKeyWindow), "
+            + "scene \(hosted.window.windowScene != nil), \(classes.values.reduce(0, +)) views, "
+            + "notable \(notable.sorted { $0.key < $1.key }.map { "\($0.key) x\($0.value)" }), ids \(ids.prefix(12))"
+    }
+
     /// Each page scroller's content is no wider than the scroller.
-    static func assertPageFits(_ page: String, _ hosted: Hosted, file: StaticString = #filePath, line: UInt = #line) {
+    ///
+    /// A page draws its scroller once its first read lands (a note: after its server read fails
+    /// and its saved copy is read). On a loaded runner that can trail the fixed settle, so the run
+    /// loop keeps turning, up to `drawnWithin`, until a page scroller is there.
+    static func assertPageFits(_ page: String, _ hosted: Hosted, drawnWithin limit: TimeInterval = 8,
+                               file: StaticString = #filePath, line: UInt = #line) {
         let width = hosted.window.bounds.width
-        let pages = pageScrollers(hosted)
-        XCTAssertFalse(pages.isEmpty, "\(page) at \(width) pt: no page-wide scroll view found among \(describeScrollViews(hosted))",
+        let started = Date()
+        var pages = pageScrollers(hosted)
+        while pages.isEmpty, Date().timeIntervalSince(started) < limit {
+            settle(hosted.host, seconds: 0.1)
+            pages = pageScrollers(hosted)
+        }
+        if !pages.isEmpty, Date().timeIntervalSince(started) > 0.05 {
+            print("[evidence] \(page) at \(width) pt drew its page scroller \(String(format: "%.1f", Date().timeIntervalSince(started))) s after the settle")
+        }
+        XCTAssertFalse(pages.isEmpty, "\(page) at \(width) pt: no page-wide scroll view found among \(describeScrollViews(hosted)) "
+                       + "within \(Int(limit)) s after the settle; \(describeTree(hosted))",
                        file: file, line: line)
         for s in pages {
             XCTAssertLessThanOrEqual(

@@ -40,14 +40,21 @@ final class ModelPillHealUITests: XCTestCase {
     /// Rows only the Mac's catalog has; the degraded answer has none of them.
     /// Spelled as the Mac's picker spells them (`catalogRowLabel`), which is the
     /// point: "Haiku 4.5", not the catalog's bare "Haiku".
-    private static let catalogOnlyRows = ["Default (Opus 5.5 1M)", "Opus 5.5 1M", "Haiku 4.5", "GPT-6 Astra"]
+    private static let catalogOnlyRows = ["Opus 5.5 1M", "Haiku 4.5", "GPT-6 Astra"]
+    /// The catalog's `default` row names the same model as its `opus` row (both resolve to
+    /// Opus 5.5 1M), so the sheet lists that model once, as "Opus 5.5 1M" (one row per model,
+    /// `ModelCatalogRowLabel.oneRowPerModel`, the web's `model-row-dedupe.ts`).
+    static let foldedDefaultRow = "Default (Opus 5.5 1M)"
 
     /// The Mac's rows, top to bottom: `sortByModelStrength` over the real catalog,
-    /// as the web computes it (`ModelStrengthOrderTests` pins the same list).
+    /// as the web computes it, one row per model (`ModelStrengthOrderTests.webRealOrder` pins
+    /// the same list): the `default` row folds into "Opus 5.5 1M".
     static let macOrder = [
         "Haiku 4.5", "GPT-6 Luna", "Sonnet 5", "GPT-6 Astra", "Fable 5 1M", "Fable 5.1 1M",
-        "GPT-5.6 Sol", "GPT-6 Sol", "Default (Opus 5.5 1M)", "Opus 5.5 1M",
+        "GPT-5.6 Sol", "GPT-6 Sol", "Opus 5.5 1M",
     ]
+    /// The longest name the sheet lists, which must still fit one line at the default size.
+    static let longestRow = macOrder.max { $0.count < $1.count }!
 
     // MARK: - Scenario 1: unreachable, spaced retries, heals with no tap
 
@@ -498,7 +505,7 @@ final class ModelPillHealUITests: XCTestCase {
     /// one vertical column in the Mac's order with the current one checked, and the
     /// levels are a column beside it with the current level checked (under it at
     /// the accessibility sizes). At the default size every name is on one line (an
-    /// Effort submenu once wrapped "Default (Opus 5.5 1M)"); at XXXL (the largest
+    /// Effort submenu once wrapped "Default (Opus 5.5 1M)", a row the sheet now folds into "Opus 5.5 1M"); at XXXL (the largest
     /// standard size) and AX5 the sheet scrolls, every row is still there in order,
     /// and the pill still fits beside the mic. A model without an effort axis has
     /// no Effort column.
@@ -581,14 +588,15 @@ final class ModelPillHealUITests: XCTestCase {
                 try await stub.screenshot(app, "model-pill-08-\(tag)-sheet-scrolled")
             }
             XCTAssertEqual(seen, Self.macOrder, "\(tag): the sheet's rows, top to bottom, are not the Mac's order")
+            XCTAssertFalse(app.buttons[Self.foldedDefaultRow].exists, "\(tag): the sheet lists Opus 5.5 1M twice")
             XCTAssertEqual(columns.count, 1, "\(tag): the models are not one vertical list (row x \(columns.sorted()))")
             XCTAssertEqual(checked, [row], "\(tag): the checked rows are \(checked.sorted()), not the current \(row)")
             if size == nil {
                 let single = app.buttons["Sonnet 5"].frame.height
-                let longest = app.buttons["Default (Opus 5.5 1M)"].frame.height
-                print("[evidence] \(tag): row heights Sonnet 5 = \(single)pt, Default (Opus 5.5 1M) = \(longest)pt")
+                let longest = app.buttons[Self.longestRow].frame.height
+                print("[evidence] \(tag): row heights Sonnet 5 = \(single)pt, \(Self.longestRow) = \(longest)pt")
                 XCTAssertLessThan(longest, single * 1.25,
-                                  "default size: \"Default (Opus 5.5 1M)\" is \(Int(longest))pt against \(Int(single))pt: it wrapped")
+                                  "default size: \"\(Self.longestRow)\" is \(Int(longest))pt against \(Int(single))pt: it wrapped")
             }
             print("[evidence] \(tag): pill \(pill.frame) (effort \(Self.effortValue(pill) ?? "none")), mic \(mic.frame)")
             if hasEffort {
@@ -672,7 +680,7 @@ final class ModelPillHealUITests: XCTestCase {
         ("haiku", "Haiku 4.5"), ("gpt-6-luna", "GPT-6 Luna"), ("global.anthropic.claude-sonnet-5", "Sonnet 5"),
         ("gpt-6-astra", "GPT-6 Astra"), ("global.anthropic.claude-fable-5[1m]", "Fable 5"),
         ("global.anthropic.claude-fable-5-1[1m]", "Fable 5.1"), ("gpt-5.6-sol", "GPT-5.6 Sol"),
-        ("gpt-6-sol", "GPT-6 Sol"), ("default", "Opus 5.5"), ("opus", "Opus 5.5"),
+        ("gpt-6-sol", "GPT-6 Sol"), ("opus", "Opus 5.5"),
     ]
 
     static let effortRows = ["Low", "Medium", "High", "Extra High", "Max"]
@@ -1382,6 +1390,8 @@ final class ModelPillHealUITests: XCTestCase {
                 file: file, line: line
             )
         }
+        XCTAssertFalse(app.buttons[Self.foldedDefaultRow].exists,
+                       "the healed sheet lists Opus 5.5 1M twice (its default row too)", file: file, line: line)
         // The Mac's order, top to bottom, in one vertical list.
         let frames = Self.macOrder.map { app.buttons[$0].frame }
         let tops = frames.map(\.minY)
