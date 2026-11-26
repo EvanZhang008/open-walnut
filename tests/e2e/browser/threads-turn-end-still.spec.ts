@@ -15,13 +15,14 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { startProofVideo } from './proof-video'
+import { setServerFlags, type RestoreServerFlags } from './server-flags'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Orchard ${STAMP}`
 const made: string[] = []
 const ids = { lead: '', sid: '', asked: '' }
-let experiments: Record<string, boolean> = {}
+let restoreFlags: RestoreServerFlags | null = null
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(300_000)
@@ -66,8 +67,11 @@ const cardWords = (page: Page) => page.getByTestId('org-detail').locator('[data-
 test.beforeAll(async ({ request }) => {
   test.setTimeout(300_000)
   if (TEST_PORT === 3456) throw new Error('These checks write tasks and threads: run them on a test server, never production')
-  experiments = ((await (await request.get('/api/config')).json()) as { experimental?: Record<string, boolean> }).experimental ?? {}
-  await send(request, 'put', '/api/config', { experimental: { ...experiments, every_experiment: true } })
+  // Put back exactly as it was (server-flags.ts): the "put back" of a top-level read of the config,
+  // always {}, left every_experiment on for the specs after this one (quiet_rail took Routines off the rail).
+  // quiet_rail stays off while this spec runs: a flag set alone wins over every_experiment, and specs
+  // in other workers look for their rail links meanwhile.
+  restoreFlags = await setServerFlags(request, { every_experiment: true, quiet_rail: false })
   for (const title of [`Prune the apple trees ${STAMP}`, `Net the cherries ${STAMP}`]) {
     made.push((await send<{ task: { id: string } }>(request, 'post', '/api/tasks', { title, project: PROJECT, source: 'local' })).task.id)
   }
@@ -89,7 +93,7 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  await request.put('/api/config', { data: { experimental: experiments } })
+  await restoreFlags?.(request)
   for (const id of [...made].reverse()) {
     const t = (await (await request.get(`/api/tasks/${id}`)).json()).task as { session_id?: string } | undefined
     if (t?.session_id) await request.post(`/api/v1/sessions/${t.session_id}/terminate`, { data: { force: true } })
