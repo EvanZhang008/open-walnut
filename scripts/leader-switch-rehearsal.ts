@@ -4,7 +4,7 @@
  * `walnut leader switch` command. Prints one line per check; exits 1 when one fails.
  *
  *   bun scripts/leader-switch-rehearsal.ts <work dir> [--gb N] [--kills] [--stops] [--trials] [--flag-off (also: on with no witnesses)] [--restarts] [--paths] [--console [--as-installed] [--away-seconds N]] [--all] [--keep]
- *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote [--only <scenario,...>] [--gb N [--filler tracked|ignored]] [--in-process-daemon default|off] [--keep]
+ *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote [--only <scenario,...>] [--gb N [--filler tracked|ignored]] [--in-process-daemon default|off] [--git-watch <log>] [--keep]
  *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote --real <host> --real-socket <ssh control socket> --real-root <folder there> [--real-evidence <dir>] [--keep-real-root] [the --remote flags]
  *   bun scripts/leader-switch-rehearsal.ts <work dir> --remote --real-fake <folder here> [--real-evidence <dir>] [--keep-real-root] [the --remote flags]
  *
@@ -25,7 +25,8 @@
  * or slows; it is not part of `--all` (`--only` picks scenarios, `--gb N` the size for the downtime runs). It runs
  * the default configuration (each server runs its machine's daemon in its own process, experiment
  * `in_process_daemon`); `--in-process-daemon off` pins the daemon program of its own (the legacy shape).
- * The header and every TIME line name the setting.
+ * The header and every TIME line name the setting. `--git-watch <log>` (diagnostics) puts a git shim first on every
+ * machine's PATH and logs each git on a machine's home there, and who wrote a home's empty tree object (leader-switch/git-watch.ts).
  * `--real <host>` is rehearsal (b) (leader-switch/real-world.ts): the same scenarios with machine B on that host, every
  * link an ssh tunnel through the control socket of a master connection a person opened on the clouddev host
  * (leader-switch/real/ssh-master.sh), B's root `--real-root` made fresh there and removed at the end
@@ -89,7 +90,7 @@ if (has('--remote')) {
   const { inProcessDaemonLabel } = await import('./leader-switch/remote-world.js')
   // Every result of this run is under this setting: the header says it, and so does every measured line.
   console.log(`REMOTE  under ${inProcessDaemonLabel(ipd)}`)
-  const r = await rehearseRemote(path.join(work, 'remote'), print, { portA: port + 2, portB: port + 3, fillerGb: gb, filler, log, inProcessDaemon: ipd, ...(onlyAt >= 0 ? { only: String(args[onlyAt + 1]).split(',') } : {}), ...(real ? { world: real.make, onWorld: real.onWorld } : {}) })
+  const r = await rehearseRemote(path.join(work, 'remote'), print, { portA: port + 2, portB: port + 3, fillerGb: gb, filler, log, inProcessDaemon: ipd, ...(args.includes('--git-watch') ? { gitWatch: path.resolve(String(args[args.indexOf('--git-watch') + 1])) } : {}), ...(onlyAt >= 0 ? { only: String(args[onlyAt + 1]).split(',') } : {}), ...(real ? { world: real.make, onWorld: real.onWorld } : {}) })
   for (const n of r.notes) console.log(`NOTE  ${n}`)
   for (const [k, v] of Object.entries(r.times)) console.log(`TIME  ${k}: ${v} (under ${r.inProcessDaemon})`)
   real?.after()

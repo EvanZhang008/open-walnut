@@ -42,6 +42,7 @@ import { makeLoopbackCert, startTlsFront, type LoopbackCert, type TlsFront } fro
 import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from '../../tests/helpers/cloud-box-replica.js'
 import { startWitnessMachine, type WitnessMachine } from '../../tests/helpers/witness-machines.js'
 import { WITNESS_DOOR_PATH } from '../../src/core/leader/switch/witness-wire.js'
+import { installGitWatch, watchEmptyTree } from './git-watch.js'
 import type { StartResult } from '../../src/core/leader/switch/side.js'
 import { LOCAL, type MachineIO } from './machine-io.js'
 import type { SideCall } from './machine-ops.js'
@@ -179,7 +180,11 @@ export function localDaemonPort(d: MachineDaemon): () => number {
   }
 }
 
-export interface WorldOptions { portA: number; portB: number; log?: (s: string) => void; inProcessDaemon?: InProcessDaemonSetting }
+export interface WorldOptions {
+  portA: number; portB: number; log?: (s: string) => void; inProcessDaemon?: InProcessDaemonSetting
+  /** Rehearsal diagnostics: log every git on a machine's home here (git-watch.ts; the machines on this computer only). */
+  gitWatch?: string
+}
 
 /** Rehearsal (a): B on this computer, a folder beside A's. */
 export async function makeRemoteWorld(root: string, opts: WorldOptions): Promise<RemoteWorld> {
@@ -223,6 +228,14 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
     undo.push(() => companion.stop())
     const machines = { a, b, h }
     const daemons = {} as RemoteWorld['daemons']
+    // Before any daemon starts: the shim sits in each local machine's stub bin, first on the PATH of everything it runs.
+    let stopWatch = () => {}
+    if (opts.gitWatch) {
+      const local = (Object.values(machines) as Machine[]).filter((m) => ioOf(m) === LOCAL)
+      const { real } = installGitWatch({ log: opts.gitWatch, machines: machinesDir, binDirs: local.map((m) => path.join(m.dir, 'bin')) })
+      stopWatch = watchEmptyTree({ log: opts.gitWatch, machines: machinesDir })
+      log(`git watch: every git on a machine home logged to ${opts.gitWatch} (real git ${real})`)
+    }
     for (const [k, m] of Object.entries(machines) as Array<['a' | 'b' | 'h', Machine]>) {
       const io = ioOf(m)
       const bin = path.join(m.dir, 'bin')
@@ -405,6 +418,7 @@ export async function buildRemoteWorld(root: string, opts: WorldOptions, place: 
         return true
       },
       async stop() {
+        stopWatch()
         await world.endSetupLink().catch(() => false)
         for (const x of [a, b]) await side(x).stopServer(10_000).catch(() => {})
         if (serviceB.handle) await place.io.op('stopKept', serviceB.handle).catch(() => {})

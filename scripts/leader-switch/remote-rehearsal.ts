@@ -193,7 +193,7 @@ function builtDaemon(): { ok: boolean; why: string } {
 /** Which world a run builds: rehearsal (a)'s (makeRemoteWorld) unless another is given (real-world.ts, rehearsal (b)). */
 export type MakeWorld = (root: string, opts: WorldOptions) => Promise<RemoteWorld>
 
-export async function rehearseRemote(root: string, print: (c: Check) => void, opts: { portA: number; portB: number; fillerGb?: number; filler?: FillerPlace; log?: (s: string) => void; only?: string[]; inProcessDaemon?: InProcessDaemonSetting; world?: MakeWorld; onWorld?: (w: RemoteWorld) => void }): Promise<RemoteResult> {
+export async function rehearseRemote(root: string, print: (c: Check) => void, opts: { portA: number; portB: number; fillerGb?: number; filler?: FillerPlace; log?: (s: string) => void; only?: string[]; inProcessDaemon?: InProcessDaemonSetting; world?: MakeWorld; onWorld?: (w: RemoteWorld) => void; gitWatch?: string }): Promise<RemoteResult> {
   const log = opts.log ?? (() => {})
   const c = new Checks(print)
   const times: Record<string, string> = {}
@@ -205,7 +205,7 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
   if (!c.add('boot: the built daemon every machine runs is built from this source', daemon.ok, daemon.why)) return { checks: c, times, inProcessDaemon, notes }
   let w: RemoteWorld
   try {
-    w = await (opts.world ?? makeRemoteWorld)(root, { portA: opts.portA, portB: opts.portB, log, inProcessDaemon: setting })
+    w = await (opts.world ?? makeRemoteWorld)(root, { portA: opts.portA, portB: opts.portB, log, inProcessDaemon: setting, ...(opts.gitWatch ? { gitWatch: opts.gitWatch } : {}) })
   } catch (err) {
     // A world that did not start stopped what it had started (remote-world.ts, real-world.ts): a check of its own.
     c.add('boot: the world starts (every machine, daemon and link)', false, err instanceof Error ? err.message : String(err))
