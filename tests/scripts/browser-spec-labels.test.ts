@@ -11,6 +11,10 @@
  *   built at run time is listed below with where it comes from).
  * - No spec finds a control page-wide by a button style class: a style class names a look, which
  *   any new key can share, never one control.
+ * - No spec expects an option's "(recommended)" in its words: since 1945d69fc4 every renderer shows it
+ *   as the Recommended mark at the row's right instead (only the Threads buttons with threads_one_card
+ *   off keep the old words, a look no spec asks for), and thread-fold-under-task still asked for
+ *   "Design 9 (recommended)" on its card and as its button's name, which no longer existed.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -53,6 +57,9 @@ export function inUi(web: string, name: string): boolean {
 // `page.locator('.btn.btn-primary')`, `page.locator(".btn-danger")`: a page-wide find by a button look.
 export const STYLE_CLASS_FIND = /\bpage\.locator\(\s*['"`]\.btn(?:[.-][\w-]+)*['"`]\s*\)/
 
+// A positive text or name check (not `.not.`) that wants the words "(recommended)".
+export const RECOMMENDED_WORDS = /^(?!.*\.not\.).*(?:toContainText|toHaveText|\bname:)\s*\(?\s*(?:'[^']*|"[^"]*|\/[^/]*)\\?\(recommended\\?\)/i
+
 describe('browser specs name controls the UI still has', () => {
   const specs = walk(BROWSER).filter((f) => f.endsWith('.ts')).map((f) => ({ file: path.relative(BROWSER, f), text: fs.readFileSync(f, 'utf8') }))
   const web = walk(path.join(ROOT, 'web/src')).filter((f) => /\.(tsx?|json)$/.test(f)).map((f) => decodeU(fs.readFileSync(f, 'utf8')).replaceAll('&amp;', '&')).join('\n')
@@ -67,6 +74,19 @@ describe('browser specs name controls the UI still has', () => {
   it('no spec finds a control page-wide by a button style class', () => {
     const found = specs.flatMap(({ file, text }) => text.split('\n').flatMap((line, i) => (STYLE_CLASS_FIND.test(line) ? [`${file}:${i + 1}: ${line.trim()}`] : [])))
     expect(found, 'find the control by its role and name, or by its test id').toEqual([])
+  })
+
+  it('no spec expects an option\'s "(recommended)" in its words', () => {
+    const found = specs.flatMap(({ file, text }) => text.split('\n').flatMap((line, i) => (RECOMMENDED_WORDS.test(line) ? [`${file}:${i + 1}: ${line.trim()}`] : [])))
+    expect(found, 'a recommended option shows its words and the Recommended mark (data-recommended): check those').toEqual([])
+  })
+
+  it('catches a check for the "(recommended)" words, and leaves a check that they are gone alone', () => {
+    expect(RECOMMENDED_WORDS.test(`  await expect(ask).toContainText('Design 9 (recommended)')`)).toBe(true)
+    expect(RECOMMENDED_WORDS.test(`  await ask.getByRole('button', { name: /Design 9 \\(recommended\\)/ }).click()`)).toBe(true)
+    expect(RECOMMENDED_WORDS.test(`  await expect(best).not.toContainText('(Recommended)')`)).toBe(false)
+    expect(RECOMMENDED_WORDS.test(`  { value: 'default', displayName: 'Default (recommended)' }`)).toBe(false)
+    expect(RECOMMENDED_WORDS.test(`  const PICKS = [{ id: 'a', label: 'Design 9 (recommended)', recommended: true }]`)).toBe(false)
   })
 
   it('reads every quoted name, a choice included, and leaves a template alone', () => {

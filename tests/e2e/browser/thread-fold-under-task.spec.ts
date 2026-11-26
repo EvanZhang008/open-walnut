@@ -89,7 +89,11 @@ test('one subject, one card: the task\'s ask holds the lead\'s result, and his a
   const ask = card(page, ids.ask)
   await expect(ask).toBeVisible({ timeout: 20_000 })
   await expect(ask).toHaveAttribute('data-owner', ids.owner)
-  await expect(ask).toContainText('Design 9 (recommended)')
+  // Since 1945d69fc4 a label's own "(recommended)" shows as the Recommended mark at the button's
+  // right (data-recommended), not in its words; the answer sent keeps the label as written.
+  const best = ask.locator('[data-testid="org-answer-option"][data-recommended="true"]')
+  await expect(best).toHaveText('Design 9')
+  await expect(ask).not.toContainText('(recommended)')
   await expect(forHim).toHaveCount(1)
   // The lead's result waits with the in-progress ones and says which task asks about it.
   await rail.getByTestId('org-threads-hidden').click()
@@ -101,7 +105,8 @@ test('one subject, one card: the task\'s ask holds the lead\'s result, and his a
   await shot(page, 'thread-fold-under-task', '1-one-card')
 
   // 2. He clicks a choice on the task's card: nothing is left for him, and the result stays behind it.
-  await ask.getByRole('button', { name: /Design 9 \(recommended\)/ }).click()
+  // The recommended button, which reads "Design 9" (checked above); its name also holds the mark.
+  await best.click()
   await expect(forHim).toHaveCount(0, { timeout: 20_000 })
   await expect(own.getByTestId('org-thread-asked-in')).toHaveAttribute('data-answered', 'true', { timeout: 20_000 })
   await expect(own.getByTestId('org-thread-asked-in')).toContainText('You answered')
