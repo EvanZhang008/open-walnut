@@ -55,6 +55,24 @@ describe('the own-row writer of a host replica', () => {
     expect(await tracker.deleteSessionRecords(['h-2'], 'test')).toBe(1)
   })
 
+  it('a locked section that changes nothing on the own-row writer keeps the snapshot (no rescan)', async () => {
+    sessionDb.allowOwnRowWrites(KEY)
+    await tracker.createSessionRecord('noop-1', '', 'p', '/tmp', { ...own('noop-1'), messageCount: 3 } as never)
+    await tracker.listSessions()
+    const before = tracker._sessionStoreStatsForTesting()
+    // The same values again (the no-op branch), a conditional write its predicate refuses, a read under the lock.
+    await tracker.updateSessionRecord('noop-1', { messageCount: 3 })
+    expect(await tracker.updateSessionRecordConditionally('noop-1', { messageCount: 9 }, () => false)).toBeNull()
+    await tracker._withSessionWriteLockForTesting(async () => { await tracker.getSessionByClaudeId('noop-1') })
+    await tracker.listSessions()
+    const after = tracker._sessionStoreStatsForTesting()
+    expect(after.fullScans).toBe(before.fullScans)
+    expect(after.dropUnnamed).toBe(before.dropUnnamed)
+    // A real write still reaches the next read.
+    await tracker.updateSessionRecord('noop-1', { messageCount: 5 })
+    expect((await tracker.listSessions()).find((s) => s.claudeSessionId === 'noop-1')?.messageCount).toBe(5)
+  })
+
   it('and still refuses any other row: the leader\'s, a row of another host, an own row made someone else\'s', async () => {
     sessionDb.allowOwnRowWrites(KEY)
     await expect(tracker.updateSessionRecord('leader-row', { human_note: 'x' })).rejects.toThrow(sessionDb.NOT_OWN_ROW)

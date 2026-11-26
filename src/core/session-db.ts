@@ -200,40 +200,52 @@ export function getDb(): DatabaseType | null {
   }
 }
 
-// ── Rows of the sessions table this connection changed ──────────────────────
+// ── Which rows of the sessions table this connection changed ────────────────
 //
-// The session store's write lock checks that a section changed no session row it did not name
-// (session-tracker.ts withWriteLock): a row nobody named must drop the cached snapshot. It
-// counted with total_changes(), which counts every table of this file, so a host channel batch
-// (its position row, turn ends, hand-over marks) read as unnamed session rows and every batch
-// dropped the snapshot: 1,314 full scans of 7.4k rows in 21 minutes on the live server
-// (2026-11-23). Temp triggers count the sessions table alone, on this connection only (another
-// connection's commit is the data_version check's). recursive_triggers is off here, so a
-// REPLACE counts once, as one row. A trigger body names its table unqualified: SQLite before
-// 3.53 (the macOS system library, WALNUT_SQLITE_LIBRARY=system) refuses `temp.` there, and the
-// store would not open.
-const countedHandles = new WeakSet<DatabaseType>();
+// The session store's write lock patches the rows a section changed into its cached snapshot
+// (session-tracker.ts withWriteLock). It used to compare SQLite's count of changed session rows
+// with the distinct ids the section's helpers named, so a section that wrote one row twice (a host
+// channel batch with two changes of one session) read as a change nobody named and dropped the
+// whole snapshot: about 50 full scans of 7.7k rows in the first 10 minutes after a start
+// (2026-11-25). Before that it counted every table of the file (1,314 scans in 21 minutes,
+// 2026-11-23). Now temp triggers record the id of every row this connection inserts, updates or
+// deletes, and the lock patches exactly those: a writer that names nothing (a bulk UPDATE) is
+// patched too, and a rolled-back write leaves no id behind (the temp table is in the transaction).
+// Another connection's commit is the data_version check's. A trigger body never meets a conflict
+// (NOT EXISTS, not OR IGNORE: the outer statement's conflict policy would override a trigger's own),
+// and names its table unqualified: SQLite before 3.53 (the macOS system library,
+// WALNUT_SQLITE_LIBRARY=system) refuses `temp.` there, and the store would not open.
+const recordingHandles = new WeakSet<DatabaseType>();
 
-function countSessionRowWrites(handle: DatabaseType): void {
+function recordChangedSessionRows(handle: DatabaseType): void {
+  // A rowid table's TEXT PRIMARY KEY may hold NULL, the recorder's key may not: a row with no id
+  // is no row of the snapshot (rowToSession keys by it), so it is not recorded, and its write never fails.
+  const note = (id: string) => `INSERT INTO session_rows_changed (sid) SELECT ${id} WHERE ${id} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM session_rows_changed WHERE sid = ${id});`;
   handle.exec(`
-    CREATE TEMP TABLE IF NOT EXISTS session_row_writes (n INTEGER NOT NULL);
-    INSERT INTO temp.session_row_writes (n) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM temp.session_row_writes);
-    CREATE TEMP TRIGGER IF NOT EXISTS session_row_writes_insert AFTER INSERT ON main.sessions BEGIN UPDATE session_row_writes SET n = n + 1; END;
-    CREATE TEMP TRIGGER IF NOT EXISTS session_row_writes_update AFTER UPDATE ON main.sessions BEGIN UPDATE session_row_writes SET n = n + 1; END;
-    CREATE TEMP TRIGGER IF NOT EXISTS session_row_writes_delete AFTER DELETE ON main.sessions BEGIN UPDATE session_row_writes SET n = n + 1; END;
+    CREATE TEMP TABLE IF NOT EXISTS session_rows_changed (sid TEXT PRIMARY KEY) WITHOUT ROWID;
+    CREATE TEMP TRIGGER IF NOT EXISTS session_rows_changed_insert AFTER INSERT ON main.sessions WHEN NEW.claude_session_id IS NOT NULL BEGIN ${note('NEW.claude_session_id')} END;
+    CREATE TEMP TRIGGER IF NOT EXISTS session_rows_changed_update AFTER UPDATE ON main.sessions WHEN OLD.claude_session_id IS NOT NULL OR NEW.claude_session_id IS NOT NULL BEGIN ${note('OLD.claude_session_id')} ${note('NEW.claude_session_id')} END;
+    CREATE TEMP TRIGGER IF NOT EXISTS session_rows_changed_delete AFTER DELETE ON main.sessions WHEN OLD.claude_session_id IS NOT NULL BEGIN ${note('OLD.claude_session_id')} END;
   `);
-  countedHandles.add(handle);
+  recordingHandles.add(handle);
 }
 
 /**
- * Session rows `handle` has changed since it opened, or null when it does not count them (the
- * own-row writer, whose REPLACE fires its delete trigger too): the caller uses total_changes().
+ * The ids of the session rows `handle` changed since the last call, forgotten as they are read; null
+ * when it does not record them (a host's own-row writer or its read-only copy) or the record cannot
+ * be read (its temp table gone): the caller then drops what it cannot trust, never fails.
+ * Call it outside a transaction: inside one, its rows are not stored yet.
  */
-export function sessionRowWrites(handle: DatabaseType): number | null {
-  if (!countedHandles.has(handle)) return null;
-  const n = prepared(handle, 'SELECT n FROM temp.session_row_writes', 'pluck').get();
-  // No count (its row gone): total_changes(), which can only drop the snapshot more often.
-  return typeof n === 'number' ? n : null;
+export function takeChangedSessionRows(handle: DatabaseType): string[] | null {
+  if (!recordingHandles.has(handle)) return null;
+  try {
+    const ids = prepared(handle, 'SELECT sid FROM temp.session_rows_changed', 'pluck').all() as string[];
+    if (ids.length > 0) prepared(handle, 'DELETE FROM temp.session_rows_changed').run();
+    return ids;
+  } catch (err) {
+    log.session.warn('session-db: the changed-rows record could not be read', { err: String(err) });
+    return null;
+  }
 }
 
 /** Open and initialize the shared handle (getDb, and a test's reopen after a wipe). */
@@ -268,7 +280,7 @@ function openShared(): DatabaseType {
       }
     }
 
-    if (!copy) countSessionRowWrites(handle);
+    if (!copy) recordChangedSessionRows(handle);
     // A host replica's copy reads only; its one writer is the apply connection (replica/copy-guard.ts).
     guardCopyHandle(handle, 'sessions');
     log.session.info('session-db opened', { path: SESSION_DB_PATH });

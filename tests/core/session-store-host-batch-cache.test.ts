@@ -4,8 +4,8 @@
  * not drop it. The guard counted every row the connection changed (total_changes), so the
  * channel's own position row read as a session row nobody named and every batch dropped the
  * snapshot: 1,314 full scans of 7.4k rows in 21 minutes on the live server (2026-11-23,
- * 147 s of its loop, about one a second). The guard still drops the snapshot when a session
- * row changes that no writer named.
+ * 147 s of its loop, about one a second). A session row that changes with no writer naming it is
+ * patched too: SQLite records every row the connection changes (session-db.ts takeChangedSessionRows).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fsp from 'node:fs/promises'
@@ -49,6 +49,20 @@ describe('the session snapshot across a host channel batch', () => {
     expect(scans()).toBe(before)
   })
 
+  it('a batch with two changes of one session patches it once, no rescan', async () => {
+    // The live server's 50 scans after a start (2026-11-25): one row written twice read as a row nobody named.
+    await applyHanded({ hostId: HOST, rows: [{ sid: 'p1', born: true, patch: born('p1'), seq: 1 }], renames: [], cursor: { logId: 'L1', seq: 1 }, check: ['p1'] })
+    await listSessions()
+    const before = scans()
+    await applyHanded({ hostId: HOST, rows: [
+      { sid: 'p1', patch: { process_status: 'idle' }, seq: 2 },
+      { sid: 'p1', patch: { messageCount: 7 }, seq: 3 },
+    ], renames: [], cursor: { logId: 'L1', seq: 3 } })
+    expect((await listSessions()).find((s) => s.claudeSessionId === 'p1')).toMatchObject({ process_status: 'idle', messageCount: 7 })
+    expect(scans()).toBe(before)
+    expect(_sessionStoreStatsForTesting().dropUnnamed).toBe(0)
+  })
+
   it('a batch that also ends a hand-over (another table) still patches', async () => {
     await createSessionRecord('h1', '', 'p', '/w', { host: HOST, judge: 'host' } as never)
     await listSessions()
@@ -59,7 +73,7 @@ describe('the session snapshot across a host channel batch', () => {
     expect(scans()).toBe(before)
   })
 
-  it('a session row changed that no writer named still drops the snapshot inside a section', async () => {
+  it('a session row changed that no writer named is patched in, read as stored, with no rescan', async () => {
     await createSessionRecord('a1', '', 'p', '/w')
     await createSessionRecord('a2', '', 'p', '/w')
     await listSessions()
@@ -80,7 +94,7 @@ describe('the session snapshot across a host channel batch', () => {
     expect(sneaked).toBe(true)
     const rows = await listSessions()
     expect(rows.find((s) => s.claudeSessionId === 'a2')?.title).toBe('changed behind the notes')
-    expect(scans()).toBe(before + 1)
+    expect(scans()).toBe(before)
     expect((await getSessionByClaudeId('a1'))?.title).toBe('named')
   })
 })

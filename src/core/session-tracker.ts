@@ -17,7 +17,7 @@ import type {
   StatusTransition,
   SessionStatusSnapshot,
 } from './types.js';
-import { dbGeneration, getDb, rowToSession, sessionCacheRowsSql, SLIM_SESSION_STATUSES, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor, sessionRowWrites, PAYLOAD_LANE, PAYLOAD_STOP_REQUEST_STATE, PAYLOAD_TASK_COMPLETE_STOP_STATE } from './session-db.js';
+import { dbGeneration, getDb, rowToSession, sessionCacheRowsSql, SLIM_SESSION_STATUSES, sessionToRow, sessionWriteHandle, ownRowHostKey, SESSION_COLUMNS, transactionWhenFree, readChannelCursor, writeChannelCursor, takeChangedSessionRows, PAYLOAD_LANE, PAYLOAD_STOP_REQUEST_STATE, PAYLOAD_TASK_COMPLETE_STOP_STATE } from './session-db.js';
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { isFollower, isHostReplica } from './server-role.js';
 import { processActionsRefused, refuseProcessAction } from './sessions/replica-process-guard.js';
@@ -133,12 +133,14 @@ export function sessionStoreGeneration(): number { return sessionStoreGen; }
 // /api/sessions/status polling in between, that rebuild ran several times a
 // minute and was 12% of all main-thread CPU on the live server (2026-09-29).
 //
-// Every in-process writer goes through writeSessionRowSqlite (INSERT OR REPLACE
-// by claude_session_id) or deleteSessionRowSqlite, so the lock knows exactly
-// which rows a section touched. On a clean commit it re-reads those rows and
-// swaps them into the snapshot; a section that threw (rolled back), a snapshot
-// that is missing, or a foreign commit (`PRAGMA data_version` moved: the on-stop
-// hook writes through its own connection) still takes the drop.
+// SQLite itself records which session rows the store's connection changed
+// (session-db.ts takeChangedSessionRows), so the lock knows exactly which rows a
+// section changed, whichever statement wrote them. After the section it re-reads
+// those rows and swaps them into the snapshot; a section that ends inside an open
+// transaction, a connection that records nothing, or a foreign commit (`PRAGMA
+// data_version` moved: the on-stop hook writes through its own connection) still
+// takes the drop. The ids the writers note (noteSessionRowTouched) feed the row hook
+// (announceWrittenRows) and are patched as well.
 let touchedSessionIds: Set<string> | null = null;
 
 function noteSessionRowTouched(claudeSessionId: string): void {
@@ -148,14 +150,6 @@ function noteSessionRowTouched(claudeSessionId: string): void {
 /** Rows of any table this connection has changed since it opened: SQLite's own counter. */
 function totalChanges(db: NonNullable<ReturnType<typeof getDb>>): number {
   return prepared(db, 'SELECT total_changes() AS n', 'pluck').get() as number;
-}
-
-/**
- * Session rows this connection has changed since it opened (session-db.ts sessionRowWrites), else
- * every row it changed. The snapshot guard below compares this with the rows a section named.
- */
-function sessionRowChanges(db: NonNullable<ReturnType<typeof getDb>>, total: number): number {
-  return sessionRowWrites(db) ?? total;
 }
 
 // ── Heavy prompt fields stay in SQLite for sessions that are not live ─────
@@ -204,14 +198,17 @@ export function withHeavyFields(record: SessionRecord): SessionRecord {
 const sessionStoreStats = {
   fullScans: 0, externalScans: 0, scanMs: 0, patchedRows: 0, cloneReads: 0, viewReads: 0, clonedRows: 0,
   // Why a current snapshot was dropped (each drop costs the next reader a full scan): a section
-  // changed rows it did not name, a section ended inside an open transaction, or another
-  // connection committed (seen by a write's patch; a read's rescan counts as externalScans).
+  // wrote through a connection that records no changed rows (a host's own-row writer), a section
+  // ended inside an open transaction, or another connection committed (seen by a write's patch; a
+  // read's rescan counts as externalScans).
   dropUnnamed: 0, dropOpenTx: 0, dropForeign: 0,
+  // Reads that found rows the store's connection changed outside a locked section (should stay 0).
+  unlockedWrites: 0,
 };
 // What the store's reads cost, on every `memory sample` and `memory burst` line: a full scan reads
 // and parses every row (about 7.4k), and the CPU profiles of the 22 GB climb on 2026-11-23 had
 // loadStoreRows at 9 s of a 30 s window. externalScans: another connection committed (a hook).
-registerSampleNote('sessionStore', () => `scans=${sessionStoreStats.fullScans} external=${sessionStoreStats.externalScans} scanMs=${Math.round(sessionStoreStats.scanMs)} clonedRows=${sessionStoreStats.clonedRows} drops=unnamed:${sessionStoreStats.dropUnnamed},openTx:${sessionStoreStats.dropOpenTx},foreign:${sessionStoreStats.dropForeign}`);
+registerSampleNote('sessionStore', () => `scans=${sessionStoreStats.fullScans} external=${sessionStoreStats.externalScans} scanMs=${Math.round(sessionStoreStats.scanMs)} clonedRows=${sessionStoreStats.clonedRows} drops=unnamed:${sessionStoreStats.dropUnnamed},openTx:${sessionStoreStats.dropOpenTx},foreign:${sessionStoreStats.dropForeign} unlocked=${sessionStoreStats.unlockedWrites}`);
 registerBurstContext('sessionStore', () => ({ ...sessionStoreStats, scanMs: Math.round(sessionStoreStats.scanMs) }));
 export function _sessionStoreStatsForTesting(): Readonly<typeof sessionStoreStats> { return { ...sessionStoreStats }; }
 /** Forget the cached snapshot (the next reader scans), leaving init and the connection alone. */
@@ -580,10 +577,25 @@ function cloneSession(s: SessionRecord): SessionRecord {
   return { ...s };
 }
 
+/**
+ * Rows the store's connection changed outside a locked section (no writer should: the enumeration in
+ * tests/core/session-store-boot-writers.test.ts keeps it so), patched in before a read trusts the
+ * snapshot: such a write leaves data_version alone, so nothing else would tell. Not while a section
+ * runs or a transaction is open: the section's own settle takes its rows when it ends.
+ */
+function catchUpUnlockedWrites(db: NonNullable<ReturnType<typeof getDb>>): void {
+  if (sessionStoreCache === null || touchedSessionIds !== null || db.inTransaction) return;
+  const ids = takeChangedSessionRows(db);
+  if (ids === null || ids.length === 0) return;
+  sessionStoreStats.unlockedWrites += 1;
+  patchSessionCacheRows(new Set(ids));
+}
+
 /** The cached snapshot when it describes the database now (no scan), else null. */
 function currentStoreSnapshot(db: NonNullable<ReturnType<typeof getDb>>): readonly SessionRecord[] | null {
   if (!STORE_CACHE_ENABLED || sessionStoreCache === null) return null;
-  return storeVersion(db) === sessionStoreCacheDataVersion ? sessionStoreCache : null;
+  catchUpUnlockedWrites(db);
+  return sessionStoreCache !== null && storeVersion(db) === sessionStoreCacheDataVersion ? sessionStoreCache : null;
 }
 
 /** The cached snapshot while it is current, else a fresh scan that re-seeds it. */
@@ -603,6 +615,7 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
   if (!db) {
     throw new Error('readStore: SQLite handle is null');
   }
+  catchUpUnlockedWrites(db);
   const dataVersion = () => storeVersion(db);
   const currentDataVersion = dataVersion();
   if (sessionStoreCache === null
@@ -640,24 +653,34 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
 let writeLock: Promise<void> = Promise.resolve();
 
 /**
- * After a locked section: patch the rows it named into the snapshot, or drop the snapshot when
+ * After a locked section: patch the rows it changed into the snapshot, or drop the snapshot when
  * that cannot be trusted. Returns how many rows of any table the section's connection changed.
  */
-function settleSnapshot(touched: Set<string> | null, changesBefore: number, rowChangesBefore: number): number {
-  const db = sessionWriteHandle();
+function settleSnapshot(db: ReturnType<typeof sessionWriteHandle>, touched: Set<string> | null, changesBefore: number): number {
   const total = db ? totalChanges(db) : 0;
-  // Session rows only: the section's other tables (a channel position, turn ends) are no row
-  // of this snapshot, and counting them dropped it at every host batch (2026-11-23).
-  const rowsChanged = db ? sessionRowChanges(db, total) - rowChangesBefore : 0;
   if (db?.inTransaction) {
-    // Uncommitted rows would read as stored: never patch from inside a transaction.
+    // Uncommitted rows would read as stored: never patch from inside a transaction. The rows it
+    // recorded stay recorded, so the next section patches them too.
     if (sessionStoreCache !== null) sessionStoreStats.dropOpenTx += 1;
     invalidateSessionStoreCache();
-  } else if (touched === null || rowsChanged > touched.size) {
+    return total - changesBefore;
+  }
+  // Every session row the connection changed, by any statement, as SQLite recorded it: one row
+  // written twice is one row, a bulk UPDATE names its rows, a rolled-back write none.
+  const changed = db ? takeChangedSessionRows(db) : null;
+  if (changed === null && touched !== null && total === changesBefore) {
+    // A connection that records no rows (a host's own-row writer or its read-only copy) and changed
+    // nothing in this section (a no-op update, a refused conditional write, a read under the lock):
+    // the snapshot holds.
+    patchSessionCacheRows(touched);
+  } else if (changed === null || touched === null) {
+    // It changed rows it cannot list. On a host's own-row writer that commit is foreign to the
+    // snapshot's connection anyway (data_version), so a patch would drop it too.
     if (sessionStoreCache !== null) sessionStoreStats.dropUnnamed += 1;
     invalidateSessionStoreCache();
   } else {
-    patchSessionCacheRows(touched);
+    for (const id of touched) changed.push(id);
+    patchSessionCacheRows(new Set(changed));
   }
   return total - changesBefore;
 }
@@ -668,9 +691,9 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   writeLock = new Promise<void>((r) => { resolve = r; });
   // Bring the whole-store read cache up to date after EVERY locked mutation.
   // Every writer (create/update/batch/conditional/rename/complete/delete/link)
-  // funnels through this lock and through writeSessionRowSqlite /
-  // deleteSessionRowSqlite, so the lock knows which rows the section touched
-  // and patches exactly those (see the write-through note at the cache decl).
+  // funnels through this lock, and SQLite records which session rows the section
+  // changed, so the lock patches exactly those (see the write-through note at the
+  // cache decl; tests/core/session-store-boot-writers.test.ts lists every writer).
   // A section that threw is brought up to date the same way: what it rolled back was never
   // patched in (patching happens only here), so re-reading the rows it named gives the stored
   // state either way. It used to drop the snapshot, which cost the next reader a full scan of
@@ -679,27 +702,26 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   // committed rows.
   let touched: Set<string> | null = null;
   let changesBefore = 0;
-  let rowChangesBefore = 0;
+  let writeHandle: ReturnType<typeof sessionWriteHandle> = null;
   return prev
     .then(() => {
       touched = new Set<string>();
       touchedSessionIds = touched;
       // The connection the section writes through (a host's own-row writer, else the shared one).
-      const db = sessionWriteHandle();
-      changesBefore = db ? totalChanges(db) : 0;
-      rowChangesBefore = db ? sessionRowChanges(db, changesBefore) : 0;
+      writeHandle = sessionWriteHandle();
+      changesBefore = writeHandle ? totalChanges(writeHandle) : 0;
       return fn();
     })
     .then(
       (value) => {
-        const changed = settleSnapshot(touched, changesBefore, rowChangesBefore);
+        const changed = settleSnapshot(writeHandle, touched, changesBefore);
         if (changed > 0) noteSessionStoreWrite();
         if (touched !== null && touched.size > 0) announceWrittenRows(touched);
         return value;
       },
       (err) => {
         // The section's own error is the one to report: a failing settle only drops the snapshot.
-        try { settleSnapshot(touched, changesBefore, rowChangesBefore); } catch { invalidateSessionStoreCache(); }
+        try { settleSnapshot(writeHandle, touched, changesBefore); } catch { invalidateSessionStoreCache(); }
         throw err;
       },
     )
