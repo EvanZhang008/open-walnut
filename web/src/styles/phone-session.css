@@ -265,6 +265,8 @@
     border-radius: 50%;
     animation: phone-busy-ring 0.8s linear infinite;
   }
+  /* On the main action's fill the ring reads in the fill's text colour. */
+  .app-shell-navigation .btn-primary.permission-request-btn.is-busy::after { border-color: var(--on-accent) transparent var(--on-accent) var(--on-accent); }
 
   .app-shell-navigation .permission-request-input-toggle,
   .app-shell-navigation .permission-command-showall {

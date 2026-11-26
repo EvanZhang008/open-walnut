@@ -38,6 +38,8 @@ import { openLetterFor } from './org-answer-shape';
 import { answerMessage, formOptions, inlineShape, type AskOption } from './org-ask-form';
 import type { OrgAlertView } from './org-channels-model';
 import '@/styles/inline-answer.css';
+import '@/components/common/option-label.css';
+import { RECOMMENDED_WORD, shownOptionLabel } from '@/components/common/option-label';
 import { LoadingState } from '@/components/common/EmptyState';
 
 /** Where an answer failed: the reason (the words and pictures stay in the box's own draft). */
@@ -63,22 +65,27 @@ export function AskOptions({ options, recommended, onPick, testId, disabled }: {
   disabled?: boolean;
 }) {
   const oneCard = useExperimental('threads_one_card');
-  const ordered = oneCard && recommended ? [...options.filter((o) => o.value === recommended), ...options.filter((o) => o.value !== recommended)] : options;
+  // A label that carries its own "(Recommended)" shows without it and is the recommended one,
+  // unless the caller named another (option-label.ts; its value, the answer, stays as it is).
+  const shown = options.map((o) => { const words = shownOptionLabel(o.label); return { ...o, text: words.text, marked: words.recommended }; });
+  // With threads_one_card off the buttons read as before it: their labels as written.
+  const best = recommended ?? (oneCard ? shown.find((o) => o.marked)?.value : undefined);
+  const ordered = oneCard && best ? [...shown.filter((o) => o.value === best), ...shown.filter((o) => o.value !== best)] : shown;
   return (
     <div className="org-answer-options" data-testid={testId}>
       {ordered.map((o) => (
         <button
           key={o.value}
           type="button"
-          className={`btn btn-sm${o.value === recommended ? ' btn-primary' : ''}`}
+          className={`btn btn-sm${o.value === best ? ' btn-primary' : ''}`}
           data-testid="org-answer-option"
           data-value={o.value}
-          {...(oneCard && o.value === recommended ? { 'data-recommended': 'true' } : {})}
-          {...(o.title || o.value === recommended ? { 'aria-description': o.title ?? 'Recommended' } : {})}
+          {...(oneCard && o.value === best ? { 'data-recommended': 'true' } : {})}
+          {...(o.title || o.value === best ? { 'aria-description': o.title ?? RECOMMENDED_WORD } : {})}
           {...(oneCard && o.title ? { title: o.title, 'data-detail': o.title } : {})}
           {...(disabled ? { disabled: true } : {})}
           onClick={() => onPick(o.value)}
-        >{o.label}</button>
+        >{oneCard ? o.text : o.label}</button>
       ))}
     </div>
   );
@@ -353,7 +360,7 @@ function SessionAnswer({ alert, failure, onSend, sessionId, summary, shape, thre
               <Checkbox
                 checked={picked.has(o.id)}
                 onChange={() => setPicked((s) => { const n = new Set(s); if (n.has(o.id)) n.delete(o.id); else n.add(o.id); return n; })}
-              />{o.label}
+              /><span className="option-label" {...(o.recommended || shownOptionLabel(o.label).recommended ? { 'data-recommended': 'true' } : {})}>{shownOptionLabel(o.label).text}</span>
             </label>
           ))}
           <button

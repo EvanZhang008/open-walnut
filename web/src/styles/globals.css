@@ -2820,6 +2820,9 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 /* A rule kept in a file, picked once: what the second click does, in the accent. */
 .perm-option-confirm { display: block; margin: 1px 0 0; font-size: var(--font-size-xs); font-weight: 500; color: var(--accent); }
 .permission-choice-saved.perm-option-confirm { color: var(--accent); font-weight: 500; }
+/* The main action is filled in the accent (a session card's or a toast's list too): its rule and file read on the fill. */
+:is(.permission-request-choice, .nfc-perm-btn, .notification-perm-btn).btn-primary :is(.permission-choice-detail, .permission-choice-saved, .perm-option-detail, .perm-option-saved) { color: inherit; }
+:is(.nfc-perm-toast, .nfc-perm-card) .perm-options-stack > :is(.nfc-perm-btn, .notification-perm-btn).btn-primary > :is(.perm-option-saved, .perm-option-sub) { color: inherit; }
 /* Armed in a toast or the panel: a bar runs out over the 5 s it stays armed. */
 .nfc-perm-btn.is-armed, .notification-perm-btn.is-armed { position: relative; overflow: hidden; }
 .nfc-perm-btn.is-armed::after, .notification-perm-btn.is-armed::after {

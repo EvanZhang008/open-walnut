@@ -1,0 +1,36 @@
+/* A question's option row (OptionLabel): its words, then "Recommended" at the row's right end on the
+   recommended choice, the same mark the Threads card's choices carry (inline-answer.css). */
+.option-label[data-recommended] { display: flex; align-items: baseline; gap: 8px; align-self: stretch; }
+.option-label[data-recommended]::after {
+  content: 'Recommended'; flex: none; margin-left: auto;
+  font-size: var(--font-size-xs); font-weight: 400; color: inherit; opacity: 0.82;
+}
+
+/* The recommended row stands out in the main colour, as the family's primary key and the phone's
+   recommended option do (the user's rule, 2026-11-26); picked, it keeps the fill and takes a ring. */
+:is(.qp-option, .nfc-answer-opt)[data-recommended] {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 86%, var(--btn-shade));
+  color: var(--on-accent);
+}
+:is(.qp-option, .nfc-answer-opt)[data-recommended]:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 74%, var(--btn-shade));
+  color: var(--on-accent);
+}
+:is(.qp-option, .nfc-answer-opt)[data-recommended] :is(.qp-option-desc, .nfc-answer-opt-desc) { color: inherit; opacity: 0.82; }
+.qp-options .qp-option.qp-option-selected[data-recommended],
+.nfc-answer-opts .nfc-answer-opt.nfc-picked[data-recommended] {
+  color: var(--on-accent);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+/* The phone's radio or check mark reads on the fill. */
+.qp-options .qp-option[data-recommended] .qp-option-mark { border-color: currentColor; }
+.qp-options .qp-option.qp-option-selected[data-recommended] .qp-option-mark { border-color: currentColor; background: currentColor; box-shadow: inset 0 0 0 3px var(--accent); }
+/* Once another row is picked, the recommended one gives up its fill (the mark stays): the picked row reads strongest. */
+.qp-options:has(.qp-option-selected) .qp-option[data-recommended]:not(.qp-option-selected),
+.nfc-answer-opts:has(.nfc-picked) .nfc-answer-opt[data-recommended]:not(.nfc-picked) {
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--fg);
+}

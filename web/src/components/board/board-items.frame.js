@@ -620,8 +620,15 @@
     wnRender() {
       var self = this;
       var id = this.wnId;
-      var options = kit.parsePairs(this.getAttribute('options'), '');
+      // A label that carries its own "(Recommended)" shows without it and is the recommended one
+      // unless another is named (the same rule as option-label.ts and the phone's option rows).
+      var options = kit.parsePairs(this.getAttribute('options'), '').map(function (o) {
+        var m = /\s*\(recommended\)\s*$/i.exec(o.label || '');
+        var head = m ? o.label.slice(0, m.index).trim() : '';
+        return head ? { key: o.key, label: head, wnMarked: true } : o;
+      });
       var rec = this.getAttribute('recommended') || '';
+      if (!rec) options.forEach(function (o) { if (!rec && o.wnMarked) rec = o.key; });
       var title = this.getAttribute('data-title') || '';
       var task = this.getAttribute('task') || '';
       kit.setHtml(this.wnHead, (title ? '<span class="wn-choice-title">' + esc(title) + '</span>' : '')

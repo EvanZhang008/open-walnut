@@ -24,6 +24,8 @@ import type { BoxMicHandle } from '@/components/common/BoxMic';
 import { useSendAfterDictation, dictationWaitProps, useDictationGroup } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { askAnswerDraftKey } from '@/utils/drafts';
+import { OptionLabel } from './OptionLabel';
+import { shownOptionLabel } from './option-label';
 import '@/styles/prompt-mic.css';
 import {
   buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection,
@@ -124,6 +126,7 @@ export function PermissionAnswerForm({
                     // Named by its label alone: the words under it describe it.
                     aria-label={opt.label}
                     aria-description={opt.description}
+                    {...(shownOptionLabel(opt.label).recommended ? { 'data-recommended': 'true' } : {})}
                     disabled={disabled}
                     onClick={() => setSelections(prev => ({
                       ...prev,
@@ -132,7 +135,7 @@ export function PermissionAnswerForm({
                       [q.question]: toggleAskUserSelection(prev[q.question], opt.label, q.multiSelect),
                     }))}
                   >
-                    {opt.label}
+                    <OptionLabel label={opt.label} />
                     {opt.description && <span className="nfc-answer-opt-desc">{opt.description}</span>}
                   </button>
                 ))}

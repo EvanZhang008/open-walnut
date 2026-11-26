@@ -42,7 +42,7 @@ const OWN_WORDS: Record<string, string> = {
   'components/tasks/PrPill.tsx#label': 'a pull request card switch: its own name, fixed text from its caller',
   'components/tasks/PrPill.tsx#hint': 'that switch\'s own line on what it does, fixed text from its caller',
   'components/tasks/ProjectCodeSource.tsx#title': 'a workspace kind\'s yes/no field: the field\'s own title from its schema; taken only by Save',
-  'components/org/OrgInlineAnswer.tsx#o.label': 'an answer option the user picks: its text is the option',
+  'components/org/OrgInlineAnswer.tsx#shownOptionLabel(o.label).text': 'an answer option the user picks: its text is the option, without its "(Recommended)" (option-label.ts)',
   'focus-spaces/SpaceForm.tsx#label': 'a picker of the projects, tasks and apps a focus space holds: the name is the option, taken only by Save',
   'focus-spaces/SpaceForm.tsx#detail': 'the option\'s own second line in the same picker (a task\'s project, an app\'s mode), taken only by Save',
   'components/org/OrgRouterSetup.tsx#lead.org_name || lead.title': 'a VP in the router\'s collaboration picker: taken only by Create router',

@@ -1,6 +1,7 @@
 /**
  * The one look of a card's answer (.claude/skills/walnut-ui-requirements/standard.md, "The button
- * family"), measured on the page: at most one solid blue key (the main action), every key and the
+ * family"), measured on the page: at most one solid blue key (the main action; a question's
+ * recommended option is blue beside it), every key and the
  * box one height (34 px), every option a row of its own, and the keys above the box.
  *
  * 2026-11-21, the user, after cards shipped with different buttons from the design he had seen:
@@ -40,7 +41,9 @@ export async function familyLook(card: Locator): Promise<FamilyLook> {
     const options = [...row.querySelectorAll('.org-answer-options .btn, .org-answer-check')].filter(own)
     return {
       keys: keys.length,
-      blue: keys.filter((b) => blues.has(getComputedStyle(b).backgroundColor)).length,
+      // A question's recommended option is in the accent beside its Submit (the user's rule,
+      // 2026-11-26: the main action and the recommended option both stand out): not a second main key.
+      blue: keys.filter((b) => !(b as HTMLElement).matches('.nfc-answer-opt[data-recommended]') && blues.has(getComputedStyle(b).backgroundColor)).length,
       heights: keys.map((b) => Math.round(b.getBoundingClientRect().height)),
       box: boxRect ? Math.round(boxRect.height) : null,
       optionRows: options.every((o) => o.getBoundingClientRect().width >= rowWidth - 2),

@@ -36,6 +36,8 @@ import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnsw
 import { denyNoteMessage, noteOfDenyMessage, promptKeyHint, splitPromptHint, promptKeyRange, choiceKeys, promptKeyList, usePromptKeyFocus, usePromptKeys, usePromptKeyTarget } from './prompt-keys';
 import { AnswerText, RuleDetail } from './RuleDetail';
 import { callAnswerText, useToolDecisions } from './waiting-tools';
+import { OptionLabel } from '@/components/common/OptionLabel';
+import { shownOptionLabel } from '@/components/common/option-label';
 
 /** One question's own-words answer, with the composer's mic. The card's Submit
  *  waits for this mic's words (`answerMic`), then settles the card. */
@@ -214,6 +216,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
                     type="button"
                     className={`qp-option ${picked.includes(opt.label) ? 'qp-option-selected' : ''}${phone ? (q.multiSelect ? ' qp-option--check' : ' qp-option--radio') : ''}${keyed && oi < 9 ? ' qp-option--keyed' : ''}`}
                     title={opt.description}
+                    {...(shownOptionLabel(opt.label).recommended ? { 'data-recommended': 'true' } : {})}
                     disabled={locked}
                     aria-keyshortcuts={keyed && oi < 9 ? String(oi + 1) : undefined}
                     {...(phone ? { role: q.multiSelect ? 'checkbox' : 'radio', 'aria-checked': picked.includes(opt.label) } : {})}
@@ -221,7 +224,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
                   >
                     {keyed && oi < 9 && <kbd className="prompt-key" aria-hidden="true">{oi + 1}</kbd>}
                     {phone && <span className="qp-option-mark" aria-hidden="true" />}
-                    {phone ? <span className="qp-option-label">{opt.label}</span> : opt.label}
+                    <OptionLabel label={opt.label} {...(phone ? { className: 'qp-option-label' } : {})} />
                     {/* A description that only repeats the label says nothing. */}
                     {opt.description && opt.description.trim() !== opt.label.trim() && <span className="qp-option-desc">{opt.description}</span>}
                   </button>
