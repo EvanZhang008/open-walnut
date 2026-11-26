@@ -18,6 +18,7 @@ import { guidanceFileOf, readGuidance, renderGuidance, reflectionDayFileOf, refl
 import { localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
 import { guidanceRoomLeft } from '../../../src/core/org/reflection/team-guidance-hint.js'
 import { askTidy } from '../../../src/core/org/reflection/guidance-tidy.js'
+import { normalizeForQuote } from '../../../src/core/org/reflection/judge.js'
 
 const NOW = Date.parse('2026-11-26T12:00:00Z')
 const vp = { id: 'vp-marina', title: 'Marina VP', project: 'Marina', org_role: 'lead', phase: 'IN_PROGRESS', session_id: 'sess-vp' } as Task
@@ -93,6 +94,12 @@ describe('a full guidance with lessons waiting', () => {
     expect(texts).toContain(OWN)
     const s = await readReflectionState(vp.id, NOW)
     expect(s.compacts?.freed).toBeGreaterThanOrEqual(1)
+    // The old lines live on in the new one: deleting it deletes them too (review of 57063edbcd).
+    const key = (t: string) => s.mergedLessons?.find((m) => m.lesson === normalizeForQuote(t))?.line
+    expect(key(A)).toBe(normalizeForQuote(MERGED))
+    expect(key(B)).toBe(normalizeForQuote(MERGED))
+    expect(s.written).toContain(normalizeForQuote(MERGED))
+    expect(s.written).not.toContain(normalizeForQuote(A))
     const md = await fs.readFile(reflectionDayFileOf(vp.id, localDate(NOW)), 'utf-8')
     expect(md).toContain('two lines merged')
     expect(md).toContain(A)
@@ -143,6 +150,18 @@ describe('a full guidance with lessons waiting', () => {
       if (check !== 'not json') expect(asked[1]).toContain('it loses the when-you-checked part')
     }
     expect(readCompactCheck('{"lost":[2,9]}', 3)).toEqual(new Map([[2, 'it loses a point of a line']]))
+  })
+
+  it('a new line the step check holds is not written', async () => {
+    await writeLines([{ text: A, from: 'x' }, ...Array.from({ length: 22 }, (_, i) => ({ text: filler(i), from: 'x' })), { text: B, from: 'x' }])
+    const callModel = async (system: string, user: string) => {
+      if (system === COMPACT_CHECK_SYSTEM) return '{"lost":[]}'
+      const n = (t: string) => user.split('\n').findIndex((l) => l.endsWith(t)) - 2
+      return JSON.stringify({ edits: [{ lines: [n(A), n(B)], text: MERGED }] })
+    }
+    const checkStep = async (t: string) => (t === MERGED ? { steps: ['user_account' as const], why: 'x', by: 'model' as const } : { steps: [], why: '', by: 'model' as const })
+    expect(await compactGuidance(vp, 'Marina VP', 2, { callModel, checkStep }, NOW)).toBe(0)
+    expect((await readGuidance(vp.id)).map((l) => l.text)).toContain(A)
   })
 
   it('a node is not asked to tidy on a day the reflection made room itself', async () => {

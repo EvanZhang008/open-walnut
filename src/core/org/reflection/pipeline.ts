@@ -219,7 +219,9 @@ export async function reflectOnCandidate(
   const now = deps.nowMs();
   // When he wrote what it quotes: the message of his that holds it, wherever the judge read it ('' when none does).
   const saidAt = quoteTimeOf(c, f.user_quote, sources);
-  const said = { at: saidAt, momentAt: saidAt || c.to };
+  // Old is judged by when the moment ended, never by the words it quotes: a fresh complaint quoting words of
+  // days ago is a new ask (review of 57063edbcd); the quote's time is only shown.
+  const said = { at: saidAt, momentAt: c.to };
   // The step check, in code (step-gate.ts): an instruction to use his browser, accounts or name, or to write
   // in production or a cloud account, never goes as written; the session gets a note to ask the person its
   // rules name instead, and the lesson that says so is not written (2026-11-25 audit).
@@ -232,6 +234,8 @@ export async function reflectOnCandidate(
   let corrected: DayEntry['corrected'] = 'already_fixed';
   let held: DayEntry['held'];
   let notSent: DayEntry['notSent'];
+  const proof: { quote?: string } = {};
+  let settledBy: GateResult['settled'];
   let earlierSession = false;
   let checkFailed = false;
   if (willSend) {
@@ -258,7 +262,7 @@ export async function reflectOnCandidate(
     const r = await route();
     // About words hours or days old: what they asked may be done or answered since; then it is not sent.
     // Only for a send now: a held one is checked at its send (held-corrections.ts stillNeeded).
-    const handled = r.to === 'send' ? await handledSince(c, f, said.momentAt, now, deps, node.id).catch(() => 'unknown' as const) : 'open';
+    const handled = r.to === 'send' ? await handledSince(c, f, said.momentAt, now, deps, node.id, proof).catch(() => 'unknown' as const) : 'open';
     if (r.to === 'off') { corrected = 'off'; notSent = r.why; }
     else if (handled === 'handled') { corrected = 'off'; notSent = 'handled_since'; }
     else {
@@ -267,6 +271,8 @@ export async function reflectOnCandidate(
       if (stepVerdict(g) === 'failed') { checkFailed = true; corrected = 'held'; held = 'check_failed'; }
       else {
         if (g.steps.length) gated = g;
+        // A step his own rule settled is said in the record with the rule (review of 57063edbcd).
+        if (g.settled?.length) settledBy = g.settled;
         if (r.to === 'held') { corrected = 'held'; held = r.why; }
         else if (chat && !(await takeChatSend(c.task.id, now))) { corrected = 'held'; held = 'own_cap'; }
         else {
@@ -304,8 +310,9 @@ export async function reflectOnCandidate(
   if (lessonText && lessonVerdict === 'pass') thisPass.add(lessonPrefix + lessonText);
   const entry: DayEntry = {
     at: new Date(now).toISOString(), signal: c.signal, task: { id: c.task.id, title: c.task.title }, ...(c.thread ? { thread: c.thread } : {}),
-    finding: f, ...(saidAt ? { saidAt } : {}), corrected, ...(held ? { held } : {}), ...(notSent ? { notSent } : {}), ...(earlierSession ? { earlierSession } : {}),
+    finding: f, ...(saidAt ? { saidAt } : {}), corrected, ...(held ? { held } : {}), ...(notSent ? { notSent } : {}), ...(notSent === 'handled_since' && proof.quote ? { handledQuote: proof.quote } : {}), ...(earlierSession ? { earlierSession } : {}),
     ...(gated ? { gated: { steps: [...gated.steps], why: gated.why, by: gated.by } } : {}),
+    ...(settledBy ? { settledBy } : {}),
     rule, ...(corrected === 'sent' ? { handedTo: { taskId: c.task.id, title: c.task.title } } : {}),
   };
   // His complaint goes to the pain registry too (pains.ts): never for an ask he has not answered.

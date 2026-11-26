@@ -34,7 +34,7 @@ const NOT_SENT_WHY: Record<NonNullable<DayEntry['notSent']>, string> = {
   no_session: 'no known session to send to', task_done: 'the task is complete', not_managed: 'the task is not in this node\'s team now',
   duty_off: 'the node\'s reflection switch is off', org_off: 'the org is off', gone: 'the task or the node is gone', off: 'cause not recorded',
   card_corrected: 'the same ask or card got a correction a short while ago, and he wrote nothing about it since',
-  handled_since: 'his words were hours or days old, and what they asked was done or answered since',
+  handled_since: 'what it is about was done or answered since (his words were hours old, or the card he reads now has it)',
 };
 
 export interface GuidanceLine { text: string; from?: string; date?: string }
@@ -193,6 +193,8 @@ export interface DayEntry {
   heldDropped?: string;
   /** With `off`: why it was not sent (pipeline.ts SendCheck). */
   notSent?: 'no_session' | 'task_done' | 'not_managed' | 'duty_off' | 'org_off' | 'gone' | 'off' | 'card_corrected' | 'handled_since';
+  /** With `handled_since`: the words of what happened since that show it done, as the check quoted them. */
+  handledQuote?: string;
   /** Sent to the task's session now, about a turn of an earlier one. */
   earlierSession?: boolean;
   rule: DayRule;
@@ -202,6 +204,8 @@ export interface DayEntry {
    * fixed note instead, and its lesson was not written.
    */
   gated?: { steps: string[]; why: string; by: 'words' | 'model' | 'failed' };
+  /** Steps the check let through because a rule of his own (quoted) tells agents to take them. */
+  settledBy?: Array<{ step: string; rule: string }>;
   /** When he wrote the words `finding.user_quote` is from (moment-age.ts quoteTimeOf). */
   saidAt?: string;
   /** The task its correction was sent to; absent when none was sent. */
@@ -256,7 +260,8 @@ export function renderDayEntry(e: DayEntry): string {
     `- What went wrong: ${f.what_went_wrong}`,
     `- The right way: ${f.correct_action}`,
     ...(e.gated ? [`- Step check: the instruction above was held back and never sent (it would have the session ${e.gated.steps.join(', ')}: ${e.gated.why}); the session got a note to ask the person its rules name instead.`] : []),
-    `- Correction: ${e.corrected === 'sent' ? (e.earlierSession ? 'sent to the task\'s current session (the turn was in an earlier one)' : 'sent to the session') : e.corrected === 'already_fixed' ? 'not sent, the session had already taken up the right way' : e.corrected === 'failed' ? 'could not be sent' : e.corrected === 'held' ? `held (${e.held ?? 'held'})` : `not sent (${NOT_SENT_WHY[e.notSent ?? 'off']})`}`,
+    ...(e.settledBy?.length ? [`- Step check: let through by the user's own rule${e.settledBy.length > 1 ? 's' : ''}: ${e.settledBy.map((x) => `${x.step} ("${x.rule}")`).join('; ')}.`] : []),
+    `- Correction: ${e.corrected === 'sent' ? (e.earlierSession ? 'sent to the task\'s current session (the turn was in an earlier one)' : 'sent to the session') : e.corrected === 'already_fixed' ? 'not sent, the session had already taken up the right way' : e.corrected === 'failed' ? 'could not be sent' : e.corrected === 'held' ? `held (${e.held ?? 'held'})` : `not sent (${NOT_SENT_WHY[e.notSent ?? 'off']})${e.handledQuote ? `: "${e.handledQuote}"` : ''}`}`,
     `- Rule: ${ruleLine(e.rule)}`,
     `- Handed to: ${handedToLine(e)}`,
     ...(e.pain ? ['pending' in e.pain ? `- Pain registry: waits to be filed (the registry cannot be read): ${e.pain.title}` : `- Pain registry: ${e.pain.isNew ? 'new pain' : 'added to'} ${e.pain.id} ${e.pain.title}`] : []),

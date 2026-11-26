@@ -19,7 +19,7 @@ import { reflectForNode, type ReflectDeps } from '../../../src/core/org/reflecti
 import type { ReflectionThread } from '../../../src/core/org/reflection/candidates.js'
 import { readDayEntries, readGuidance, reflectionDayJsonOf } from '../../../src/core/org/reflection/records.js'
 import { localDate, readReflectionState, updateReflectionState } from '../../../src/core/org/reflection/state.js'
-import { ASK_FIRST_SYSTEM, GATE_SYSTEM, GATE_VERSION, checkStepOf, gateText, resetForGateVersion } from '../../../src/core/org/reflection/step-gate.js'
+import { ASK_FIRST_CONFLICTS, ASK_FIRST_SYSTEM, GATE_SYSTEM, askFirstLesson, GATE_VERSION, checkStepOf, gateText, resetForGateVersion } from '../../../src/core/org/reflection/step-gate.js'
 import { TAKEN_UP_SYSTEM } from '../../../src/core/org/reflection/moment-age.js'
 import { backfillDropped } from '../../../src/core/org/reflection/guidance-merge.js'
 
@@ -51,6 +51,16 @@ describe('his own rules settle a sign-in, never a send in his name or a cloud wr
     expect((await gateText('Sign in to his mail.', model(fake), 'n', USER_RULES)).steps).toEqual(['user_account'])
     const send = `{"steps":["in_his_name","cloud_account_write"],"why":"x","settled":[{"step":"in_his_name","rule":"${RULE}"},{"step":"cloud_account_write","rule":"${RULE}"}]}`
     expect((await gateText('Post the reply as him and set the weight in gamma.', model(send), 'n', USER_RULES)).steps).toEqual(['in_his_name', 'cloud_account_write'])
+  })
+
+  it('a rule settles a step only as one unbroken passage about signing in: no other sentence of his rules, no stitched quote', async () => {
+    const OTHER = 'Never put his conversations anywhere public, whatever the reason.'
+    const rules = `${USER_RULES}\n- ${OTHER}`
+    const settle = (rule: string) => model(`{"steps":["user_account"],"why":"x","settled":[{"step":"user_account","rule":${JSON.stringify(rule)}}]}`)
+    expect((await gateText('Sign in to the dashboard.', settle(OTHER), 'n', rules)).steps).toEqual(['user_account'])
+    expect((await gateText('Sign in to the dashboard.', settle('Run commands, logins ... confirm pages on his machines yourself.'), 'n', rules)).steps).toEqual(['user_account'])
+    expect((await gateText('Sign in to the dashboard.', settle('logins, sudo, 2FA'), 'n', rules)).steps).toEqual(['user_account'])
+    expect((await gateText('Sign in to the dashboard.', settle(RULE), 'n', rules)).steps).toEqual([])
   })
 
   it('fixed words of a step no rule settles are held with no call; a failed call keeps the fixed words held', async () => {
@@ -150,10 +160,21 @@ describe('an ask\'s correction is checked against the card as he reads it now', 
     const { sent, checks } = await run({
       askNow: async () => worker.user_status!,
       letterText: async (id) => (id === 'lt-mwxacxce-c9ab9d' ? 'Subject: Restart\nThe full English DM ...\nButtons: [Send it (recommended)] [Skip]' : null),
-    }, '{"done":[{"n":1,"quote":"The full English DM"}]}')
+    }, '{"done":[{"n":1,"quote":"Buttons: [Send it (recommended)] [Skip]"}]}')
     expect(sent).toHaveLength(0)
     expect(checks[0]).toContain('The full English DM')
-    expect((await readDayEntries(vp.id, localDate(NOW)))![0].notSent).toBe('handled_since')
+    const e = (await readDayEntries(vp.id, localDate(NOW)))![0]
+    expect(e.notSent).toBe('handled_since')
+    // The record says what showed it done (review of 57063edbcd).
+    expect(e.handledQuote).toBe('Buttons: [Send it (recommended)] [Skip]')
+  })
+
+  it('a done item quoting under 20 characters of the card proves nothing: sent', async () => {
+    const { sent } = await run({
+      askNow: async () => worker.user_status!,
+      letterText: async () => 'Subject: Restart\nThe full English DM ...',
+    }, '{"done":[{"n":1,"quote":"The full English DM ..."}]}')
+    expect(sent).toHaveLength(1)
   })
 
   it('an ask that left Needs you since: not sent, no call', async () => {
@@ -193,6 +214,34 @@ describe('a held lesson that quotes him is rewritten to ask first, never dropped
     expect(rewrites).toHaveLength(1)
     expect((await readGuidance(vp.id)).map((l) => l.text)).toContain('Ask the person your rules name before turning an experimental switch on, a step only the user may allow, and do it only on their yes.')
     expect((await readReflectionState(vp.id, NOW)).stepHeld ?? []).toEqual([])
+  })
+
+  it('a lesson whose point is to act on his yes without asking again is never rewritten to ask first: held, and the record says why', async () => {
+    await seed('Go ahead with the same-batch posts in his name once he said yes to the batch, without asking about each.', 'I said yes to all of them')
+    await backfillDropped(vp, 'Marina VP', {
+      callModel: async (system) => (system === ASK_FIRST_SYSTEM ? 'CONFLICTS' : '{}'), replyLanguage: async () => null,
+      checkStep: async () => ({ steps: ['in_his_name'], why: 'a post as him', by: 'model' }),
+    }, NOW)
+    expect(await readGuidance(vp.id)).toEqual([])
+    expect((await readReflectionState(vp.id, NOW)).stepHeld?.length).toBe(1)
+    const md = await fs.readFile(path.join(path.dirname(reflectionDayJsonOf(vp.id, day)), `${day}.md`), 'utf-8').catch(() => '')
+    expect(md).toContain('would reverse')
+  })
+
+  it('a lesson whose own words say not to ask is held with no call; one that asks for his yes is rewritten (the 11-26 held lessons)', async () => {
+    let calls = 0
+    const call = async () => { calls++; return 'Ask the person your rules name first, and act only on their yes.' }
+    const pass = async () => ({ steps: [], why: '', by: 'model' as const })
+    // English, and Chinese as escapes: "decide it yourself and tell him after; no card for him" / "clean up yourself and report after".
+    for (const l of ['Run the check yourself and tell him after; do not ask about each one.', 'Decide it yourself, without asking.',
+      '\u81ea\u5df1\u51b3\u5b9a\u5e76\u4e8b\u540e\u544a\u8bc9\u4ed6\uff0c\u4e0d\u505a\u6210\u5f85\u4ed6\u70b9\u5934\u7684\u5361\u3002',
+      '\u7528\u5b8c\u7531\u81ea\u5df1\u6e05\u7406\u5e76\u4e8b\u540e\u62a5\u544a\u3002']) {
+      expect(await askFirstLesson(l, ['user_account'], call, pass, 'n')).toBe(ASK_FIRST_CONFLICTS)
+    }
+    expect(calls).toBe(0)
+    expect(await askFirstLesson('A prod write needs his approval: the card asks only whether he approves, and the agent does it after.', ['user_browser'], call, pass, 'n'))
+      .toBe('Ask the person your rules name first, and act only on their yes.')
+    expect(calls).toBe(1)
   })
 
   it('a lesson with no words of his is held as before', async () => {

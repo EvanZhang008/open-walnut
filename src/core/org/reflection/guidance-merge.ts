@@ -23,7 +23,7 @@ import { screenSkillWrite } from '../../memory-safety.js';
 import { addGuidance, appendDayNote, dayNoteSaid, readDayEntries, readGuidance, reflectionDayFileOf, replaceGuidanceLine, type GuidanceLine } from './records.js';
 import { localDate, readReflectionState, updateReflectionState, type ReflectionState } from './state.js';
 import { guidanceRoomLeft } from './team-guidance-hint.js';
-import { askFirstLesson, checkCached, checkStepOf, verdictOf, type StepCheck } from './step-gate.js';
+import { ASK_FIRST_CONFLICTS, askFirstLesson, checkCached, checkStepOf, verdictOf, type StepCheck } from './step-gate.js';
 
 /** Merge calls a node may spend a day (apart from the judge's budget), and the backfill's share of them. */
 export const MERGE_CALLS_PER_DAY_MAX = 12;
@@ -275,8 +275,16 @@ export async function backfillDropped(node: Task, nodeName: string, deps: MergeD
     let text = l.text;
     if (g.steps.length) {
       // Rewritten once: kept on the state, so a lesson that waits for room is not rewritten every pass.
-      const rewritten = !l.own ? null : state.askFirst?.[key]
+      const asked = !l.own ? null : state.askFirst?.[key]
         ?? await askFirstLesson(l.text, g.steps, deps.callModel, (t, id) => checkCached(id, t, check, nowMs), node.id);
+      // Its point is to act on his yes without asking again: "ask first" would turn it around. Held, and said
+      // in the day's record the node reads (review of 57063edbcd).
+      if (asked === ASK_FIRST_CONFLICTS) {
+        await updateReflectionState(node.id, (s) => { s.stepHeld = [...new Set([...(s.stepHeld ?? []), key])].slice(-1000); }, nowMs);
+        await appendDayNote(node.id, nodeName, date, `A dropped lesson with the user's own words was not taken up: the step check held it (${g.steps.join(', ')}), and its point is to act on his yes without asking again, which a rewrite to ask first would reverse. Write it yourself if his words allow the step; its words: "${l.text.slice(0, 300)}".`, nowMs).catch(() => {});
+        continue;
+      }
+      const rewritten = asked;
       if (rewritten && !state.askFirst?.[key]) {
         await updateReflectionState(node.id, (s) => { s.askFirst = { ...(s.askFirst ?? {}), [key]: rewritten }; }, nowMs);
         await appendDayNote(node.id, nodeName, date, `A dropped lesson with the user's own words was held by the step check (${g.steps.join(', ')}) and is taken up rewritten to ask first: "${rewritten}".`, nowMs).catch(() => {});

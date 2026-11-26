@@ -91,7 +91,13 @@ export const TAKEN_UP_SYSTEM = [
  * One call: the 1-based numbers of the corrections LATER shows were taken up, each with the words of LATER
  * that show it, checked word for word (one without them is still needed); null when it cannot tell.
  */
-export async function takenUp(corrections: readonly string[], later: readonly TurnText[], callModel: CallModel, nodeId: string): Promise<number[] | null> {
+/** A done item read off a card now quotes at least this much of it. */
+export const CARD_QUOTE_MIN = 20;
+
+export async function takenUp(
+  corrections: readonly string[], later: readonly TurnText[], callModel: CallModel, nodeId: string,
+  opts: { quoteMin?: number; quotes?: Map<number, string> } = {},
+): Promise<number[] | null> {
   if (!corrections.length || !later.length) return null;
   const laterText = renderTurns(later);
   let raw = '';
@@ -104,7 +110,9 @@ export async function takenUp(corrections: readonly string[], later: readonly Tu
     return a.done.flatMap((d) => {
       const n = (d as { n?: unknown })?.n;
       const quote = String((d as { quote?: unknown })?.quote ?? '').trim();
-      return Number.isInteger(n) && quote.length >= 8 && quoteHolds(quote, laterText) ? [n as number] : [];
+      if (!Number.isInteger(n) || quote.replace(/\.{3}|\u2026/g, '').trim().length < (opts.quoteMin ?? 8) || !quoteHolds(quote, laterText)) return [];
+      opts.quotes?.set(n as number, quote.slice(0, 300));
+      return [n as number];
     });
   } catch { return null; }
 }
@@ -159,15 +167,23 @@ async function cardNow(c: Candidate, deps: HandledDeps): Promise<TurnText[] | nu
  */
 export async function handledSince(
   c: Candidate, f: { correction: string; kind: FindingKind }, momentAt: string, nowMs: number, deps: HandledDeps, nodeId: string,
+  proof: { quote?: string } = {},
 ): Promise<'handled' | 'open' | 'unknown'> {
+  const quotes = new Map<number, string>();
+  const verdict = (done: number[] | null) => {
+    if (done === null) return 'unknown' as const;
+    if (!done.includes(1)) return 'open' as const;
+    proof.quote = quotes.get(1);
+    return 'handled' as const;
+  };
   const correction = f.correction;
   // An ask's correction is checked against the card as he reads it now, whatever its age.
   if (c.signal === 'needs_ask') {
     const now = await cardNow(c, deps);
     if (now === 'unknown') return 'unknown';
     if (now === null) return 'handled';
-    const done = await takenUp([correction], now, deps.callModel, nodeId);
-    return done === null ? 'unknown' : done.includes(1) ? 'handled' : 'open';
+    // The card itself is LATER here: a short quote of it proves nothing (review of 57063edbcd).
+    return verdict(await takenUp([correction], now, deps.callModel, nodeId, { quoteMin: CARD_QUOTE_MIN, quotes }));
   }
   // Only his words can be done since: an answer's language is about now.
   if (!c.messages.length || c.signal === 'wrong_language' || nowMs - Date.parse(momentAt) < STALE_MOMENT_MS) return 'open';
@@ -191,6 +207,5 @@ export async function handledSince(
     later = [...his, ...turns].sort((a, b) => a.at.localeCompare(b.at));
   }
   if (!later.length) return 'open';
-  const done = await takenUp([correction], later, deps.callModel, nodeId);
-  return done === null ? 'unknown' : done.includes(1) ? 'handled' : 'open';
+  return verdict(await takenUp([correction], later, deps.callModel, nodeId, { quotes }));
 }

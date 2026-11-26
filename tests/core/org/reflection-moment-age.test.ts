@@ -201,7 +201,7 @@ describe('review of e1b20d7bf1', () => {
     expect(sent).toHaveLength(1)
   })
 
-  it('a quote the judge read in an earlier message of the thread is dated by that message, and the correction says it is old', async () => {
+  it('a quote the judge read in an earlier message of the thread is dated by that message; a complaint of 10 minutes ago is still a new ask', async () => {
     // His message now holds no quote; the one four messages back (two days ago) does.
     const threads: ReflectionThread[] = [{ id: 'th-aa0001', title: 'Pier page', messages: [
       { id: 'tm-aa0000', at: iso(48 * 60), text: 'the reply under the card used to show', sid: 'sess-vp', answer: { text: BEFORE, at: iso(48 * 60 - 1) } },
@@ -211,7 +211,8 @@ describe('review of e1b20d7bf1', () => {
     await reflectForNode(vp, 'Marina VP', [vp], d)
     expect(sent).toHaveLength(1)
     expect(sent[0].text).toContain(`The user said this at ${iso(48 * 60).slice(0, 16).replace('T', ' ')} UTC (2 days ago)`)
-    expect(sent[0].text).toContain('not a new ask')
+    // Old is judged by when the moment ended (his complaint now), never by the words it quotes (review of 57063edbcd).
+    expect(sent[0].text).not.toContain('not a new ask')
   })
 
   it('outside a thread, his later words to the task are read too', async () => {

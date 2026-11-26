@@ -27,8 +27,24 @@ const STEP_WORDS: Record<GatedStep, string> = {
   cloud_account_write: 'change something in a cloud account or a cloud service\'s stage',
 };
 
+/**
+ * Words of a lesson whose point is not to ask (decide yourself, tell him after, no card for him), English and
+ * Chinese: such a lesson is never rewritten to ask first.
+ */
+const NO_ASK_RE = new RegExp([
+  String.raw`\bwithout asking\b`, String.raw`\b(?:do not|don't|never|not)\s+(?:ask|re-?ask)\b`, String.raw`\bdecide (?:it )?(?:yourself|on your own)\b`,
+  String.raw`\btell (?:him|her|them|the user) (?:after|afterwards)\b`, String.raw`\binstead of asking\b`,
+  // Chinese: not ask / no longer ask / decide oneself / tell him afterwards / not made into a card or question for him
+  '\u4e0d(?:\u518d|\u8981|\u5fc5|\u7528)?(?:\u95ee|\u8be2\u95ee|\u8bf7\u793a)', '\u81ea(?:\u5df1|\u884c)(?:\u5c31)?(?:\u5b9a|\u51b3\u5b9a|\u505a\u4e3b)',
+  '\u4e8b\u540e(?:\u4e00\u53e5\u8bdd)?(?:\u544a|\u8bf4|\u62a5)', '\u540e\u518d\u544a\u8bc9', '\u56de\u5934\u95ee', '\u4e0d(?:\u518d)?(?:\u6302|\u505a)(?:\u6210)?[^\u3002]{0,12}(?:\u5361|\u9009\u62e9\u9898|\u95ee\u9898)',
+].join('|'), 'i');
+
+/** The rewrite's answer when asking first would turn the lesson around. */
+export const ASK_FIRST_CONFLICTS = 'CONFLICTS';
+
 export const ASK_FIRST_SYSTEM = [
   'A lesson for AI agent sessions would have them take a step that is the user\'s to allow. Rewrite it so it keeps its point and the user\'s intent, but tells sessions to ask the person their rules name before that step and take it only on that person\'s explicit yes, never to take it on their own.',
+  `When any part of the lesson's point is NOT to ask (the user already said yes, to the group or once for all; act on his standing words; do not ask about each one; decide it yourself and tell him after; do not make it a card or a question for him), asking first would turn it around: answer only ${ASK_FIRST_CONFLICTS}.`,
   'Name the step in general words, never "his", "her" or "the user\'s" before browser, account, login or sign-in, and no tool names (say "a step only the user may allow"). One or two sentences, in the language of the lesson, general (no names of one case). Answer only the rewritten lesson.',
 ].join('\n');
 
@@ -37,11 +53,16 @@ export const ASK_FIRST_SYSTEM = [
  * (2026-11-26 audit: six lessons with his own words were held out of the queue). Null when the rewrite fails
  * or is held too.
  */
-export async function askFirstLesson(lesson: string, steps: readonly GatedStep[], callModel: CallModel, check: StepCheck, nodeId: string): Promise<string | null> {
+export async function askFirstLesson(lesson: string, steps: readonly GatedStep[], callModel: CallModel, check: StepCheck, nodeId: string): Promise<string | null | typeof ASK_FIRST_CONFLICTS> {
+  // Its own words say not to ask: no call (the 11-26 replay: a lesson "decide it yourself, do not make it a
+  // choice card" came back as "ask first" though the prompt names the case).
+  if (NO_ASK_RE.test(lesson)) return ASK_FIRST_CONFLICTS;
   let raw = '';
   try {
     raw = (await callModel(ASK_FIRST_SYSTEM, `STEP: ${stepWords(steps)}\nLESSON: ${lesson}`, nodeId)).trim();
   } catch { return null; }
+  // A lesson that says "do not ask again" is never written as "ask first" (review of 57063edbcd): held, said so.
+  if (/^\W*CONFLICTS\W*$/.test(raw)) return ASK_FIRST_CONFLICTS;
   const text = raw.replace(/^["'\s]+|["'\s]+$/g, '').slice(0, 400);
   if (!text || text.includes('{')) return null;
   const g = await check(text, nodeId).catch(() => null);
@@ -103,13 +124,21 @@ export function readGateAnswer(raw: string, userRules = ''): GateResult | null {
   return { steps: named.filter((st) => !settled.some((x) => x.step === st)), why, by: 'model', ...(settled.length ? { settled } : {}) };
 }
 
-/** The settled steps of an answer whose rule is in USER RULES word for word, and only of the steps a rule may settle. Pure. */
+/** A rule that settles a step is one unbroken passage of his rules, this long at least. */
+export const SETTLE_RULE_MIN = 30;
+/** And it is about signing in or the browser (review of 57063edbcd: any sentence of USER.md settled a step). */
+const SIGN_IN_RE = /\b(?:log ?ins?|logins?|sign[- ]?ins?|passwords?|2fa|mfa|credentials?|browsers?|chrome|accounts?)\b|\u767b\u5f55|\u6d4f\u89c8\u5668|\u8d26\u53f7|\u5bc6\u7801/i;
+
+/** The settled steps of an answer whose rule is one passage of USER RULES word for word about signing in, and only of the steps a rule may settle. Pure. */
 function settledOf(raw: unknown, userRules: string): Array<{ step: GatedStep; rule: string }> {
   if (!Array.isArray(raw) || !userRules.trim()) return [];
+  const src = normalizeForQuote(userRules);
   return raw.flatMap((x) => {
     const step = (x as { step?: unknown })?.step;
     const rule = String((x as { rule?: unknown })?.rule ?? '').trim();
-    return typeof step === 'string' && SETTLEABLE.has(step as GatedStep) && rule.length >= 12 && quoteHolds(rule, userRules) ? [{ step: step as GatedStep, rule: rule.slice(0, 300) }] : [];
+    const passage = normalizeForQuote(rule);
+    const holds = !/\.{3}|\u2026/.test(rule) && passage.length >= SETTLE_RULE_MIN && src.includes(passage) && SIGN_IN_RE.test(rule);
+    return typeof step === 'string' && SETTLEABLE.has(step as GatedStep) && holds ? [{ step: step as GatedStep, rule: rule.slice(0, 300) }] : [];
   });
 }
 

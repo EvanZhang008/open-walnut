@@ -7,7 +7,8 @@
  * line's words, same language, the injection screen) and by a second call that names the edits that lost
  * a point (a model rewriting many lines at once changed their meaning, guidance-align.ts). A refused edit
  * is named with its reason in the next call. The old lines are kept in the day record, the undo; the
- * waiting lessons then go in by the backfill. At most COMPACT_CALLS_PER_DAY_MAX calls a day.
+ * waiting lessons then go in by the backfill. At most COMPACT_CALLS_PER_DAY_MAX edit calls a day, each with one
+ * check call. A new line passes the step check as any line the reflection writes.
  */
 import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
@@ -15,6 +16,7 @@ import { normalizeForQuote } from './judge.js';
 import { screenSkillWrite } from '../../memory-safety.js';
 import { appendDayNote, mergeTwoGuidanceLines, readGuidance, replaceGuidanceLine, type GuidanceLine } from './records.js';
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
+import { checkCached, checkStepOf, verdictOf } from './step-gate.js';
 import { guidanceRoomLeft } from './team-guidance-hint.js';
 import { MERGED_LINE_MAX, kept, type MergeDeps } from './guidance-merge.js';
 
@@ -42,7 +44,7 @@ export const COMPACT_SYSTEM = [
 ].join('\n');
 
 export const COMPACT_CHECK_SYSTEM = [
-  'Each numbered edit below replaces one or two rules of a team\'s guidance with a shorter line. An edit LOSES when its new line drops or weakens any point, condition, exception, example, name or number of an old line, or changes what a rule tells a reader to do. Shorter wording of the same rule does not lose.',
+  'Each numbered edit below replaces one or two rules of a team\'s guidance with a shorter line. An edit LOSES when its new line drops or weakens any point, condition, exception, example, name or number of an old line, changes what a rule tells a reader to do, or puts two rules with no subject in common in one line (a reader looking for one would not find the other). Shorter wording of the same rule does not lose.',
   'Answer only JSON: {"lost": [<edit numbers>], "why": {"<edit number>": "<what was lost>"}}',
 ].join('\n');
 
@@ -110,8 +112,9 @@ function checkPrompt(edits: readonly CompactEdit[], lines: readonly GuidanceLine
  * Make room while lessons wait and little is left, up to today's calls. `waiting` says how many lessons
  * wait (guidance-merge.ts backfillDropped counts them). Answers the edits made.
  */
-export async function compactGuidance(node: Task, nodeName: string, waiting: number, deps: Pick<MergeDeps, 'callModel'>, nowMs: number): Promise<number> {
+export async function compactGuidance(node: Task, nodeName: string, waiting: number, deps: Pick<MergeDeps, 'callModel' | 'checkStep'>, nowMs: number): Promise<number> {
   if (!waiting) return 0;
+  const check = checkStepOf(deps);
   const date = localDate(nowMs);
   let made = 0;
   let refusedBefore: string[] = [];
@@ -160,16 +163,26 @@ export async function compactGuidance(node: Task, nodeName: string, waiting: num
       const old = e.lines.map((n) => lines[n - 1]!);
       // The first line's source and date stay: an edit is no new line of today (records.ts day cap counts dates).
       const next = { text: e.text, from: old[0]!.from, date: old[0]!.date };
+      // The new line is checked for a step as any line the reflection writes (review of 57063edbcd).
+      if (verdictOf(await checkCached(node.id, e.text, check, nowMs)) !== 'pass') {
+        refusedBefore.push(`- ${old.map((l) => `"${l.text.slice(0, 60)}..."`).join(' with ')}: the new line was held by the step check`);
+        continue;
+      }
+      const keys = old.map((l) => normalizeForQuote(l.text));
+      const into = normalizeForQuote(e.text);
+      // The new line is the reflection's before it is in the file: cut off between the two, the old lines
+      // are still in `written` and the file, never read as deleted by the user (review of 57063edbcd).
+      await updateReflectionState(node.id, (s) => { if (!s.written.includes(into)) s.written.push(into); }, nowMs);
       const done = old.length === 2
         ? await mergeTwoGuidanceLines(node.id, nodeName, old[0]!.text, old[1]!.text, next)
         : await replaceGuidanceLine(node.id, nodeName, old[0]!.text, next);
       if (done === 'gone') continue;
-      const keys = old.map((l) => normalizeForQuote(l.text));
-      const into = normalizeForQuote(e.text);
       await updateReflectionState(node.id, (s) => {
-        // The old lines leave `written` (never read as deleted by the user), the new one is the reflection's.
-        s.written = [...s.written.filter((k) => !keys.includes(k)), into];
-        s.mergedLessons = (s.mergedLessons ?? []).map((x) => (keys.includes(x.line) ? { ...x, line: into } : x));
+        // The old lines leave `written`, and say they live on in the new one: a user who deletes it later
+        // deletes them too, and they never come back as lessons (review of 57063edbcd).
+        s.written = [...s.written.filter((k) => !keys.includes(k) && k !== into), into];
+        const moved = (s.mergedLessons ?? []).map((x) => (keys.includes(x.line) ? { ...x, line: into } : x));
+        s.mergedLessons = [...moved.filter((x) => !keys.includes(x.lesson)), ...keys.map((k) => ({ lesson: k, line: into }))].slice(-500);
         if (s.compacts?.date === date) s.compacts = { ...s.compacts, freed: s.compacts.freed + 1 };
       }, nowMs);
       const was = old.map((l) => `"${l.text}"`).join(' and ');
