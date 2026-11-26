@@ -21,6 +21,10 @@ import { BUILTIN_SKILLS_DIR, WALNUT_HOME } from '../../src/constants.js'
 import { getOp, listOps, materializeBinding, executeOp } from '../../src/ops/index.js'
 import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
 import { PHASE_ORDER } from '../../src/core/phase.js'
+// Loaded with the file, never inside P4's beforeAll: the server's module graph alone took 29 s
+// to load cold on a loaded runner (2026-11-25), and inside the hook it ate the 30 s meant for
+// the start, so P4 failed on clean main.
+import { startServer, stopServer } from '../../src/web/server.js'
 
 describe('ops registry — shape contract', () => {
   it('every op has a stable snake_case name, title, description, and tags', () => {
@@ -306,7 +310,6 @@ describe('ops registry — parity with the live server (P4)', () => {
       path.resolve('src/data/skills/walnut-self-knowledge/SKILL.md'),
       path.join(BUILTIN_SKILLS_DIR, 'walnut-self-knowledge', 'SKILL.md'),
     )
-    const { startServer, stopServer } = await import('../../src/web/server.js')
     server = await startServer({ port: 0, dev: true })
     stop = stopServer
   }, 30_000)
