@@ -88,8 +88,16 @@ export function compareKept(before: HomeSnapshot, after: HomeSnapshot): KeptVerd
   }
 }
 
-/** One line for a log or a check: what broke the rule, then what was skipped and why. */
-export function describeKept(v: KeptVerdict, max = 8): string {
-  const list = (cs: HomeChange[]) => cs.length ? `${cs.slice(0, max).map((c) => `${c.how} ${c.path}${c.cls === 'rebuildable' ? '' : ` (${c.cls})`}`).join(', ')}${cs.length > max ? `, and ${cs.length - max} more` : ''}` : 'none'
-  return `${v.changed.length} kept path(s) changed${v.changed.length ? `: ${list(v.changed)}` : ''}; skipped as daemon state: ${list(v.skipped.daemonState)}; skipped as rebuildable: ${list(v.skipped.rebuildable)}`
+/**
+ * One line for a log or a check: what broke the rule, then what was skipped and why. With `home`, each kept path that
+ * changed also says when (its mtime, UTC): a later failure's evidence is matched against the logs by that time (the
+ * remote rehearsal's 2026-11-26 red, an empty tree object of unknown origin in a handed-over home).
+ */
+export function describeKept(v: KeptVerdict, max = 8, home?: string): string {
+  const when = (c: HomeChange) => {
+    if (!home || c.how === 'removed') return ''
+    try { return ` at ${fs.statSync(path.join(home, c.path)).mtime.toISOString().slice(11, 23)}` } catch { return '' }
+  }
+  const list = (cs: HomeChange[], stamp = false) => cs.length ? `${cs.slice(0, max).map((c) => `${c.how} ${c.path}${c.cls === 'rebuildable' ? '' : ` (${c.cls})`}${stamp ? when(c) : ''}`).join(', ')}${cs.length > max ? `, and ${cs.length - max} more` : ''}` : 'none'
+  return `${v.changed.length} kept path(s) changed${v.changed.length ? `: ${list(v.changed, true)}` : ''}; skipped as daemon state: ${list(v.skipped.daemonState)}; skipped as rebuildable: ${list(v.skipped.rebuildable)}`
 }

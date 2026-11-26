@@ -25,15 +25,17 @@ import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
 import { handOffLine } from '../../src/core/leader/switch/candidate-command.js'
 import { machineIdFile } from '../../src/core/machine-id.js'
 import { RELAY_BEGIN_PATH, RELAY_JOB_PATH, relayMachine, leaderRelaySocketPath, relayRequest, relaySocketOpener } from '../../src/core/leader/switch/leader-relay.js'
+import { RELAY_SOCKET_MAX_BYTES } from '../../src/lib/leader-relay-names.js'
 import { newSwitchId } from '../../src/core/leader/switch/ticket.js'
 import { retakeAfterRestartMs } from '../../src/core/leader/switch/runtime.js'
 import { DEFAULT_PERMIT_PARAMS, type PermitParams } from '../../src/core/leader/permit/types.js'
+import { witnessHoldMs } from '../../src/core/leader/permit/rules.js'
 import { computeExpectedDaemonVersion } from '../../src/providers/daemon-version-check.js'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const last = (out: string, n = 3) => out.trim().split('\n').slice(-n).join(' | ')
 
-type Held = { number: number; holder: string; kind: string; to?: string } | null
+type Held = { number: number; holder: string; kind: string; to?: string; by?: string; nonce?: string } | null
 function recordAt(root: string, walnutId: string, id: string): Held {
   try { return (JSON.parse(fs.readFileSync(path.join(witnessDir(root, walnutId, id), 'permit-record.json'), 'utf8')) as { held: Held }).held } catch { return null }
 }
@@ -172,7 +174,7 @@ async function checkHandedOverByHand(c: Checks, w: RemoteWorld, m: Machine, lead
     if (offline) { fs.renameSync(`${own}.off`, own); for (const id of ['w-a', 'w-b', 'w-k'] as const) w.witnessDown(id, false) }
   }
   const kept = compareKept(before, await snapshotHome(m.home))
-  c.add(`${label}: its home is as before (leader data and machine data, by the manifest's classes)`, kept.ok, describeKept(kept))
+  c.add(`${label}: its home is as before (leader data and machine data, by the manifest's classes)`, kept.ok, describeKept(kept, 8, m.home))
 }
 
 /** A turn of a session: started on `on` (default the third host H; `local`: the leader's own daemon), or a message to it. */
@@ -234,6 +236,11 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
   const roles: Roles = { leader: w.a, other: w.b }
   const want = (name: string) => !opts.only?.length || opts.only.includes(name)
   try {
+    // A work dir too deep for the leader relay's unix socket: every machine's service refuses to serve the relay (its
+    // `.sock.why` says so), and the forwarded scenario fails for that alone (the lead's 2026-11-26 run, 177 bytes).
+    const deep = (['a', 'b', 'h'] as const).map((k) => leaderRelaySocketPath(w.daemons[k].dir, 'any')).filter((p) => Buffer.byteLength(p) > RELAY_SOCKET_MAX_BYTES)
+    if (!c.add(`boot: the work dir is short enough for the leader relay's socket (${RELAY_SOCKET_MAX_BYTES} bytes at most)`, deep.length === 0,
+      deep.length ? `${Buffer.byteLength(deep[0]!)} bytes: ${deep[0]}; use a shorter work dir` : '')) return { checks: c, times, inProcessDaemon }
     if (want('flag-off')) await flagOff(c, w)
     // ---- boot: A leads on the three witnesses (init sets them up as an operator runs it) ----
     const started = await w.side(w.a).startServer('leader', 300_000)
@@ -259,11 +266,15 @@ export async function rehearseRemote(root: string, print: (c: Check) => void, op
     const ctx: Ctx = { c, w, roles, carried: { tasks: [...s.tasks], notes: [...s.notes], pluginFiles: [...s.pluginFiles] }, times, log }
     // The command run on B while B is no host of A yet (no host service of this Walnut there): refused, naming A.
     if (want('forwarded')) await forwardNoLink(ctx)
-    if (want('main')) await mainScenario(c, w, roles, s, times, log, setting)
+    if (want('main')) {
+      await mainScenario(c, w, roles, s, times, log, setting)
+      await everyWitnessHoldsLeader(ctx, 'main', walnutId)
+    }
     for (const [name, run] of SCENARIOS) {
       if (!want(name)) continue
       log(`--- ${name}: ${roles.leader.id} leads, ${roles.other.id} holds its copy`)
       await run(ctx).catch((err: unknown) => { c.add(`${name}: ran to its end`, false, err instanceof Error ? err.stack ?? err.message : String(err)) })
+      await everyWitnessHoldsLeader(ctx, name, walnutId)
     }
     return { checks: c, times, inProcessDaemon }
   } catch (err) {
@@ -675,7 +686,7 @@ async function splitAfterHandover(x: Ctx): Promise<void> {
   await oneLeader(x, 'split after the handover', L)
   const after = fs.existsSync(O.home) ? await snapshotHome(O.home) : null
   const kept = before && after ? compareKept(before, after) : null
-  c.add(`split after the handover: ${O.id} changed nothing (its home as before)`, before ? !!kept?.ok : !fs.existsSync(O.home), kept ? describeKept(kept) : (fs.existsSync(O.home) ? 'a home appeared' : 'no home made'))
+  c.add(`split after the handover: ${O.id} changed nothing (its home as before)`, before ? !!kept?.ok : !fs.existsSync(O.home), kept ? describeKept(kept, 8, O.home) : (fs.existsSync(O.home) ? 'a home appeared' : 'no home made'))
   await checkCarried(c, w, L, L, x.carried, 'split after the handover')
 }
 
@@ -998,6 +1009,32 @@ async function switchWhenCaughtUp(x: Ctx, label: string, tries = 10): Promise<{ 
     x.log(`${label}: refused (not caught up), trying again in 60 s`)
     await sleep(60_000)
   }
+}
+
+/**
+ * After a scenario, every witness holds the leader's own record again (one record number, give or take one, of one
+ * process of the leader, no handover) within a record's hold and two renew periods. A witness the leader's records
+ * missed (it refused the grant while it still held a live record, as the old leader's own witness does after a failed
+ * trial: it restarts with the server and counts the handover's hold from then; or it was out of reach) takes no renew
+ * once that record ran out, only the holder's grant (client.ts `behind`). Without that grant the leader ran on two
+ * witnesses of three from then on: the 2026-11-26 standby-behind red, caused by trial-fails and seen only in
+ * standby-behind, three scenarios later. Checked here, the scenario that leaves a witness behind is the one that fails.
+ */
+async function everyWitnessHoldsLeader(x: Ctx, scenario: string, walnutId: string): Promise<void> {
+  const { c, w, roles } = x
+  const L = roles.leader
+  const ids = ['w-a', 'w-b', 'w-k'] as const
+  const read = () => ids.map((id) => recordAt(w.witnessRoot[id], walnutId, id))
+  const same = (held: Held[]) => held.every((h) => h?.holder === L.id && h.kind !== 'handover' && h.nonce === held[0]?.nonce)
+    && Math.max(...held.map((h) => h!.number)) - Math.min(...held.map((h) => h!.number)) <= 1
+  // A witness back with a live record of another process of the leader (a restart, a failed trial) takes the grant only
+  // once that record ran out there: up to its hold, then a renew round or two.
+  const params = readPermitParams(L)
+  const within = witnessHoldMs(params) + 2 * params.renewEveryMs + 10_000
+  const ok = await waitFor(`every witness to hold ${L.id}`, async () => same(read()), within, 1_000).then(() => true).catch(() => false)
+  const held = read()
+  c.add(`${scenario}: afterwards every witness holds ${L.id}'s own record (one process, within ${(within / 1000).toFixed(0)} s)`, ok,
+    held.map((h, i) => `${ids[i]} #${h?.number} ${h?.kind} of ${h?.holder} by ${h?.by}/${h?.nonce}`).join('; '))
 }
 
 /** The downtime over the copy link unslowed and at 20 Mbit/s (`slow {bytesPerSec: 2_500_000}`), and the time until every host is connected. */

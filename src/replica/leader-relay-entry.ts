@@ -18,10 +18,7 @@ import net from 'node:net'
 import path from 'node:path'
 import type { Duplex } from 'node:stream'
 import { spliceStream } from '../lib/link-stream.js'
-import { leaderRelayWhyPath } from '../lib/leader-relay-names.js'
-
-/** A unix socket path's limit (sun_path), as for the host call entry. */
-const SOCKET_MAX_BYTES = 103
+import { RELAY_SOCKET_MAX_BYTES as SOCKET_MAX_BYTES, leaderRelayWhyPath } from '../lib/leader-relay-names.js'
 
 export interface LeaderRelayDeps {
   /** One stream to the leader over the follower link, with the relay purpose (front.ts link.openStream). */

@@ -7,6 +7,9 @@
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 
+/** A unix socket path's limit (sun_path): a host's service refuses to serve the relay on a longer one. */
+export const RELAY_SOCKET_MAX_BYTES = 103
+
 /** The purpose of a relay stream: the leader takes only these into its relay door (never its tunnel port). */
 export const LEADER_RELAY_PURPOSE = 'leader-relay'
 /** Under the host daemon's dir, beside `host-call/`. */

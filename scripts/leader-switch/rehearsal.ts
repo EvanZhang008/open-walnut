@@ -235,7 +235,7 @@ export async function checkStandby(c: Checks, w: World, m: Machine, leader: stri
     await s.stop()
   }
   const kept = compareKept(before, await snapshotHome(m.home))
-  c.add(`${label}: its home is as before (no path of the leader's data or this machine's data changed, by the manifest's classes)`, kept.ok, describeKept(kept))
+  c.add(`${label}: its home is as before (no path of the leader's data or this machine's data changed, by the manifest's classes)`, kept.ok, describeKept(kept, 8, m.home))
 }
 
 /** The main scenario: switch under load, every check, the classic mistake, switch back. */
