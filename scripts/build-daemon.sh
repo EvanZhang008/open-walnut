@@ -323,6 +323,7 @@ SOURCES=(
   src/providers/trigger-unsent-checks.ts
   src/providers/claude-session-argv.ts
   src/providers/turn-snapshot-core.ts
+  src/lib/leader-home-gate.ts
   src/providers/turn-guard-core.ts
   src/providers/git-attribution-core.ts
   src/providers/git-commit-core.ts

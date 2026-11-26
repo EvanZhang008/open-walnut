@@ -431,6 +431,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/claude-session-argv.ts',
   // Per-turn snapshots and the rewind guard: same import-or-inline rule.
   'src/providers/turn-snapshot-core.ts',
+  // The leader-switch gate the git runners check: same import-or-inline rule.
+  'src/lib/leader-home-gate.ts',
   'src/providers/turn-guard-core.ts',
   // Session commit (git.commitPlan / commitStart / commitJob): same import-or-inline rule.
   'src/providers/git-attribution-core.ts',
