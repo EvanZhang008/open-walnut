@@ -421,7 +421,8 @@ async function personInputAtOf(task: Task): Promise<string | undefined> {
  */
 export async function refuseSameAsk(
   taskId: string | undefined, text: string | undefined, what: AskOutlet,
-  input?: { same_ask_reason?: unknown; sameAskReason?: unknown } | null,
+  /** `supersedes`: the asks this one replaces (thread-supersede.ts); the meaning check never reads them. */
+  input?: { same_ask_reason?: unknown; sameAskReason?: unknown; supersedes?: unknown } | null,
   /** The parts of the ask beside `text` (a letter's numbered items), checked against what was answered. */
   parts: readonly string[] = [],
   /** The decision the ask carries as it will be stored (a report: ask-decision.ts), so an answer to it
@@ -447,7 +448,7 @@ export async function refuseSameAsk(
     // Not the ask this task already shows, written again: it was judged when it was new, and an ask
     // put up after it must not take it from the one that asked first.
     if (!hit && !reason && !restatesStanding(everything.find((t) => t.id === taskId), text, decision)) {
-      hit = await sameDecisionByMeaning(taskId, meaningWords ?? matterText, everything, tree.letters ?? []);
+      hit = await sameDecisionByMeaning(taskId, meaningWords ?? matterText, everything, tree.letters ?? [], input?.supersedes);
     }
   } catch (err) {
     log.task.debug('same-ask: tree unreadable, ask let through', { taskId, error: err instanceof Error ? err.message : String(err) });
@@ -458,7 +459,7 @@ export async function refuseSameAsk(
     return;
   }
   if (hit) {
-    log.task.info('same-ask: refused', { taskId, sameAsTaskId: hit.taskId, where: hit.where, what });
+    log.task.info('same-ask: refused', { taskId, sameAsTaskId: hit.taskId, where: hit.where, what, byMeaning: !!hit.byMeaning });
     throw new SameAskError(sameAskMessage(hit, what), hit);
   }
   // Answered already for the user by a lead, VP or Main: the whole ask, or one part of it again.
@@ -495,10 +496,14 @@ function restatesStanding(self: Task | undefined, text: string, decision?: Answe
  * it) and the cards waiting on him on the Threads above, judged once by the fast model. Null when
  * the experiment is off or it finds none. Only refuseSameAsk calls it (same-ask-paths-guard.test.ts).
  */
-async function sameDecisionByMeaning(taskId: string, words: string, everything: Task[], letters: readonly OpenLetter[]): Promise<TreeAsk | null> {
+async function sameDecisionByMeaning(taskId: string, words: string, everything: Task[], letters: readonly OpenLetter[], supersedes?: unknown): Promise<TreeAsk | null> {
   const { meaningCheckOn, sameAskByMeaning, treeThreadAsksOf } = await import('./same-ask-meaning.js');
   if (!(await meaningCheckOn())) return null;
-  const asks = [...treeAsksOf(taskId, everything, letters, false), ...await treeThreadAsksOf(taskId, everything)];
+  // An ask the write says it replaces (supersedes) is the same decision on purpose: the write's own
+  // rules settle what becomes of it (thread-supersede.ts), so it is never judged against it.
+  const replaced = new Set(Array.isArray(supersedes) ? supersedes.filter((x): x is string => typeof x === 'string') : []);
+  const asks = [...treeAsksOf(taskId, everything, letters, false), ...await treeThreadAsksOf(taskId, everything)]
+    .filter((a) => !(a.threadId && replaced.has(a.threadId)) && !(a.letterId && replaced.has(a.letterId)));
   return sameAskByMeaning(taskId, words, asks);
 }
 

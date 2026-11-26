@@ -286,7 +286,7 @@ export async function fileThreadMessage(taskId: string, input: FileMessageInput,
  * them (same-ask.ts): 409 `same_ask` with that task named, unless same_ask_reason says why. The user's
  * own writes are never asked. Checked before the write: a race only lets one through.
  */
-async function refuseSameAskThread(taskId: string, text: string | undefined, by: ThreadWriter, input: { same_ask_reason?: unknown }, card: ReadonlyArray<unknown> = []): Promise<void> {
+async function refuseSameAskThread(taskId: string, text: string | undefined, by: ThreadWriter, input: { same_ask_reason?: unknown; supersedes?: unknown }, card: ReadonlyArray<unknown> = []): Promise<void> {
   if (by === 'human') return;
   const { refuseSameAsk } = await import('../same-ask-tree.js');
   const { SameAskError } = await import('../same-ask.js');

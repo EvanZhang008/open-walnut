@@ -233,6 +233,38 @@ describe('the reverse order: the lead\'s card asks first, then a task below it a
   })
 })
 
+// Review 2026-11-26: a task taking over its lead's card with supersedes was refused by the meaning
+// check, with words telling it to keep its thread working: the opposite of what it was doing.
+describe('an ask the write replaces (supersedes) is never judged against it', () => {
+  let card = ''
+  let pump: { id: string; sid: string }
+
+  beforeAll(async () => {
+    sameAs(null)
+    pump = await task('Orchard irrigation pump')
+    await updateTaskRaw(pump.id, { threads_on: true } as never, { source: 'test' })
+    card = await answeredCard('Irrigation pump', 'The pump is on its last season')
+    const moved = await call('PATCH', `/api/v1/tasks/${leadId}/threads/${card}`, { state: 'needs', ask: 'Shall we replace the old irrigation pump before spring?', reply: 'The pump leaks at the seal.', add_tasks: [pump.id], user_kind: 'spending', user_kind_why: 'It buys a pump', ...SEPARATE }, leadSid)
+    expect(moved.status, await moved.clone().text()).toBe(200)
+  })
+
+  const open = (more: Record<string, unknown> = {}) => call('POST', `/api/v1/tasks/${pump.id}/threads/open`, { title: 'New pump for the watering lines', text: 'Please approve buying a new pump for the watering lines this winter.', from: 'task', user_kind: 'spending', user_kind_why: 'It buys a pump', ...more }, pump.sid)
+
+  it('without supersedes the model says SAME and the card is refused', async () => {
+    sameAs('old irrigation pump')
+    const res = await open()
+    expect(res.status).toBe(409)
+    expect(JSON.stringify(await res.json())).toContain('same_ask')
+  })
+
+  it('naming the lead\'s card in supersedes: the model never reads that card, and the card is written as with the switch off', async () => {
+    sameAs('old irrigation pump')
+    const res = await open({ supersedes: [card] })
+    expect(res.status, await res.clone().text()).toBe(201)
+    expect(judged.join('\n')).not.toContain('old irrigation pump')
+  })
+})
+
 describe('a decision letter and a Board choice', () => {
   let sibling: { id: string; sid: string }
   beforeAll(async () => { sibling = await task('Share feature store listing') })
