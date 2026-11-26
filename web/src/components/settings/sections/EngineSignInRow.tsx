@@ -15,6 +15,7 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { NoticeStatus } from '@/components/common/NoticeCard';
 import { HostCommands } from '@/components/hosts/HostCommands';
 import { log } from '@/utils/log';
+import { engineSetupChanged } from '@/hooks/useHostEngineAvailability';
 import {
   cancelEngineSignIn, engineInstallStatus, engineSignInStatus, finishEngineSignIn, signOutEngine, startEngineInstall, startEngineSignIn,
   type EngineSignInLink, type EngineSignInStatus,
@@ -117,6 +118,7 @@ export function EngineSignInRow({ engine, status, onStatus, onUseKey, request }:
         if (!alive.current) return;
         if (st.state === 'running') { timer = setTimeout(() => void tick(), INSTALL_POLL_MS); return; }
         log.info('settings', 'engine install ended', { ...ctx, state: st.state, exitCode: st.exitCode ?? null });
+        engineSetupChanged(host);
         const s = await engineSignInStatus(engine, host, true).catch(() => null);
         if (!alive.current) return;
         if (st.state === 'failed') setError(`The install on ${hostName} failed${st.error ? `: ${st.error}` : st.exitCode != null ? ` (exit ${st.exitCode})` : ''}.`);
