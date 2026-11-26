@@ -41,7 +41,7 @@ import { getQueue, markNextProcessing, removeProcessed, sendMessageToSession } f
 import { prepareHintedSend } from '../../src/core/hints/hint-send.js'
 import { threadsKeptNow } from '../../src/core/org/threads-kept.js'
 import { replyTagNow } from '../../src/core/org/reply-card-switch.js'
-import { readThreads, writeThreadsFor } from '../../src/core/org/threads-store.js'
+import { patchThread, readThreads, writeThreadsFor } from '../../src/core/org/threads-store.js'
 import { applyReplyCards, holdCards, noteStopCheck, resetHeldCards } from '../../src/core/org/reply-card.js'
 import { cardStopEnd, MAX_CARD_NUDGES, resetCardNudges } from '../../src/core/org/reply-card-stop.js'
 import { resetCarded } from '../../src/core/sessions/status-thread-carded.js'
@@ -374,5 +374,26 @@ describe('the card lines at a turn\'s end', () => {
     await threadQuestionFor(task)
     expect(linesThatAsked(taskId).has(FENCE)).toBe(false)
     expect(linesThatAsked(taskId).has(GONE)).toBe(false)
+  })
+
+  it('a line that says a decision still before him is over is sent back with the call that settles it, and writes nothing', async () => {
+    fresh()
+    await patchThread(taskId, GATE, { state: 'needs', ask: 'Which way should the gate swing?', options: [{ label: 'Inward', recommended: true }, { label: 'Outward' }], user_kind: 'user_own', user_kind_why: 'he asked to pick the way his own gate swings' }, `task:${taskId}`)
+    const held = await stop(`The gate swings inward now.\n\n${cardTagLine(GATE, 'done')}`)
+    expect(held.decision).toBe('block')
+    expect(held.reason).toContain(`${GATE} waits on his decision, and a state line does not end that: it was not written.`)
+    expect(held.reason).toContain(`thread_update {"id":"${GATE}","state":"answered","reply":`)
+    expect(held.reason?.endsWith(cardStopEnd(1, 1))).toBe(true)
+    expect(await threadOf(GATE)).toMatchObject({ state: 'needs' })
+    // The turn's end writes nothing for it either, and names it.
+    const end = await applyReplyCards({ task: await getTask(taskId) as Task, sessionId: SID, reply: `The gate swings inward now.\n\n${cardTagLine(GATE, 'done')}` })
+    expect(end.refused).toEqual([{ thread: GATE, reason: `${GATE} waits on his decision: a state line does not end it` }])
+    expect(await threadOf(GATE)).toMatchObject({ state: 'needs' })
+    // Working or waiting says nothing new of a thread that waits on him: no hold.
+    fresh()
+    expect(JSON.stringify(await stop(`x\n\n${cardTagLine(GATE, 'waiting')}`))).not.toContain('waits on his decision')
+    resetHeldCards()
+    // The call it names settles it.
+    expect(await patchThread(taskId, GATE, { state: 'answered', reply: 'You chose inward; the gate is hung.' }, `task:${taskId}`)).toMatchObject({ state: 'answered' })
   })
 })

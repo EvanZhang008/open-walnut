@@ -91,7 +91,8 @@ export function threadQuestionOf(file: ThreadsFile, task: Pick<Task, 'org_role'>
   const marked = markAsks(listed, mem.dropped);
   const org = !!task.org_role;
   // Listed by need first, so the 12 the question names are the ones that need a line (status-thread-pick.ts).
-  if (!mem.remind) return threadQuestionBlock(byNeed(marked, now, mem.last), langName, { org, his });
+  const spoken = carded.map((t) => ({ id: t.id, title: t.title }));
+  if (!mem.remind) return threadQuestionBlock(byNeed(marked, now, mem.last), langName, { org, his, spoken });
   // threads_reminder: the threads that need a line now, and every open one at a reminder.
   const rec = mem.remind.rec;
   const reminded = reminderDue(rec, { sid: mem.remind.sid, now, compactedAt: mem.remind.compactedAt, overdueAt: overdueTimes(open, now) });
@@ -100,8 +101,8 @@ export function threadQuestionOf(file: ThreadsFile, task: Pick<Task, 'org_role'>
   const skipSince = rec && (reminded === 'turns' || reminded === 'overdue') ? rec.at : undefined;
   const { picked, omitted } = pickForReminder(marked, !!reminded, now, mem.last, skipSince);
   // Nothing needs a line: the no-thread block (a task keeps its new-subject line, a node has none).
-  if (!reminded && !picked.length) return { ...threadQuestionBlock([], langName, { org, his: [] }), reminded };
-  return { ...threadQuestionBlock(byNeed(picked, now, mem.last, { rotate: true }), langName, { org, his, omitted }), reminded };
+  if (!reminded && !picked.length) return { ...threadQuestionBlock([], langName, { org, his: [], spoken }), reminded };
+  return { ...threadQuestionBlock(byNeed(picked, now, mem.last, { rotate: true }), langName, { org, his, omitted, spoken }), reminded };
 }
 
 /**

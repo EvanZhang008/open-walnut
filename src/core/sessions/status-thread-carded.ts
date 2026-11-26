@@ -93,3 +93,22 @@ export function resetCarded(): void {
   carded.clear();
   writing.clear();
 }
+
+/** An open thread the reply's card line spoke for this turn: named in the question, asked no line. */
+export interface SpokenThread { id: string; title: string }
+/** How many of them the question names. */
+export const SPOKEN_SHOWN_MAX = 6;
+
+/**
+ * The threads the reply's card lines already keep, named in the status question so its "none of
+ * these threads covers" counts them (2026-11-26, a live trial: a job's thread had its working line
+ * in the reply, the question left it out, and the session opened a second thread for the same job).
+ * `shown`: a title as the question shows it. '' for none. Pure.
+ */
+export function spokenPart(spoken: readonly SpokenThread[], shown: (title: string) => string): string {
+  if (!spoken.length) return '';
+  // By title alone: the state stored now may be older than the line's write still on its way.
+  const named = spoken.slice(0, SPOKEN_SHOWN_MAX).map((t) => `"${shown(t.title)}"`);
+  const more = spoken.length - named.length;
+  return `Open threads your reply's card lines already keep (no line here): ${named.join('; ')}${more > 0 ? `; and ${more} more` : ''}.`;
+}

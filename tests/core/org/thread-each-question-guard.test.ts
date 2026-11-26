@@ -19,7 +19,8 @@ const E2E = 'tests/e2e/thread-each-question.test.ts'
 
 /** Each file that moves a thread or a message of his into another thread: its calls, and the test that proves each refuses his question. */
 const MOVERS: Record<string, { calls: number; tests: Array<[file: string, name: string]> }> = {
-  'src/core/org/threads-model.ts': { calls: 1, tests: [[UNIT, 'splitMessageInto: his question that opened its thread is not moved into another, a remark is']] },
+  // carryHisWords (his words that close or combine a thread go with it) moves only a message that asks nothing.
+  'src/core/org/threads-model.ts': { calls: 3, tests: [[UNIT, 'splitMessageInto: his question that opened its thread is not moved into another, a remark is'], ['tests/core/org/thread-close-words.test.ts', 'a message that also asks something keeps its thread: its question is answered there']] },
   'src/core/sessions/status-thread-title.ts': { calls: 1, tests: [[UNIT, 'settleHeldTitles: the status answer\'s merge of his question is refused and its title stays held'], [E2E, 'flag on: two questions, two threads; the status answer\'s merge of the second is refused and its title is asked again']] },
   'src/core/org/threads-store.ts': { calls: 2, tests: [[E2E, 'a node\'s thread_update merge_into and thread_split merge_into of his question are refused; his own merge goes through']] },
   'src/core/org/thread-tree-merge.ts': { calls: 1, tests: [[E2E, 'merge_into a thread on a task below refuses his question and moves nothing']] },

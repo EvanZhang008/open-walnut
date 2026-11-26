@@ -35,7 +35,7 @@
 import { cardTagLine, CARD_TAG_FORM, readCardTags, type CardTag } from '../../lib/card-tag.js';
 import { asksThreads } from '../sessions/status-threads.js';
 import { clause } from '../../utils/format.js';
-import { holdCards, noteStopCheck, noteUnreadDecisions, queuedThreads, readBefore } from './reply-card.js';
+import { endsDecision, holdCards, noteStopCheck, noteUnreadDecisions, queuedThreads, readBefore } from './reply-card.js';
 import { applyNeedsCard, CardLineLacks, needsKey, notOpenReason, upAlready, type CardLack } from './reply-card-decision.js';
 import { noteLineAsks } from '../sessions/status-thread-asked.js';
 import { replyTagOn } from './reply-card-switch.js';
@@ -99,21 +99,31 @@ export const CARD_STOP_LINES = {
   needs: (thread: string, why: string) => `the decision on ${thread} was not put to him. ${period(why)}${/\buser_kind\b/.test(why) ? ' In a card line user_kind is kind="..." and user_kind_why is why="...".' : ''} Its card line again, with that fixed.`,
   /** A decision the store would refuse because he wrote on the thread since it last waited, or it asked before (reply-card-decision.ts CardLineLacks): every attribute it lacks. */
   returned: (thread: string, lacks: readonly CardLack[]) => `the decision on ${thread} was not put to him: ${lacks.includes('since') ? 'he wrote on it since it last waited on him' : 'it asked him a decision before'}. Its line again with ${lacks.map((l) => RETURN_ATTRIBUTES[l]).join(' and ')}.`,
+  /** A state line for a thread that waits on his decision: a line never ends one (reply-card.ts cardLines leaves it out). */
+  waits: (thread: string) => `${thread} waits on his decision, and a state line does not end that: it was not written. If he has decided it or it needs him no more, settle it with thread_update {"id":"${thread}","state":"answered","reply":"<what he decided, or why it needs him no more, and what came of it>"}; if it still waits on him, give it no line.`,
   /** His message went to a thread the reply gave no line. */
   missing: (t: Pick<OrgThread, 'id' | 'title'>) => `your reply holds no card line for thread ${t.id} ${JSON.stringify(t.title)}, where his message went: ${cardTagLine(t.id)}, with its state (working, waiting, answered or done).`,
 } as const;
 export type CardStopKind = keyof typeof CARD_STOP_LINES;
 
-/** How every reason ends: the lines and nothing else, since anything else the session adds is a chat message to him. */
-export function cardStopEnd(count: number): string {
+/** The kinds that ask for a call, not a line: what a line cannot carry (the end of a decision he was asked). */
+export const CARD_STOP_CALLS: readonly CardStopKind[] = ['waits'];
+
+/**
+ * How every reason ends: the lines and nothing else, since anything else the session adds is a chat
+ * message to him. `calls`: how many of the `count` things ask for a call instead of a line.
+ */
+export function cardStopEnd(count: number, calls = 0): string {
+  if (calls >= count) return 'Do that now and write no words about it: anything you add is shown to him as chat.';
+  if (calls) return 'Write only the lines asked for now, each on a line of its own, do what the rest name, and no other words about them: anything else you add is shown to him as chat.';
   return count === 1
     ? 'Write only this line now, and no other words about it: anything else you add is shown to him as chat.'
     : 'Write only these lines now, each on a line of its own, and no other words about them: anything else you add is shown to him as chat.';
 }
 
 /** The block reason for these things, one plain line each, ending with what to write. Pure. */
-export function cardStopReason(lines: readonly string[]): string {
-  const end = cardStopEnd(lines.length);
+export function cardStopReason(lines: readonly string[], calls = 0): string {
+  const end = cardStopEnd(lines.length, calls);
   return lines.length === 1 ? `Walnut: ${lines[0]} ${end}` : `Walnut, on the card lines of your reply:\n${lines.map((l) => `- ${l}`).join('\n')}\n${end}`;
 }
 
@@ -138,6 +148,11 @@ async function check(sid: string, tail: string, nowMs: number, turn: { gaveUp: b
     named.add(c.thread);
     const gone = notOpenReason(file, c.thread);
     if (gone) { things.push({ key: `gone:${c.thread}`, kind: 'gone', thread: c.thread, line: CARD_STOP_LINES.gone(gone) }); continue; }
+    // A line that says a decision still before him is over: never written, and never dropped unsaid.
+    if (!c.merge && endsDecision(c.state) && file.threads.find((t) => t.id === c.thread)?.state === 'needs') {
+      things.push({ key: `waits:${c.thread}`, kind: 'waits', thread: c.thread, line: CARD_STOP_LINES.waits(c.thread) });
+      continue;
+    }
     // A merge inside the task's own Threads is tried on a copy; one across its tree is judged where it is written.
     if (c.merge && file.threads.some((t) => t.id === c.merge)) {
       try { mergeThreads(file, c.thread, c.merge, `task:${taskId}`, new Date(nowMs).toISOString()); } catch (err) {
@@ -178,7 +193,7 @@ async function check(sid: string, tail: string, nowMs: number, turn: { gaveUp: b
   for (const x of due) nudged.set(`${taskId}:${x.key}`, (nudged.get(`${taskId}:${x.key}`) ?? 0) + 1);
   // A long-running server: forget the oldest names.
   while (nudged.size > 2000) nudged.delete(nudged.keys().next().value as string);
-  return { reason: due.length ? cardStopReason(due.map((x) => x.line)) : null, threads: [...new Set(due.flatMap((x) => (x.thread ? [x.thread] : [])))] };
+  return { reason: due.length ? cardStopReason(due.map((x) => x.line), due.filter((x) => CARD_STOP_CALLS.includes(x.kind)).length) : null, threads: [...new Set(due.flatMap((x) => (x.thread ? [x.thread] : [])))] };
 }
 
 /**

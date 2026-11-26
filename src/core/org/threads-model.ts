@@ -1094,6 +1094,46 @@ export function closeAskOf(t: OrgThread, words: string | undefined): ThreadMessa
   return t.messages.find((m) => quotes(m.text, quote) && afterAllSaid(t, m)) ?? null;
 }
 
+/**
+ * His words about a thread go with it (2026-11-26, a trial with a real session, 7 runs of 7: he wrote
+ * "that first one is done, close it"; the thread he meant was closed, and his message, filed right
+ * after another one and then taken out as a subject of its own, stayed as a card telling him the
+ * thread was closed, waiting for his Acknowledge). When a node closes thread `id`, or merges into
+ * it, quoting words of his (`user_words`) that are in a message filed on ANOTHER open thread of this
+ * node, that message moves under `id`: with its whole thread when it is the only message there,
+ * else alone. Only a message that asks nothing (thread-question.ts asksQuestion): one that also asks
+ * something keeps its thread, where that question is answered. `holds` says the words are where
+ * they must be (default: some message of `id` holds them); the file as it was when they already
+ * are, no such message is found, the move is refused, or `holds` still fails after it. Pure.
+ */
+export function carryHisWords(
+  file: ThreadsFile, id: string, words: string | undefined, by: ThreadWriter, at: string, lang: LetterLang = 'en',
+  holds: (t: OrgThread) => boolean = (t) => t.messages.some((m) => quotes(m.text, wordsKey(words ?? ''))),
+): ThreadsFile {
+  const quote = wordsKey(words ?? '');
+  const target = file.threads.find((t) => t.id === id);
+  if (by === 'human' || !quote || !target || target.closed || target.movedTo || holds(target)) return file;
+  let hit: { thread: OrgThread; message: ThreadMessage } | undefined;
+  for (const t of file.threads) {
+    if (t.id === id || t.closed || t.movedTo) continue;
+    for (const m of t.messages) {
+      if (m.via === 'letter' || !quotes(m.text, quote) || asksQuestion(m.text)) continue;
+      if (!hit || m.at > hit.message.at) hit = { thread: t, message: m };
+    }
+  }
+  if (!hit) return file;
+  try {
+    const moved = hit.thread.messages.length === 1 && !hit.thread.opener
+      ? mergeThreads(file, hit.thread.id, id, by, at, { questionMoves: false }).file
+      : splitMessageInto(file, hit.thread.id, hit.message.id, id, by, at, lang, { keepOpen: true }).file;
+    const now = moved.threads.find((t) => t.id === id);
+    return now && holds(now) ? moved : file;
+  } catch (err) {
+    if (err instanceof ThreadError) return file;
+    throw err;
+  }
+}
+
 /** `m` came after everything said in `t` but the node's own reply to it. */
 function afterAllSaid(t: OrgThread, m: ThreadMessage): boolean {
   if (t.opener && t.opener.at >= m.at) return false;

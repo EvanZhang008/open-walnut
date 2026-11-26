@@ -18,7 +18,7 @@ import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isFollower } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
-  addMovedMessages, deliveryOpen, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, relocateThreadOut, setAnswers, splitMessageInto, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
+  addMovedMessages, carryHisWords, closeAskOf, deliveryOpen, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, relocateThreadOut, setAnswers, splitMessageInto, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
   type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadDelivery, type ThreadMessage, type ThreadPatch, type ThreadState, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
 import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
@@ -426,11 +426,15 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
   const ack = by === 'human' && rest.close === 'acked' && Object.keys(rest).length === 1 ? await import('./thread-ack.js') : null;
   const ackOpen = ack ? await ack.ackOpenTasks(taskId, id) : null;
   const held: { reading?: import('./thread-ack-outcome.js').AckReading } = {};
+  // A node's close that quotes him: the language a thread left behind is titled in (carryHisWords).
+  const carryLang = rest.close && rest.user_words && by !== 'human' ? await letterLang() : null;
   const thread = await mutateThreads(taskId, (cur) => {
     const before = cur.threads.find((t) => t.id === id);
     // He knows where it stands: it goes to Acknowledged and the node decides where it goes (thread-known.ts).
     // Acknowledged already by now (a double click, or the node just placed it): his ack closes it.
     if (ack && ackOpen && before && !before.closed && !ack.isKnown(before)) held.reading = ack.ackOutcome(before, ackOpen);
+    // His words that close it, filed on another thread, go under it first (carryHisWords): no card of their own stays behind.
+    if (carryLang) cur = carryHisWords(cur, id, rest.user_words, by, at, carryLang, (t) => !!closeAskOf(t, rest.user_words));
     const r = held.reading ? ack!.ackKnown(cur, id, at)
       : Object.keys(rest).length || !before ? updateThread(cur, id, rest, by, at, source) : { file: cur, thread: before };
     let next = r.thread;
@@ -452,9 +456,12 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
 
 export async function mergeThread(taskId: string, fromId: string, intoId: string, by: ThreadWriter, opts: { userWords?: string } = {}): Promise<OrgThread> {
   const at = new Date().toISOString();
+  const lang = opts.userWords ? await letterLang() : undefined;
   const thread = await mutateThreads(taskId, (cur) => {
     const r = mergeThreads(cur, fromId, intoId, by, at, opts.userWords ? { userWords: opts.userWords } : {});
-    return { file: r.file, out: r.thread };
+    // His words asking to combine them, filed on a third thread, go under the one that keeps (carryHisWords).
+    const file = opts.userWords ? carryHisWords(r.file, intoId, opts.userWords, by, at, lang) : r.file;
+    return { file, out: file.threads.find((t) => t.id === intoId) ?? r.thread };
   });
   emit({ taskId, kind: 'merged', threadId: intoId });
   return thread;

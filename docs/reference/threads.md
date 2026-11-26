@@ -138,7 +138,10 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   and one that only moved the task's ask to a thread says so, so it is never read as a line.
 - **The question.** A thread a line spoke for is not listed by the status question of that turn;
   every other open thread still is, and with all of them spoken for the question holds no thread
-  block. A thread that still has no title of its own after its line is asked about, for its title.
+  block. A task's question names the ones its reply already keeps, by title alone, with no ref
+  and no state (`spokenPart` in `status-thread-carded.ts`, at most 6), so the new subject it may open is never
+  one of them (2026-11-26, a trial with a real session: a job's thread had its working line in the
+  reply, the question left it out, and the session opened a second thread for the same job). A thread that still has no title of its own after its line is asked about, for its title.
   A thread may still be named beside an untitled one as its possible subject. With the switch on
   the question takes the form in which its line is the card (`linesAreCards` in `threads-kept.ts`:
   the summary, a title for an untitled thread, his reaction), whether or not
@@ -187,7 +190,13 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   because he wrote on the thread since it last waited, or it asked before, is named in the line's
   own attributes, everything it lacks at once (`since="..."` and `decision="same"` or `"new"`, 383
   bytes in place of 717 that named only `since_you_wrote`; `returnLacks`), since there is no second
-  send-back. A line that names a thread that is
+  send-back. A line that says answered or done for a thread that still waits on his decision is
+  never written (a line never ends a decision) and never dropped unsaid: it is sent back once with
+  the one call that settles it (`thread_update` with state answered and what he decided, or why it
+  needs him no more), and the turn's end logs it as refused (2026-11-26, a trial with a real session: his typed answer was
+  filed on another thread, the session's `done` line for the waiting thread was skipped with no
+  word, and the card stayed Needs you). Working or waiting on such a thread changes nothing he
+  sees and stays quiet. A line that names a thread that is
   not an open thread of the task has nothing to write in its place, so it holds no turn by itself
   and is named beside another thing that does. Each thing is named at most twice. A message this turn read is one filed after the
   newest of his messages that an earlier turn's end saw (kept in memory per session), so a thread
@@ -497,6 +506,15 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
 - **Filing** (`threads-model.ts` `fileMessage`): such a chat message with no thread named joins no
   thread by timing and none as a reaction, even when the recent thread waits on him. A Follow up, a
   letter's note and a remark that asks nothing keep the old rules.
+- **His words about a thread go with it** (`carryHisWords` in `threads-model.ts`, called by the
+  store's close and merge). When a node closes a thread, or merges into it, quoting words of his
+  (`user_words`) that sit in a message filed on another open thread of that node, the message moves
+  under the thread it speaks of: with its whole thread when it is alone there, else alone. The thread it leaves stays as it was. Only a
+  message that asks nothing moves; one that also asks something keeps its thread, where that
+  question is answered (2026-11-26, a trial with a real session, 7 runs of 7: "that first one is
+  done, close it" closed the right thread and stayed behind as a card of its own telling him so,
+  waiting for his Acknowledge). Guard: `tests/core/org/thread-close-words.test.ts` reads the store
+  and fails on a write that takes `user_words` without carrying them.
 - **Merging** (`mergeThreads`, every merge goes through it): a thread his question opened
   (`ownQuestionOf`, its first message) that still waits for its answer (new, working or waiting:
   the states he does not see) is refused `own_question`, unless he merges it himself, the target
@@ -632,6 +650,10 @@ Newest first. State: fixed (with where), open (with who owns it next).
 
 | Date | What the user saw | Cause | State |
 |---|---|---|---|
+| 11-26 | Not seen by him (a trial with a real session, 7 runs of 7): he said "that first one is done, close it"; the thread closed, and his message stayed as a Done card of its own waiting for his Acknowledge | the message was filed right after another one, then taken out as a subject of its own; the close moved nothing | fixed: the message that holds the words a close or a merge quotes moves under that thread (`carryHisWords`); guard in `tests/core/org/thread-close-words.test.ts` |
+| 11-26 | Not seen by him (the same trial, 2 runs): every answered card read Needs you with the session's standing "send me the next one" on it | a task's ask with no thread named went on the thread of his newest message, even when the ask was older than that message | fixed: only what he wrote before the decision began counts for its place, so a thread he opened after it takes it only by name (`askThreadFor` in `thread-report-ask.ts`, the ask's `since`); guard in `tests/core/org/thread-report-ask.test.ts` |
+| 11-26 | Not seen by him (the same trial, `threads_reply_tag` on, 2 runs of 3): a background job had two threads | the reply's card line kept the job's thread, the status question left that thread out and offered a new subject "none of these threads covers" | fixed: the question names the threads the reply already keeps (`spokenPart`); guard in `tests/core/sessions/status-thread-carded.test.ts` |
+| 11-26 | Not seen by him (the same trial, `threads_reply_tag` on): a thread stayed Needs you after he answered it in the chat | his typed answer was filed on another thread; the session's `done` line for the waiting thread was skipped with no word | fixed: an answered or done line on a thread that waits on him is sent back once with the call that settles it, and logged as refused at the turn's end (`reply-card-stop.ts` `waits`, `reply-card.ts` `endsDecision`) |
 | 11-26 | Not seen by him (review): a card answer whose ask holds a quote then a colon opened a second card, and part of the ask rode his words into a letter's answer | the frame `Answer to "<ask>": <words>` was cut at its first `": ` | fixed: every reading is tried (`cardAnswerReadings`, `cardAnswerFit`); class table in `tests/core/org/card-answer-thread.test.ts`, one case on a real server in `tests/e2e/letter-thread-follow-up.test.ts` |
 | 11-26 | Not seen by him (review): one reply answered two unrelated questions, and the one card it left was titled by the first alone | the merge kept the oldest thread's title | fixed: the kept thread is titled by every question it holds (`titledForAll` in `thread-answered-check.ts`) |
 | 11-26 | Not seen by him (review): after a lost receipt, tapping the same option again sends the answer a second time (the second is filed under the same thread, no second card; the session reads it twice) | a tap from a card has no box key, so the send hook's "same words wait to go out" check (`sameWaitingSend`) never applies and the second tap gets a new user line | open, low: the web's send hook already resends a lost send by itself under the same user line; only a manual second tap doubles it. Owner: the Threads task |

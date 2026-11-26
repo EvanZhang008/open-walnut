@@ -200,7 +200,7 @@ describe('a reaction is durable news provenance, not a state', () => {
         && /ThreadsFile|OrgThread\[\]/.test([...fn.parameters.map((p) => p.type?.getText(parsed) ?? ''), fn.type?.getText(parsed) ?? ''].join(' ')))
       .map((fn) => fn.name!.text);
     expect(writes.sort()).toEqual([
-      'addMovedMessages', 'emptyThreads', 'enteredNeeds', 'fileMessage', 'lastUserAt', 'markClosesTold',
+      'addMovedMessages', 'carryHisWords', 'emptyThreads', 'enteredNeeds', 'fileMessage', 'lastUserAt', 'markClosesTold',
       'markRechecked', 'mergeThreads', 'moveThreadIn', 'moveThreadOut', 'normalizeThreads', 'openThread',
       'reactedSince', 'recentConversation', 'relocateThreadOut', 'setAnswers', 'sortedThreads', 'splitMessageInto', 'splitThreadMessage',
       'stampLegacyReplyAt', 'sweepClosed', 'updateThread',

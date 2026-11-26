@@ -48,6 +48,7 @@ import type { OrgThread, ThreadsFile } from './threads-model.js';
 import { ASK_MEMORY_MS, isDecisionId, memoryOf, mintAskId, readDeclared, reportDecision, sameOwnDecision, stampSaidDecision, type DecisionWords } from '../ask-decision.js';
 import { ownItemOf } from '../action-needed.js';
 import { placesAskOnThread } from '../sessions/status-threads.js';
+import { askSinceOf } from '../sessions/user-spoke.js';
 import { OWN_ASK_FIELDS } from '../sessions/own-ask-write.js';
 import { log } from '../../logging/index.js';
 import { oneCardNow } from './one-card.js';
@@ -58,7 +59,8 @@ import type { ThreadDecision } from './thread-held-decision.js';
 /** The question kept on the place, for the record. */
 const ASK_KEPT_MAX = 400;
 
-export interface TaskAsk { id: string; ask: string; options?: AskOption[] }
+/** `since`: when this decision began to be asked (askBegan); absent when unknown. */
+export interface TaskAsk { id: string; ask: string; options?: AskOption[]; since?: string }
 
 type AskingTask = Pick<Task, 'id' | 'phase' | 'status' | 'user_status' | 'org_role' | 'threads_on'> & Partial<Pick<Task, 'status_report'>>;
 
@@ -82,7 +84,19 @@ export function taskAskNow(t: Pick<Task, 'phase' | 'status' | 'user_status'> | n
 export function reportAskOf(r: StatusReport | null | undefined): TaskAsk | null {
   const d = reportDecision(r);
   if (!d || !r?.ask?.trim() || r.same_as || r.decision_owner || r.kindless_ask) return null;
-  return { id: d.id, ask: r.ask.trim() };
+  const since = askBegan(r);
+  return { id: d.id, ask: r.ask.trim(), ...(since ? { since } : {}) };
+}
+
+/**
+ * When the decision a report asks began, for its place: the report's own time when the decision is
+ * new in it (its ask_since is its own turn's stamp, user-spoke.ts askSinceStamp, which a report
+ * written mid-turn gets from the turn before), else the start it keeps from the reports before. Pure.
+ */
+function askBegan(r: StatusReport): string | undefined {
+  const own = askSinceOf({ at: r.at, turn_ended_at: r.turn_ended_at });
+  if (!r.ask_since || (own && Date.parse(r.ask_since) >= Date.parse(own))) return r.at;
+  return r.ask_since;
 }
 
 /** A thread of the task that waits on him for a decision of its own (never a pointer to another task's ask). */
@@ -186,18 +200,25 @@ export function askedOnThreads(task: Pick<Task, 'org_role' | 'threads_on'> | nul
 
 /**
  * The thread an ask goes on, or null: the one named (if it can take it), else the open thread his
- * newest message was filed to, else the only open thread. Pure.
+ * newest message was filed to, else the only open thread. `since` (when the decision began to be
+ * asked): only what he wrote up to then counts, because an ask older than his message is not about
+ * it (2026-11-26, a live trial: a session's standing "send me the next one", asked before he wrote,
+ * was put on each thread he then opened, and every answered card read Needs you). So his newest
+ * message is the newest one not after it, and the only open thread takes it unless every message
+ * of his there came after it. A thread named takes it whatever the times. Pure.
  */
-export function askThreadFor(threads: readonly OrgThread[], named?: string): string | null {
+export function askThreadFor(threads: readonly OrgThread[], named?: string, since?: string): string | null {
+  const began = since ? Date.parse(since) : NaN;
+  const before = (at: string) => !Number.isFinite(began) || Date.parse(at) <= began;
   const open = threads.filter(openNotWaiting);
   if (named && open.some((t) => t.id === named)) return named;
   let newest: { id: string; at: string } | null = null;
   for (const t of threads) {
     if (t.movedTo) continue;
-    for (const m of t.messages) if (!newest || m.at > newest.at) newest = { id: t.id, at: m.at };
+    for (const m of t.messages) if (before(m.at) && (!newest || m.at > newest.at)) newest = { id: t.id, at: m.at };
   }
   if (newest && open.some((t) => t.id === newest!.id)) return newest.id;
-  return open.length === 1 ? open[0].id : null;
+  return open.length === 1 && (!open[0].messages.length || open[0].messages.some((m) => before(m.at))) ? open[0].id : null;
 }
 
 /**
@@ -212,7 +233,7 @@ export function placeAsk(file: ThreadsFile, ask: TaskAsk | null, at: string, nam
   if (ask && needsThreadOf(file.threads, taskAskWords(ask))) ask = null;
   const held = ask ? file.threads.find((t) => t.reportAsk?.id === ask.id) : undefined;
   const namedOk = !!ask && !!named && file.threads.some((t) => t.id === named && openNotWaiting(t));
-  const target = !ask ? null : namedOk ? named! : held ? held.id : askThreadFor(file.threads);
+  const target = !ask ? null : namedOk ? named! : held ? held.id : askThreadFor(file.threads, undefined, ask.since);
   const stale = file.threads.some((t) => t.reportAsk && t.reportAsk.id !== ask?.id);
   if (!stale && (!target || held?.id === target)) return file;
   if (!ask) return { ...file, threads: file.threads.map(withoutPlace) };
@@ -280,14 +301,14 @@ export async function keepAskOnThread(task: AskingTask, threads?: readonly OrgTh
   const now = taskAskNow(task);
   const reported = reportAskOf(task.status_report);
   // A status a step behind its report never places an older decision; none at all clears the places.
-  const ask = !reported ? null : now?.id === reported.id ? now : undefined;
+  const ask = !reported ? null : now?.id === reported.id ? { ...now, ...(reported.since ? { since: reported.since } : {}) } : undefined;
   if (ask === undefined) return false;
   try {
     const store = await import('./threads-store.js');
     const list = threads ?? (await store.readThreads(task.id)).threads;
     // One a thread in needs already carries keeps no place (needsThreadOf): it clears like none.
     const placed = ask && !needsThreadOf(list, taskAskWords(ask)) ? ask : null;
-    if (placed ? list.some((t) => t.reportAsk?.id === placed.id) || !askThreadFor(list) : !list.some((t) => t.reportAsk)) return false;
+    if (placed ? list.some((t) => t.reportAsk?.id === placed.id) || !askThreadFor(list, undefined, placed.since) : !list.some((t) => t.reportAsk)) return false;
     return await store.placeTaskAsk(task.id, placed);
   } catch {
     return false;

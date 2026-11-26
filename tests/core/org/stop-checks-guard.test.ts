@@ -20,7 +20,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
-import { CARD_STOP_LINES, cardStopEnd, cardStopReason } from '../../../src/core/org/reply-card-stop.js'
+import { CARD_STOP_CALLS, CARD_STOP_LINES, cardStopEnd, cardStopReason } from '../../../src/core/org/reply-card-stop.js'
 import { answeredBeforeHimReason, staleSummaryReason } from '../../../src/core/org/thread-summary-stop.js'
 import type { OrgThread } from '../../../src/core/org/threads-model.js'
 
@@ -123,11 +123,28 @@ describe('the card line check sends back only lines to write', () => {
 
   it('the reason is built in one place, which ends it with the words that ask for lines alone', () => {
     expect([...src.matchAll(/\breason: (?!string\b)/g)]).toHaveLength(1)
-    expect(src).toContain('reason: due.length ? cardStopReason(due.map((x) => x.line)) : null')
+    expect(src).toContain('reason: due.length ? cardStopReason(due.map((x) => x.line), due.filter((x) => CARD_STOP_CALLS.includes(x.kind)).length) : null')
     for (const n of [1, 2, 5]) {
       const lines = Array.from({ length: n }, (_, i) => `line ${i + 1}.`)
       expect(cardStopReason(lines).endsWith(cardStopEnd(n)), `${n} lines`).toBe(true)
       expect(cardStopEnd(n)).toMatch(/^Write only (?:this line|these lines) now, .*no other words about (?:it|them): anything else you add is shown to him as chat\.$/)
+    }
+  })
+
+  it('a thing that asks for a call is named in one list, and its reason asks for the call and no words', () => {
+    // The table's entries whose text names a thread_update call are the ones that ask for a call.
+    const table = src.slice(src.indexOf('export const CARD_STOP_LINES'), src.indexOf('} as const;', src.indexOf('export const CARD_STOP_LINES')))
+    const asking = [...table.matchAll(/^\s{2}(\w+): \(.*thread_update \{/gm)].map((m) => m[1])
+    expect(asking.sort()).toEqual([...CARD_STOP_CALLS].sort())
+    for (const n of [1, 2, 5]) {
+      const lines = Array.from({ length: n }, (_, i) => `line ${i + 1}.`)
+      for (let calls = 1; calls <= n; calls++) {
+        const end = cardStopEnd(n, calls)
+        expect(cardStopReason(lines, calls).endsWith(end), `${n} things, ${calls} calls`).toBe(true)
+        expect(end).toMatch(calls === n
+          ? /^Do that now and write no words about it: anything you add is shown to him as chat\.$/
+          : /^Write only the lines asked for now, .*do what the rest name, and no other words about them: anything else you add is shown to him as chat\.$/)
+      }
     }
   })
 

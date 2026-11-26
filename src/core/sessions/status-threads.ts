@@ -25,6 +25,7 @@ import { newSubjectsOnly } from '../org/thread-same-subject.js';
 import type { Task } from '../types.js';
 import { OUTSIDE_WAIT_KINDS, waitWordsNameUser, type StatusReport } from '../user-status.js';
 import { cutEnd } from '../text-cut.js';
+import { spokenPart, type SpokenThread } from './status-thread-carded.js';
 import { keepsThreads } from '../org/keeps-threads.js';
 import { THREAD_TITLE_MAX, type OrgThread, type ThreadPatch, type ThreadsFile } from '../org/threads-model.js';
 import type { OwnThreadOpen, OwnThreadWrite } from '../org/threads-store.js';
@@ -128,7 +129,7 @@ export function placesAskOnThread(task: Pick<Task, 'org_role' | 'threads_on'> | 
  * threads_reply_tag on (org/threads-kept.ts linesAreCards), the line is the thread's summary, an
  * untitled thread is named, and a reaction of his is asked. Pure.
  */
-export function threadQuestionBlock(open: readonly ListedThread[], langName?: string, opts: { org?: boolean; his?: readonly HisWords[]; omitted?: number } = {}): { block: string; refs: Map<string, ThreadRef> } {
+export function threadQuestionBlock(open: readonly ListedThread[], langName?: string, opts: { org?: boolean; his?: readonly HisWords[]; omitted?: number; spoken?: readonly SpokenThread[] } = {}): { block: string; refs: Map<string, ThreadRef> } {
   const kept = linesAreCards();
   const refs = new Map<string, ThreadRef>();
   const joins: Array<{ ref: string; joined: JoinedMessage }> = [];
@@ -163,7 +164,7 @@ export function threadQuestionBlock(open: readonly ListedThread[], langName?: st
   const asked = shown.some((t) => t.asked || t.cardAsks) ? `\n${askedRule(!!opts.org, oneCardNow())}` : '';
   const remind = reminderPart(shown.slice(full.length).map((t, i) => ({ state: t.state, text: listed[full.length + i], ...(t.reminder?.acked ? { acked: true } : {}) })), opts.omitted ?? 0);
   const lines = listed.slice(0, full.length);
-  if (kept) return { block: keptBlock(lines, refs, words, !!opts.org, opts.his ?? [], remind) + asked + split, refs };
+  if (kept) return { block: keptBlock(lines, refs, words, !!opts.org, opts.his ?? [], remind, opts.spoken ?? []) + asked + split, refs };
   const newLine = `A subject you now follow that no thread covers: FOR_USER_THREAD_NEW: <working | waiting> | <title> | <one line on where it stands> (at most ${THREAD_NEW_MAX}).`;
   const rule = 'What needs the user\'s decision stays on FOR_USER_ASK, never a thread line.';
   // Its ask lives on a thread only with threads_one_card on (org/one-card.ts, thread-report-ask.ts).
@@ -175,13 +176,18 @@ export function threadQuestionBlock(open: readonly ListedThread[], langName?: st
   return { block: block + asked + split, refs };
 }
 
+const shownTitle = (title: string): string => { const t = title.replace(/\s+/g, ' ').trim(); return t.slice(0, cutEnd(t, TITLE_SHOWN_MAX)); };
+
 /** The block with threads_kept_by_walnut on: the line is what his card says, so it says how to write it. */
-function keptBlock(listed: readonly string[], byRef: ReadonlyMap<string, ThreadRef>, words: string, org: boolean, his: readonly HisWords[], remind = ''): string {
+function keptBlock(listed: readonly string[], byRef: ReadonlyMap<string, ThreadRef>, words: string, org: boolean, his: readonly HisWords[], remind = '', spoken: readonly SpokenThread[] = []): string {
   const refs = [...byRef.values()];
   const newLine = `A subject you now follow that none of these threads covers (one subject is one thread: a subject one covers is its line): FOR_USER_THREAD_NEW: <working | waiting> | <title> | <one line on where it stands> (at most ${THREAD_NEW_MAX}).`;
-  if (!listed.length && !remind) return org ? '' : `\n${newLine.replace(/\.$/, '')}${words}. What needs the user's decision stays on FOR_USER_ASK, never a thread line.`;
+  // A node opens no thread from this question, so it needs no list of what its reply already keeps.
+  const said = org ? '' : spokenPart(spoken, shownTitle);
+  if (!listed.length && !remind) return org ? '' : `\n${said ? `${said}\n` : ''}${newLine.replace(/\.$/, '')}${words}. What needs the user's decision stays on FOR_USER_ASK, never a thread line.`;
   const parts = [
     ...(listed.length ? [`This task's open threads (one per subject the user follows here): ${listed.join('; ')}.`] : []),
+    ...(said ? [said] : []),
     ...(remind ? [remind] : []),
     `One line per thread, which Walnut writes as its state and the summary on his card: FOR_USER_THREAD: <ref> | <working | waiting | answered | done> | <where it stands for him, latest first, readable alone by someone who never saw this chat: the result or the question itself (name the task by its title and where it stands, never only that it was given, sent or told), then at most one sentence of background; a proof's path or URL when there is one>${words}.`
       + ` working: you are on it now; waiting: a team or something outside has it (both hidden from him); answered: the result he asked for is in (shown to him); done: finished, or nothing left for him. ${CARD_KEEPS_LINE}`,
@@ -192,7 +198,9 @@ function keptBlock(listed: readonly string[], byRef: ReadonlyMap<string, ThreadR
   if (refs.some((r) => r.wrote)) {
     // His own words, so the reaction is judged against what he said, never against a label (review round 1).
     const refOfId = new Map([...byRef].map(([ref, r]) => [r.id, ref]));
-    const quoted = his.slice(0, HIS_SHOWN_MAX).map((w) => `${refOfId.get(w.threadId) ?? 'another thread'}: "${oneLine(w.text, HIS_TEXT_MAX)}"`);
+    const spokenTitle = new Map(spoken.map((t) => [t.id, shownTitle(t.title)]));
+    const where = (id: string) => refOfId.get(id) ?? (spokenTitle.has(id) ? `"${spokenTitle.get(id)}"` : 'another thread');
+    const quoted = his.slice(0, HIS_SHOWN_MAX).map((w) => `${where(w.threadId)}: "${oneLine(w.text, HIS_TEXT_MAX)}"`);
     parts.push(`${quoted.length ? `His messages since, newest first: ${quoted.join('; ')}. ` : ''}Of the threads he wrote elsewhere since, the ones whose answer he reacted to in those words (a reply about it, an ok or thanks, a follow-up that builds on it; unsure: not seen): one line, refs only, FOR_USER_THREAD_SEEN: <ref>, <ref>. Leave the line out when none. Walnut marks that answer known, and closes a done one.`);
   }
   if (!org) parts.push(newLine);

@@ -125,6 +125,11 @@ type LineFields = Pick<StatusReport, 'threads' | 'thread_titles' | 'threads_seen
  * planThreadWrites holds both. A thread that waits on him, like one the question lists with "no line
  * for it", gets none. Pure.
  */
+/** A state line that says a thread's matter is over (answered, done): on a thread that waits on him it would end his decision. */
+export function endsDecision(state: string | undefined): boolean {
+  return state === 'answered' || state === 'done';
+}
+
 export function cardLines(file: ThreadsFile, cards: readonly CardTag[], saw: ReplySaw): { fields: LineFields; spoke: Array<{ id: string; upTo: string }>; refused: CardRefusal[] } {
   const threads: StatusThreadLine[] = [];
   const titles: ThreadMark[] = [];
@@ -138,7 +143,11 @@ export function cardLines(file: ThreadsFile, cards: readonly CardTag[], saw: Rep
     const why = notOpenReason(file, c.thread);
     if (why) { refused.push({ thread: c.thread, reason: why }); continue; }
     const t = file.threads.find((x) => x.id === c.thread)!;
-    if (!openNotWaiting(t)) continue;
+    if (!openNotWaiting(t)) {
+      // A line that says its decision is over is named (the Stop check sent it back first, reply-card-stop.ts); working or waiting changes nothing he sees.
+      if (endsDecision(c.state)) refused.push({ thread: c.thread, reason: `${c.thread} waits on his decision: a state line does not end it` });
+      continue;
+    }
     const upTo = seenUpTo(t, saw);
     const mark = { id: t.id, upTo, hisAt };
     const progress = c.summary ? cut(c.summary, PROGRESS_MAX) : '';

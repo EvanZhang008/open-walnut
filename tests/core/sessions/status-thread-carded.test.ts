@@ -12,7 +12,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-status-thread-carded'))
 
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { cardedNow, cardsWritten, CARD_WRITE_HOLD_MS, CARDS_WAIT_MAX_MS, noteCarded, queueCardWrite, resetCarded } from '../../../src/core/sessions/status-thread-carded.js'
+import { cardedNow, cardsWritten, CARD_WRITE_HOLD_MS, CARDS_WAIT_MAX_MS, noteCarded, queueCardWrite, resetCarded, SPOKEN_SHOWN_MAX, spokenPart } from '../../../src/core/sessions/status-thread-carded.js'
 import { threadQuestionFor } from '../../../src/core/sessions/status-threads.js'
 import { setThreadsKept } from '../../../src/core/org/threads-kept.js'
 import { setReplyTag } from '../../../src/core/org/reply-card-switch.js'
@@ -21,6 +21,8 @@ import type { OrgThread } from '../../../src/core/org/threads-model.js'
 const FENCE = 'th-feec0de1'
 const SEEDS = 'th-feec0de2'
 const TASK = { id: 'lead-carded-1', org_role: 'lead' as const }
+/** A task that keeps Threads: its question offers a new subject (FOR_USER_THREAD_NEW), a node's never does. */
+const WORKER = { id: 'task-carded-2', threads_on: true }
 const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString()
 
 function fixture(): OrgThread[] {
@@ -37,6 +39,7 @@ beforeAll(async () => {
   const dir = path.join(WALNUT_HOME, 'org', 'threads')
   await fs.mkdir(dir, { recursive: true })
   await fs.writeFile(path.join(dir, `${TASK.id}.json`), JSON.stringify({ version: 1, taskId: TASK.id, threads: fixture() }))
+  await fs.writeFile(path.join(dir, `${WORKER.id}.json`), JSON.stringify({ version: 1, taskId: WORKER.id, threads: fixture().map((t) => ({ ...t, by: `task:${WORKER.id}` })) }))
 })
 afterAll(async () => { await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {}) })
 afterEach(() => { resetCarded(); setReplyTag(false); setThreadsKept(false) })
@@ -82,6 +85,26 @@ describe('the status question after the turn', () => {
     expect(block).not.toContain('"Orchard fence"')
     expect(block).toContain('"Spring seed order"')
     expect([...refs.values()].map((r) => r.id)).toEqual([SEEDS])
+  })
+
+  // 2026-11-26, a live trial: a job's thread had its working line in the reply, the question listed
+  // the other threads and offered a new subject "none of these threads covers", and the session
+  // opened a second thread for the same job.
+  it('a task is told which threads its reply already keeps, so a new subject is never one of them', async () => {
+    setThreadsKept(true)
+    setReplyTag(true)
+    noteCarded(WORKER.id, [{ id: FENCE, upTo: 'tm-feec0de1' }])
+    const { block, refs } = await threadQuestionFor(WORKER)
+    expect([...refs.values()].map((r) => r.id)).toEqual([SEEDS])
+    const kept = block.indexOf('Open threads your reply\'s card lines already keep (no line here): "Orchard fence".')
+    const fresh = block.indexOf('A subject you now follow that none of these threads covers')
+    expect(kept).toBeGreaterThan(-1)
+    expect(fresh).toBeGreaterThan(kept)
+    // Named, never listed: it has no ref, so no line can be written for it here.
+    expect(block).not.toMatch(/t\d+ "Orchard fence"/)
+    expect(spokenPart([], (t) => t)).toBe('')
+    const many = Array.from({ length: SPOKEN_SHOWN_MAX + 2 }, (_, i) => ({ id: `th-${i}`, title: `Bed ${i}` }))
+    expect(spokenPart(many, (t) => t)).toMatch(new RegExp(`"Bed ${SPOKEN_SHOWN_MAX - 1}"; and 2 more\\.$`))
   })
 
   it('holds no thread block at all when a line spoke for every open thread', async () => {

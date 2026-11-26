@@ -146,6 +146,22 @@ describe('what a line may not write', () => {
     const tagged = viaReply(f, [`<walnut-card thread="${seeds}" state="working" summary="Still comparing."/>`])
     expect(tagged.fields).toEqual({})
     expect(tagged.spoke).toEqual([])
+    expect(tagged.refused).toEqual([])
+  })
+
+  it('a line that says a waiting decision is over is never written, and never dropped unsaid', () => {
+    let f = twoThreads()
+    const seeds = f.threads[1].id
+    f = updateThread(f, seeds, { state: 'needs', ask: 'Which supplier?', reply: 'Two suppliers, one decision.', options: [{ label: 'Larch Seeds', recommended: true }, { label: 'Oak Seeds' }], user_kind: 'spending', user_kind_why: 'the dearer one is twice the budget' }, 'task:lead-1', at(6)).file
+    for (const state of ['answered', 'done']) {
+      const tagged = viaReply(f, [`<walnut-card thread="${seeds}" state="${state}" summary="Ordered from Larch Seeds."/>`])
+      expect(tagged.fields, state).toEqual({})
+      expect(tagged.spoke, state).toEqual([])
+      expect(tagged.refused, state).toEqual([{ thread: seeds, reason: `${seeds} waits on his decision: a state line does not end it` }])
+    }
+    // What the Stop check sends back for it names the one call that settles it, and asks for no line.
+    expect(cardStopReason([CARD_STOP_LINES.waits(seeds)], 1)).toBe(
+      `Walnut: ${seeds} waits on his decision, and a state line does not end that: it was not written. If he has decided it or it needs him no more, settle it with thread_update {"id":"${seeds}","state":"answered","reply":"<what he decided, or why it needs him no more, and what came of it>"}; if it still waits on him, give it no line. Do that now and write no words about it: anything you add is shown to him as chat.`)
   })
 
   it('a thread that is closed, moved or not the task\'s is refused with one reason', () => {

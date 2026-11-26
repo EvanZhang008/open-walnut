@@ -95,6 +95,43 @@ describe('which thread an ask goes on', () => {
     const f = file(a, b)
     expect(placeAsk(f, { id: 'ask-aaaa01', ask: 'Pick one' }, T(10))).toBe(f)
   })
+
+  it('an ask older than what he wrote goes on no thread he opened since, unless the answer names it', () => {
+    // The session has asked "send me the next one" since before he wrote anything; he then wrote at minutes 0 and 9.
+    const wrote = thread('th-aaaaaa02', { messages: [{ id: 'tm-aaaaaa02', at: T(9), text: 'How deep do I plant garlic?', via: 'chat' }] })
+    const threads = [thread('th-aaaaaa01'), wrote]
+    expect(askThreadFor(threads, undefined, T(-1))).toBeNull()
+    expect(askThreadFor([wrote], undefined, T(5))).toBeNull()
+    expect(askThreadFor(threads, 'th-aaaaaa02', T(-1))).toBe('th-aaaaaa02')
+    // An ask that began between his two messages is about the one before it, never the one after.
+    expect(askThreadFor(threads, undefined, T(5))).toBe('th-aaaaaa01')
+    // An ask that began after his message is about it, as before.
+    expect(askThreadFor(threads, undefined, T(10))).toBe('th-aaaaaa02')
+    expect(askThreadFor([wrote], undefined, T(9))).toBe('th-aaaaaa02')
+    // The only open thread he wrote on both before and after it still takes it; one a node opened (no message of his) too.
+    const both = thread('th-aaaaaa03', { messages: [{ id: 'tm-aaaaaa04', at: T(2), text: 'Garlic bed', via: 'chat' }, { id: 'tm-aaaaaa05', at: T(9), text: 'And onions', via: 'chat' }] })
+    expect(askThreadFor([both], undefined, T(5))).toBe('th-aaaaaa03')
+    expect(askThreadFor([thread('th-aaaaaa06', { messages: [], opener: { text: 'I follow the rollout', at: T(8), from: 'node', by: 'task:task-a' } })], undefined, T(5))).toBe('th-aaaaaa06')
+    const f = file(...threads)
+    expect(placeAsk(f, { id: 'ask-aaaa01', ask: 'Send the next one', since: T(-1) }, T(10))).toBe(f)
+    const placed = placeAsk(f, { id: 'ask-aaaa02', ask: 'Raised bed or pots?', since: T(10) }, T(10))
+    expect(placed.threads.map((t) => t.reportAsk?.id)).toEqual([undefined, 'ask-aaaa02'])
+    // The place it holds stays when he writes there again without answering it.
+    const later = { ...placed, threads: placed.threads.map((t) => (t.id === wrote.id ? { ...t, messages: [...t.messages, { id: 'tm-aaaaaa03', at: T(12), text: 'And how far apart?', via: 'chat' as const }] } : t)) }
+    expect(placeAsk(later, { id: 'ask-aaaa02', ask: 'Raised bed or pots?', since: T(10) }, T(13))).toBe(later)
+  })
+
+  it('when a decision began: the report\'s own time when it is new in it, else the start it keeps', () => {
+    const r: StatusReport = { state: 'needs', ask: 'Pick the seed tray size', ask_id: 'ask-aaaa01', at: T(10), turn_ended_at: T(9) }
+    // New in this report (its stamp is its own turn's): the report's time.
+    expect(reportAskOf({ ...r, ask_since: T(9) })?.since).toBe(T(10))
+    // Written mid-turn, where the stamp is the turn before's end: still the report's time, so the thread of the message that began this turn takes it.
+    expect(reportAskOf({ ...r, at: T(30), turn_ended_at: T(9), ask_since: T(9) })?.since).toBe(T(30))
+    // Kept from the reports before: the start it kept.
+    expect(reportAskOf({ ...r, at: T(30), turn_ended_at: T(29), ask_since: T(9) })?.since).toBe(T(9))
+    // A report an older build stored has no stamp: its own time.
+    expect(reportAskOf(r)?.since).toBe(T(10))
+  })
 })
 
 describe('the place, once per decision', () => {
@@ -142,7 +179,7 @@ describe('the place, once per decision', () => {
 
   it('only a real ask with its decision id is placed: none for another task\'s, or a kindless one', () => {
     const r: StatusReport = { state: 'needs', ask: 'Pick the seed tray size', ask_id: 'ask-aaaa01', at: T(10) }
-    expect(reportAskOf(r)).toEqual({ id: 'ask-aaaa01', ask: 'Pick the seed tray size' })
+    expect(reportAskOf(r)).toEqual({ id: 'ask-aaaa01', ask: 'Pick the seed tray size', since: T(10) })
     expect(reportAskOf({ ...r, same_as: 'task-b' })).toBeNull()
     expect(reportAskOf({ ...r, kindless_ask: true })).toBeNull()
     expect(reportAskOf({ ...r, ask_id: undefined })).toBeNull()
