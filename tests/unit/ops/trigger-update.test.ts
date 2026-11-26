@@ -45,6 +45,16 @@ const update = (args: Record<string, unknown>, s: ReturnType<typeof server>) =>
   getOp('trigger_update')!.handler!(args, s.call) as Promise<Record<string, unknown>>
 
 describe('trigger_update', () => {
+  it('a patch it refuses is a bad argument (bad_input), never a thrown error: real use counts it against the caller', async () => {
+    // 2026-11-26: the checks of buildTriggerUpdatePatch threw bare Errors, read as the tool's own fault.
+    const { OwnRefusalError, BAD_INPUT_CODE } = await import('../../../src/ops/own-refusal.js')
+    for (const args of [{ id: 't1' }, { id: 't1', every: 'soon' }, { id: 't1', name: ' ' }, { id: 't1', run: ' ' }, { id: 't1', prompt: '' }]) {
+      const err = await update(args, server(trigger())).then(() => null, (e: unknown) => e)
+      expect(err, JSON.stringify(args)).toBeInstanceOf(OwnRefusalError)
+      expect(err).toMatchObject({ code: BAD_INPUT_CODE, extra: { invalidArgs: true } })
+    }
+  })
+
   it('raises the time limit in place: one PATCH of the same id, the rest of the check carried over', async () => {
     const s = server(trigger())
     const out = await update({ id: 't1', timeoutSeconds: 120 }, s)

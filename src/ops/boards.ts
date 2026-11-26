@@ -79,7 +79,12 @@ export async function resolveBoardTask(args: Record<string, unknown>, call: OpCa
   const raw = args.task ?? args.task_id;
   const given = typeof raw === 'string' ? raw.trim() : '';
   if (given) return { taskId: given, shared: false };
-  const me = await call('GET', '/me').then((b) => b as CallerMe, () => undefined);
+  // Only an answer that names no task means the caller has none; a server that did not answer is not the caller's slip.
+  const me = await call('GET', '/me').then((b) => b as CallerMe, (err: unknown) => {
+    const status = (err as { status?: unknown }).status;
+    if (typeof status === 'number' && status < 500) return undefined;
+    throw err;
+  });
   const id = me?.task?.id;
   if (!id) throw badInput('No task of your own to find a board on: pass task (the leader\'s id).');
   const owner = await call('GET', boardPath(id, '/owner')).then((b) => b as BoardOwnerBody, () => undefined);

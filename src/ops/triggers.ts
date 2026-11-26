@@ -673,7 +673,10 @@ defineOp({
     const path = `/routines/${encodeURIComponent(id)}`
     const current = (await call('GET', path) as { job?: TriggerJob } | undefined)?.job
     if (!current) throw new OwnRefusalError('not_found', `no trigger ${id}; trigger_list shows the ids`, { status: 404 })
-    const { patch, given } = buildTriggerUpdatePatch(current, args as Record<string, unknown>)
+    // Its checks are of the caller's fields only (core/routines/trigger-update-patch.ts): a bad argument.
+    const { patch, given } = (() => {
+      try { return buildTriggerUpdatePatch(current, args as Record<string, unknown>) } catch (err) { throw err instanceof Error ? badInput(err.message) : err }
+    })()
     const answer = await call('PATCH', path, patch)
     // Changed on this host while the server is away (a host's follower): its own words.
     const away = awayAnswer(answer)

@@ -122,6 +122,16 @@ describe('an executor refusal is read by its code everywhere', () => {
     expect(refusals).toEqual([])
   })
 
+  it('a board op of a caller with no task: bad_input only when the server answered so; a server that did not answer is not the caller\'s', async () => {
+    const { resolveBoardTask } = await import('../../../src/ops/boards.js')
+    const failing = (status: number) => async () => { throw Object.assign(new Error(`HTTP ${status}`), { status }) }
+    await expect(resolveBoardTask({}, failing(404) as never)).rejects.toMatchObject({ code: BAD_INPUT_CODE })
+    await expect(resolveBoardTask({}, (async () => ({})) as never)).rejects.toMatchObject({ code: BAD_INPUT_CODE })
+    const down = await resolveBoardTask({}, failing(503) as never).then(() => null, (e: unknown) => e as { code?: string; status?: number })
+    expect(down).toMatchObject({ status: 503 })
+    expect(down?.code).not.toBe(BAD_INPUT_CODE)
+  })
+
   it('bad_input: a handler refusing its arguments is a bad argument everywhere, never a thrown error', async () => {
     const { failureClass } = await import('../../../src/core/usage-watch/normalize.js')
     // 2026-11-25: merge_into with another field was a bare Error, four `internal` failures in a day.
