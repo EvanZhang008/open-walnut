@@ -12,14 +12,12 @@ import Database from '../../src/lib/sqlite.js'
 import { compareKept, describeKept, snapshotHome } from '../../src/core/home-manifest/home-kept.js'
 import { makeWorld, REPO, type Machine, type World } from './world.js'
 import { consoleDirOfAccount } from '../../src/core/handed-over-console.js'
-import { batchUnderWay, standbyStatus } from '../../src/core/standby/index.js'
 import { catchUpBudgetMs } from '../../src/core/leader/switch/catch-up.js'
 import { parseSwitchSettings } from '../../src/core/leader/switch/settings.js'
 import { experimentalEnabled } from '../../src/core/experimental.js'
 import { readMayAct, readMarker, type MayActLine } from '../../src/core/leader/switch/records.js'
 import { readSwitchOutcome as readSwitchState } from '../../src/core/leader/switch/flow.js'
-import { describeHit, judgePathHits, pathRoots, scanHomePaths } from '../../src/core/leader/switch/home-paths.js'
-import { homePathRules } from '../../src/core/leader/switch/home-path-rules.js'
+import { ioAt } from './machine-io.js'
 
 export interface Check { name: string; ok: boolean; detail: string }
 
@@ -50,7 +48,7 @@ export async function waitFor<T>(what: string, fn: () => Promise<T | null | unde
 /** A standby batch taken after `since` (ms) is current at `dir`. */
 export async function waitForBatch(dir: string, since: number, timeoutMs = 120_000): Promise<number> {
   return waitFor(`a standby batch at ${dir}`, async () => {
-    const s = await standbyStatus(dir).catch(() => null)
+    const s = await ioAt(dir).op('standbyStatus', dir).catch(() => null)
     return s?.batch && s.takenAt && Date.parse(s.takenAt) > since ? s.batch : null
   }, timeoutMs, 500)
 }
@@ -124,59 +122,15 @@ export type CaughtUp =
   | { ok: true; batch: number; batchMs: number; waitedMs: number }
   | { ok: false; why: string; waitedMs: number }
 
-/**
- * A log line's time is when it was written, a little after its batch ended: a batch's start is taken this much
- * earlier still, so one that began just before `since` is never counted as begun after it (review round 1).
- */
-const LOG_SLACK_MS = 1_000
 
-type CommittedBatch = { start: number; end: number; batch: number; ms: number; sentBytes: number }
-/** What has been read of each log file: its bytes so far (a whole line each) and the batches in them. */
-const batchLogRead = new Map<string, { bytes: number; batches: CommittedBatch[] }>()
-
-/**
- * The batches the leader's standby runner made current ("standby: batch committed" in its server's log): start,
- * end, time. Each file is read on from where the last read ended (a wait polls this for up to an hour on a large home).
- */
-function committedBatches(m: Machine): CommittedBatch[] {
-  const out: CommittedBatch[] = []
-  for (const f of serverLogFiles(m)) {
-    const seen = batchLogRead.get(f) ?? { bytes: 0, batches: [] }
-    let size = 0
-    try { size = fs.statSync(f).size } catch { continue }
-    if (size < seen.bytes) { seen.bytes = 0; seen.batches = [] }
-    if (size > seen.bytes) {
-      const fd = fs.openSync(f, 'r')
-      try {
-        const buf = Buffer.alloc(size - seen.bytes)
-        fs.readSync(fd, buf, 0, buf.length, seen.bytes)
-        const text = buf.toString('utf8')
-        // Up to the last whole line: a line still being written is read next time.
-        const whole = text.lastIndexOf('\n') + 1
-        seen.bytes += Buffer.byteLength(text.slice(0, whole))
-        for (const line of text.slice(0, whole).split('\n')) {
-          if (!line.includes('"standby: batch committed"')) continue
-          try {
-            const l = JSON.parse(line) as { time: string; batch?: number; totalMs?: number; sentBytes?: number }
-            const end = Date.parse(l.time)
-            const ms = Number(l.totalMs)
-            if (Number.isFinite(end) && Number.isFinite(ms) && typeof l.batch === 'number') seen.batches.push({ start: end - ms - LOG_SLACK_MS, end, batch: l.batch, ms, sentBytes: Number(l.sentBytes) || 0 })
-          } catch { /* not a log line */ }
-        }
-      } finally {
-        fs.closeSync(fd)
-      }
-      batchLogRead.set(f, seen)
-    }
-    out.push(...seen.batches)
-  }
-  return out
-}
+/** The daemon dir a machine's server logs into: WALNUT_DAEMON_DIR of its env, else <dir>/daemon. */
+const logDirOf = (m: Machine): string => m.env?.WALNUT_DAEMON_DIR ?? path.join(m.dir, 'daemon')
 
 /** The commit window the leader's switch would run in (its config's leader_switch), in ms. */
-function commitWindowOf(m: Machine): number {
+async function commitWindowOf(m: Machine): Promise<number> {
   try {
-    const cfg = YAML.parse(fs.readFileSync(path.join(m.home, 'config.yaml'), 'utf8')) as { leader_switch?: unknown }
+    const file = path.join(m.home, 'config.yaml')
+    const cfg = YAML.parse((await ioAt(file).op('text', file)) ?? '') as { leader_switch?: unknown }
     return parseSwitchSettings(cfg.leader_switch).settings?.commitWindowMs ?? 300_000
   } catch { return 300_000 }
 }
@@ -193,15 +147,17 @@ const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`
  */
 export async function untilCaughtUp(leader: Machine, standbyDir: string, o: { since?: number; boundMs: number }): Promise<CaughtUp> {
   const since = o.since ?? Date.now()
-  const budgetMs = catchUpBudgetMs(commitWindowOf(leader))
+  const budgetMs = catchUpBudgetMs(await commitWindowOf(leader))
   const t0 = Date.now()
+  const logDir = logDirOf(leader)
   for (;;) {
-    const st = await standbyStatus(standbyDir).catch(() => null)
-    const batches = committedBatches(leader).filter((b) => b.start >= since)
+    const st = await ioAt(standbyDir).op('standbyStatus', standbyDir).catch(() => null)
+    // The leader's own log, read on its machine from where the last read ended (machine-ops.ts committedBatches).
+    const batches = (await ioAt(logDir).op('committedBatches', logDir)).filter((b) => b.start >= since)
     const fit = batches.find((b) => b.ms <= budgetMs && st?.batch != null && st.batch >= b.batch)
     if (fit) return { ok: true, batch: fit.batch, batchMs: fit.ms, waitedMs: Date.now() - t0 }
     if (Date.now() - t0 >= o.boundMs) {
-      const under = st ? await batchUnderWay(standbyDir, st.committedAt ?? st.takenAt).catch(() => null) : null
+      const under = st ? await ioAt(standbyDir).op('batchUnderWay', standbyDir, st.committedAt ?? st.takenAt).catch(() => null) : null
       const lastOnes = batches.slice(-3).map((b) => `batch ${b.batch} ${secs(b.ms)}/${(b.sentBytes / 1_048_576).toFixed(1)} MB`).join(', ') || 'none'
       const there = under
         ? `a batch under way there since ${under.since} (${under.chunks} chunk(s), ${(under.bytes / 1_048_576).toFixed(1)} MB, the last ${secs(Date.now() - Date.parse(under.lastAt))} ago)`
@@ -219,18 +175,21 @@ export async function caughtUpBeforeSwitch(c: Checks, label: string, leader: Mac
   return c.add(`${label}: the standby caught up before the switch (no switch was tried)`, false, r.why)
 }
 
-/** A machine's server log: every line of `m`'s server (its daemon dir's open-walnut-<day>.log), parsed. */
-export function serverLog(m: Machine): Array<{ time: string; subsystem?: string; message?: string; switchId?: string; [k: string]: unknown }> {
-  return serverLogFiles(m).flatMap((f) => fs.readFileSync(f, 'utf8').split('\n').flatMap((l) => { try { return [JSON.parse(l)] } catch { return [] } }))
+export type LogLine = { time: string; subsystem?: string; message?: string; switchId?: string; [k: string]: unknown }
+
+/**
+ * A machine's server log: every line of `m`'s server (its daemon dir's open-walnut-<day>.log, oldest first),
+ * parsed, read on its machine; `match`: only the lines whose text matches this regex (read there).
+ */
+export async function serverLog(m: Machine, match?: RegExp): Promise<LogLine[]> {
+  const dir = logDirOf(m)
+  return (await ioAt(dir).op('serverLog', dir, match?.source)) as LogLine[]
 }
 
-/** A machine's server log files, oldest first: its daemon dir (WALNUT_DAEMON_DIR of its env, else <dir>/daemon) is its log dir. */
-function serverLogFiles(m: Machine): string[] {
-  const dir = m.env?.WALNUT_DAEMON_DIR ?? path.join(m.dir, 'daemon')
-  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => /^open-walnut-.*\.log$/.test(n)).sort().map((n) => path.join(dir, n)) : []
-}
+/** What the shared checks need of a world: a request to a machine's server. */
+export type Api = Pick<World, 'api'>
 
-export async function status(w: World, m: Machine): Promise<{ mayAct: boolean; state?: string } | null> {
+export async function status(w: Api, m: Machine): Promise<{ mayAct: boolean; state?: string } | null> {
   const r = await w.api(m, 'GET', '/api/leader/status').catch(() => null)
   const p = (r?.json as { permit?: { mayAct?: boolean; state?: string } } | null)?.permit
   return p ? { mayAct: !!p.mayAct, state: p.state } : null
@@ -244,7 +203,7 @@ export interface Seeded {
 }
 
 /** Real data shapes on A: tasks (with op ids), notes, plugin files, a routine. */
-export async function seed(w: World, m: Machine, n = 10): Promise<Seeded> {
+export async function seed(w: Api, m: Machine, n = 10): Promise<Seeded> {
   const out: Seeded = { tasks: [], notes: [], pluginFiles: [], cronId: null }
   for (let i = 0; i < n; i++) {
     const title = `rehearsal task ${i} é中 ${randomBytes(3).toString('hex')}`
@@ -280,7 +239,7 @@ export async function seed(w: World, m: Machine, n = 10): Promise<Seeded> {
 }
 
 /** Writes through A's API until it stops answering; every write it acknowledged is listed. */
-export function startLoad(w: World, m: Machine): { stop(): Promise<Seeded['tasks']>; notes: Seeded['notes']; acked: Readonly<Seeded['tasks']> } {
+export function startLoad(w: Api, m: Machine): { stop(): Promise<Seeded['tasks']>; notes: Seeded['notes']; acked: Readonly<Seeded['tasks']> } {
   const acked: Seeded['tasks'] = []
   const notes: Seeded['notes'] = []
   let running = true
@@ -305,7 +264,7 @@ export function startLoad(w: World, m: Machine): { stop(): Promise<Seeded['tasks
   return { notes, acked, async stop() { running = false; await loop; return acked } }
 }
 
-export async function checkCarried(c: Checks, w: World, to: Machine, from: Machine, s: { tasks: Seeded['tasks']; notes: Seeded['notes']; pluginFiles: Seeded['pluginFiles'] }, label: string): Promise<void> {
+export async function checkCarried(c: Checks, w: Api, to: Machine, from: Machine, s: { tasks: Seeded['tasks']; notes: Seeded['notes']; pluginFiles: Seeded['pluginFiles'] }, label: string): Promise<void> {
   let bad: string[] = []
   for (const t of s.tasks) {
     const r = await w.api(to, 'GET', `/api/tasks/${t.id}`).catch(() => null)
@@ -323,17 +282,17 @@ export async function checkCarried(c: Checks, w: World, to: Machine, from: Machi
   c.add(`${label}: every note acknowledged on ${from.id} is on ${to.id}, by content`, bad.length === 0, `${s.notes.length} notes${bad.length ? `; missing: ${bad.slice(0, 5).join(', ')}` : ''}`)
   bad = []
   for (const f of s.pluginFiles) {
-    let got = ''
-    try { got = fs.readFileSync(path.join(to.home, f.rel), 'utf8') } catch { /* missing */ }
+    const file = path.join(to.home, f.rel)
+    const got = await ioAt(file).op('text', file).catch(() => null)
     if (got !== f.content) bad.push(f.rel)
   }
   c.add(`${label}: plugin files are on ${to.id}, byte for byte`, bad.length === 0, `${s.pluginFiles.length} files`)
 }
 
 /** At no instant do both machines act: from the two homes' permission logs and their door calls. */
-export function checkOneLeader(c: Checks, label: string, a: Machine, b: Machine, handoverAt: { stoppedAt?: string; startedAt?: string }): void {
-  const la = readMayAct(a.home)
-  const lb = readMayAct(b.home)
+export async function checkOneLeader(c: Checks, label: string, a: Machine, b: Machine, handoverAt: { stoppedAt?: string; startedAt?: string }): Promise<void> {
+  const la = await ioAt(a.home).op('readMayAct', a.home)
+  const lb = await ioAt(b.home).op('readMayAct', b.home)
   const lastActA = Math.max(0, ...la.filter((l) => l.mayAct).map((l) => l.t))
   // b's acting since this switch began (an earlier lead of b, before it handed over to a, is not this switch's).
   const since = handoverAt.startedAt ? Date.parse(handoverAt.startedAt) : handoverAt.stoppedAt ? Date.parse(handoverAt.stoppedAt) - 60_000 : 0
@@ -361,21 +320,19 @@ export function checkOneLeader(c: Checks, label: string, a: Machine, b: Machine,
  * The new leader's home holds no path of the old machine but those the rule table keeps
  * (src/core/leader/switch/home-path-rules.ts): the whole home scanned, kept places included.
  */
-export function checkNoOldPaths(c: Checks, to: Machine, from: Machine, label: string): void {
-  const roots = pathRoots({ fromHome: from.home, toHome: to.home, fromAccount: from.env?.HOME, toAccount: to.env?.HOME })
-  const scan = scanHomePaths(to.home, roots)
-  const j = judgePathHits(scan.hits, homePathRules())
-  const bad = [...j.notRewritten.map((x) => x.hit), ...j.unknown]
-  c.add(`${label}: no path of ${from.id}'s home or account home is left in ${to.id}'s home but those kept on purpose`, bad.length === 0,
-    `${scan.files} files in ${Math.round(scan.ms)} ms; ${j.kept.length} kept (${[...new Set(j.kept.map((k) => k.rule))].join(', ')})${bad.length ? `; left: ${bad.slice(0, 5).map(describeHit).join('; ')}` : ''}`)
+export async function checkNoOldPaths(c: Checks, to: Machine, from: Machine, label: string): Promise<void> {
+  // The scan runs on the new leader's machine (machine-ops.ts oldPathsLeft): its home is there.
+  const r = await ioAt(to.home).op('oldPathsLeft', { fromHome: from.home, toHome: to.home, fromAccount: from.env?.HOME, toAccount: to.env?.HOME })
+  c.add(`${label}: no path of ${from.id}'s home or account home is left in ${to.id}'s home but those kept on purpose`, r.left.length === 0,
+    `${r.files} files in ${Math.round(r.ms)} ms; ${r.keptCount} kept (${r.keptRules.join(', ')})${r.left.length ? `; left: ${r.left.slice(0, 5).join('; ')}` : ''}`)
 }
 
 function iso(t: number): string {
   return Number.isFinite(t) && t > 0 ? new Date(t).toISOString() : 'never'
 }
 
-export function cronDoorCalls(home: string): MayActLine[] {
-  return readMayAct(home).filter((l) => l.event === 'door' && l.kind === 'cron-fire')
+export async function cronDoorCalls(home: string): Promise<MayActLine[]> {
+  return (await ioAt(home).op('readMayAct', home)).filter((l) => l.event === 'door' && l.kind === 'cron-fire')
 }
 
 /**
@@ -444,7 +401,7 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     await checkCarried(c, w, w.b, w.a, { tasks: [...s.tasks, ...acked], notes: [...s.notes, ...load.notes], pluginFiles: [...s.pluginFiles, late] }, 'A -> B')
     c.add('the trial scanned the new home for old-machine paths', (st?.log ?? []).some((l) => /old-machine paths rewritten/.test(l.note ?? '')) && (st?.log ?? []).some((l) => /paths scanned/.test(l.note ?? '')),
       (st?.log ?? []).filter((l) => /paths/.test(l.note ?? '')).map((l) => l.note).join(' | '))
-    checkNoOldPaths(c, w.b, w.a, 'A -> B')
+    await checkNoOldPaths(c, w.b, w.a, 'A -> B')
     c.add('load ran across the switch', acked.length > 0, `${acked.length} tasks acknowledged by A during the switch`)
     // The applied-ops ledger came along under B's home: A's last ops replayed on B apply none twice.
     const before = (await w.api(w.b, 'GET', '/api/tasks?project=Rehearsal%20load')).json?.tasks?.length ?? -1
@@ -456,11 +413,11 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     }
     const after = (await w.api(w.b, 'GET', '/api/tasks?project=Rehearsal%20load')).json?.tasks?.length ?? -2
     c.add("replaying A's last accepted ops on B applies none twice", replayed === replay.length && before === after, `${replayed}/${replay.length} answered as replays; tasks ${before} -> ${after}`)
-    checkOneLeader(c, 'A -> B', w.a, w.b, { stoppedAt: st?.stoppedAt, startedAt: st?.startedAt })
+    await checkOneLeader(c, 'A -> B', w.a, w.b, { stoppedAt: st?.stoppedAt, startedAt: st?.startedAt })
     // The routine: every slot that went through the door went through it on one machine, once.
-    const cronA = cronDoorCalls(w.a.home).filter((l) => l.mayAct)
+    const cronA = (await cronDoorCalls(w.a.home)).filter((l) => l.mayAct)
     await sleep(17_000) // one more period of the 15 s routine, so a slot due during the switch is caught up on B
-    const cronB = cronDoorCalls(w.b.home).filter((l) => l.mayAct)
+    const cronB = (await cronDoorCalls(w.b.home)).filter((l) => l.mayAct)
     const slotsA = new Set(cronA.map((l) => l.opId))
     const slotsB = new Set(cronB.map((l) => l.opId))
     const twice = [...slotsA].filter((x) => slotsB.has(x))
@@ -516,7 +473,7 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     c.add('A\'s standby was stopped by the switch back; the leader now holds its port', !a.standbyServer() && !!a.runningServer() && (await w.api(w.a, 'GET', '/api/leader/status')).json?.standby !== true)
     await standbyA.stop()
     await checkCarried(c, w, w.a, w.b, { tasks: [...s.tasks, ...acked, ...onB], notes: [...s.notes, noteB], pluginFiles: [...s.pluginFiles, late] }, 'B -> A')
-    checkNoOldPaths(c, w.a, w.b, 'B -> A')
+    await checkNoOldPaths(c, w.a, w.b, 'B -> A')
     c.add("A's handed-over home is kept beside the new one", fs.existsSync(`${w.a.home}.before-${sb!.id}`) && readMarker(`${w.a.home}.before-${sb!.id}`)?.state === 'handed-over')
     await checkStandby(c, w, w.b, w.a.id, 'B started again by hand after the switch back')
     return { checks: c, downtimeMs: st?.downtimeMs, backDowntimeMs: sb?.downtimeMs }
@@ -730,7 +687,7 @@ export async function rehearseHomePrefix(root: string, print: (c: Check) => void
       JSON.stringify({ stt: cfgB.stt, push: cfgB.push, standby: cfgB.standby?.dir }))
     const script = fs.readFileSync(path.join(w.b.home, 'triggers', 't1', 'check.sh'), 'utf8')
     c.add('home prefix: the trigger script reads B\'s home', script === `#!/bin/sh\ncat ${w.b.home}/notes/watch.md\n`, JSON.stringify(script))
-    checkNoOldPaths(c, w.b, w.a, 'home prefix')
+    await checkNoOldPaths(c, w.b, w.a, 'home prefix')
     return c
   } finally {
     await a.stopServer().catch(() => {})
@@ -777,7 +734,7 @@ export async function rehearseRestart(root: string, print: (c: Check) => void, p
     c.add('restart: after a crash the doors open again once the dead process\'s record ran out', startedC.ok && okC && c.crashMs !== undefined, `closed ${c.crashMs ?? '?'} ms`)
     // The routine: a 15 s slot came due while the doors were closed; it fires once after they open.
     await sleep(20_000)
-    const calls = cronDoorCalls(w.a.home).filter((l) => l.mayAct)
+    const calls = (await cronDoorCalls(w.a.home)).filter((l) => l.mayAct)
     const ids = calls.map((l) => l.opId)
     const dup = ids.filter((id, i) => ids.indexOf(id) !== i)
     const afterCrash = calls.filter((l) => openC !== undefined && l.t >= openC)

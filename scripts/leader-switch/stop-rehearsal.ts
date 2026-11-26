@@ -33,7 +33,7 @@ async function switchUntilFirstFinalBatch(w: World, env: Record<string, string>)
   // The final batch is one after the server's own "the switch stop begins": the last look right before the stop
   // (final-stop route) sends a batch too, and a signal in it is an ordinary stop.
   const begun = await waitFor('the switch stop begins', async () => {
-    const l = serverLog(w.a).find((x) => x.switchId === id && /the switch stop begins/.test(String(x.message)))
+    const l = (await serverLog(w.a, /the switch stop begins/)).find((x) => x.switchId === id && /the switch stop begins/.test(String(x.message)))
     return l ? Date.parse(l.time) : null
   }, 120_000, 100)
   const batch = await waitForBatch(w.b.standbyDir, begun, 60_000)

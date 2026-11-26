@@ -251,7 +251,7 @@ describe('a switch whose candidate has no leader link, on two dev boxes and the 
     expect(w.side(w.a).standbyServer()).not.toBeNull()
     expect(await status(w.a)).toMatchObject({ state: 'standby', mayAct: false })
     const c = new Checks()
-    checkOneLeader(c, 'A -> B, no leader link, one witness down', w.a, w.b, { stoppedAt: st?.stoppedAt })
+    await checkOneLeader(c, 'A -> B, no leader link, one witness down', w.a, w.b, { stoppedAt: st?.stoppedAt })
     expect(c.all.filter((x) => !x.ok).map((x) => `${x.name}: ${x.detail}`)).toEqual([])
     // B keeps the permission over the two doors: wait for its renews to move w-a's number on (no fixed wait).
     const n0 = recordAt(rootA(), walnutId, 'w-a')!.held!.number

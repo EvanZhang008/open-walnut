@@ -13,6 +13,7 @@
  *   bun scripts/leader-switch/machine-server.ts --port <n> [--dev]
  */
 import path from 'node:path'
+import type { PathOrFileDescriptor, WriteFileOptions } from 'node:fs'
 
 const portArg = process.argv.indexOf('--port')
 const port = portArg >= 0 ? Number(process.argv[portArg + 1]) : NaN
@@ -68,6 +69,20 @@ await (await import('./witness-links.js')).linkRehearsalWitnesses()
     const missed = (() => { try { return fs.readFileSync(missFile, 'utf8').trim() } catch { return '' } })()
     return missed ? { ok: false, why: `not told: ${missed} (a net host the rehearsal keeps from the lists)` } : real(o)
   }
+}
+
+// The exit trace stays in the rehearsal folder. A server that is neither ephemeral nor a host replica appends it
+// to /tmp/open-walnut-exit.log whenever the account's production daemon dir is /tmp/open-walnut, even with its
+// own WALNUT_DAEMON_DIR (server.ts exitTraceFile, daemon-dir.ts localProductionDaemonDir): on rehearsal (b)'s
+// other machine that is the real service's own exit log. Here it goes to this machine's daemon dir instead.
+{
+  const fs = (await import('node:fs')).default
+  const { SHARED_DAEMON_DIR } = await import('../../src/lib/daemon-dir.js')
+  const shared = `${SHARED_DAEMON_DIR}-exit.log`
+  const own = path.join(process.env.WALNUT_DAEMON_DIR!, 'exit.log')
+  const append = fs.appendFileSync.bind(fs)
+  fs.appendFileSync = ((file: PathOrFileDescriptor, data: string | Uint8Array, o?: WriteFileOptions) =>
+    append(typeof file === 'string' && path.resolve(file) === shared ? own : file, data, o)) as typeof fs.appendFileSync
 }
 
 const { startServer, armGracefulSignalExit, standbyEnded } = await import('../../src/web/server.js')

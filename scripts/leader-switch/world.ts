@@ -60,11 +60,17 @@ export interface World {
 
 export interface ByHand { ok: boolean; pid?: number; log: string; logText(): string; stop(): Promise<void> }
 
-function machine(root: string, name: string, port: number, homeName = 'home', at?: string): Machine {
-  const dir = at ?? path.join(root, name)
+/** Machine `machine-<name>` made in `root` (or at `at`): its folder and its machine-id file. */
+export function makeMachine(root: string, name: string, port: number, homeName = 'home', at?: string): Machine {
+  const m = describeMachine(at ?? path.join(root, name), name, port, homeName)
+  fs.mkdirSync(m.dir, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(m.idFile, `${m.id}\n`)
+  return m
+}
+
+/** Machine `machine-<name>` whose folder (its HOME) is `dir`, as a description only: nothing is made. */
+export function describeMachine(dir: string, name: string, port: number, homeName = 'home'): Machine {
   const idFile = path.join(dir, 'machine-id')
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-  fs.writeFileSync(idFile, `machine-${name}\n`)
   const home = path.join(dir, homeName)
   return {
     id: `machine-${name}`,
@@ -94,8 +100,8 @@ export interface WorldExtra { leaderSwitch?: Record<string, unknown>; doorsA?: s
 /** `dirB`: B's machine folder (its HOME) somewhere else than `<root>/b`, for a home that moves to another prefix. */
 export function makeWorld(root: string, opts: { portA: number; portB: number; intervalSeconds?: number; homeA?: string; dirB?: string } & WorldExtra): World {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })
-  const a = machine(root, 'a', opts.portA, opts.homeA)
-  const b = machine(root, 'b', opts.portB, 'home', opts.dirB)
+  const a = makeMachine(root, 'a', opts.portA, opts.homeA)
+  const b = makeMachine(root, 'b', opts.portB, 'home', opts.dirB)
   const witnesses = ['w1', 'w2', 'w3'].map((id) => ({ id, dir: path.join(root, 'witnesses', id) }))
   fs.mkdirSync(a.home, { recursive: true, mode: 0o700 })
   fs.writeFileSync(path.join(a.home, 'config.yaml'), YAML.stringify(switchConfig({ a, b, witnesses }, b.standbyDir, opts.intervalSeconds, opts)))
