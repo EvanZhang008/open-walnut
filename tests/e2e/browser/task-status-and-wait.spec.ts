@@ -303,6 +303,14 @@ test('Snooze until picks a day at an hour of your own', async ({ page, browserNa
   const before = (await taskOf(task.id)).start_date
   await row.getByLabel('Snooze time').fill('00:00')
   const today = await page.evaluate(() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}` })
+  // The grid opens on the snoozed day's month (MonthGrid.tsx), and `later` is the fifth day chip:
+  // in a month's last days that is next month, with today one step back (2026-11-26: the
+  // spec of b5df22551f timed out on a today cell the December grid did not draw).
+  if (later!.slice(0, 7) !== today.slice(0, 7)) {
+    await expect(row.getByTestId('dp-month')).toHaveAttribute('data-month', later!.slice(0, 7))
+    await row.getByTestId('dp-month-prev').click()
+  }
+  await expect(row.getByTestId('dp-month')).toHaveAttribute('data-month', today.slice(0, 7))
   await row.locator(`.dp-month [data-date="${today}"]`).click()
   await expect(row.getByRole('alert')).toHaveText(/already gone by/)
   await expect(menu).toBeVisible()
