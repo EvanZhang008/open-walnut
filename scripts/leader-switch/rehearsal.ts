@@ -626,7 +626,7 @@ export async function rehearseTrialFailure(root: string, kind: typeof TRIAL_FAIL
     } else if (kind === 'undecided-path') {
       // A store no path rule decides (as a new one would be) still names A's home.
       fs.mkdirSync(path.join(w.b.home, 'cache'), { recursive: true })
-      fs.writeFileSync(path.join(w.b.home, 'cache', 'status-riding.json'), JSON.stringify({ dir: path.join(w.a.home, 'workdir') }))
+      fs.writeFileSync(path.join(w.b.home, 'cache', 'status-reconcile.json'), JSON.stringify({ dir: path.join(w.a.home, 'workdir') }))
     } else {
       // The target job reads its own machine's entry from its own (promoted) home.
       const cfgFile = path.join(w.b.home, 'config.yaml')
@@ -638,7 +638,7 @@ export async function rehearseTrialFailure(root: string, kind: typeof TRIAL_FAIL
     const resumed = await w.cli(w.a.home, ['leader', 'switch', '--resume'])
     const st = readSwitchState(w.a.home)
     c.add(`trial ${kind}: the switch rolled back`, st?.step === 'rolled-back' && resumed.code === 3, `exit ${resumed.code}; why: ${st?.rollbackWhy?.slice(0, 200)}`)
-    if (kind === 'undecided-path') c.add('trial undecided-path: the reason names the file, the key and the path', (st?.rollbackWhy ?? '').includes(`cache/status-riding.json (dir): ${path.join(w.a.home, 'workdir')}`), st?.rollbackWhy?.slice(0, 300) ?? '')
+    if (kind === 'undecided-path') c.add('trial undecided-path: the reason names the file, the key and the path', (st?.rollbackWhy ?? '').includes(`cache/status-reconcile.json (dir): ${path.join(w.a.home, 'workdir')}`), st?.rollbackWhy?.slice(0, 300) ?? '')
     c.add(`trial ${kind}: A leads again`, !!(await status(w, w.a))?.mayAct)
     c.add(`trial ${kind}: no marker left on A, B not running`, !readMarker(w.a.home) && !b.runningServer())
     await checkCarried(c, w, w.a, w.a, { tasks: s.tasks, notes: s.notes, pluginFiles: s.pluginFiles }, `trial ${kind}`)
