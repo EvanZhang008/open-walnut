@@ -26,6 +26,21 @@ func waitForValue(_ element: XCUIElement, _ value: String, timeout: TimeInterval
     waitToMatch(element, NSPredicate(format: "value == %@", value), timeout: timeout)
 }
 
+/// True once `element` is off the screen, within `timeout`: it no longer exists, or it has no frame.
+///
+/// A sheet that closed can leave its views in the accessibility tree a while with a frame of
+/// {inf, inf, 0, 0}: `exists` still reads true though nothing shows (2026-11-26, CI on iOS 26.6:
+/// RoutinesUITests' Edit sheet had closed and its row showed the new task, yet
+/// `routines.editor.taskCurrent` existed at {inf, inf} past the 5 s wait). Every check that a
+/// sheet closed waits here; `tests/web/ios-sheet-closed-guard.test.ts` fails on an `exists == false`
+/// one again.
+func waitOffScreen(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+    waitToMatch(element, NSPredicate { object, _ in
+        guard let e = object as? XCUIElement else { return false }
+        return !e.exists || e.frame.isEmpty
+    }, timeout: timeout)
+}
+
 /// True once `element` exists and its frame reads the same twice, 0.3 s apart, within `timeout`.
 ///
 /// A row in a drawer that is still sliding in, or a button on a page that is still coming back,

@@ -407,8 +407,7 @@ final class RoutinesUITests: XCTestCase {
         XCTAssertTrue(app.textFields["routines.editor.check"].exists || app.textViews["routines.editor.check"].exists,
                       "a trigger's sheet has no check command")
         app.buttons["routines.editor.save"].tap()
-        let closed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: name)
-        wait(for: [closed], timeout: 5)
+        XCTAssertTrue(waitOffScreen(name, timeout: 5), "the editor did not close")
         XCTAssertEqual(store.patched.count, 1)
         XCTAssertEqual(store.patched.first?.id, "r-marina-1")
         XCTAssertEqual(store.patched.first?.body["name"] as? String, "Payments pipeline watch")
@@ -440,8 +439,7 @@ final class RoutinesUITests: XCTestCase {
                       "the sheet does not name where it runs as the row does")
         shot("14-new-routine-sheet")
         save.tap()
-        let closed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: name)
-        wait(for: [closed], timeout: 5)
+        XCTAssertTrue(waitOffScreen(name, timeout: 5), "the editor did not close")
         let body = try XCTUnwrap(store.created.first)
         XCTAssertEqual(body["name"] as? String, "Stretch break")
         let executor = try XCTUnwrap(body["executor"] as? [String: Any])
@@ -625,8 +623,7 @@ final class RoutinesUITests: XCTestCase {
         shot("31-task-picked")
 
         app.buttons["routines.editor.save"].tap()
-        let closed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: current)
-        wait(for: [closed], timeout: 5)
+        XCTAssertTrue(waitOffScreen(current, timeout: 5), "the editor did not close")
         let patch = try XCTUnwrap(store.patched.first)
         XCTAssertEqual(patch.id, "r-router")
         let executor = try XCTUnwrap(patch.body["executor"] as? [String: Any], "the executor was not sent")
@@ -775,8 +772,7 @@ final class RoutinesUITests: XCTestCase {
         app.buttons["routines.editor.cancel"].tap()
         XCTAssertTrue(discard.waitForExistence(timeout: 5))
         discard.tap()
-        let closed = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: name)
-        wait(for: [closed], timeout: 5)
+        XCTAssertTrue(waitOffScreen(name, timeout: 5), "the editor did not close")
         XCTAssertTrue(store.patched.isEmpty, "a discarded edit was saved")
     }
 
