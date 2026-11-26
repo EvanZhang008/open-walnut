@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { oldLeaderRestartedBy, oldMachineStandbyReasons } from '../../../../src/core/leader/switch/source-job.js'
 import { standbyAfterRollback } from '../../../../src/core/leader/switch/target-job.js'
 import { TEST_ENV_PASSES_ON, cleanStartEnv } from '../../../../src/core/leader/switch/side.js'
+import { guardedPath } from '../../../setup/exec-guard.js'
 import { writeMarker } from '../../../../src/core/leader/switch/records.js'
 
 const remote = [{ id: 'w-a', machine: 'machine-a', url: 'https://a/door' }, { id: 'w-k', url: 'https://k/door' }]
@@ -62,21 +63,21 @@ describe('the target\'s rollback starts the old home again as the standby', () =
 describe('the standby the switch starts gets a clean env', () => {
   it('keeps the account basics and the machine\'s daemon placement, never the switch job\'s session identity', () => {
     const env = cleanStartEnv({
-      HOME: '/home/u', PATH: '/usr/bin', USER: 'u', TZ: 'UTC',
+      HOME: '/home/u', PATH: guardedPath(), USER: 'u', TZ: 'UTC',
       WALNUT_DAEMON_DIR: '/tmp/open-walnut', WALNUT_DAEMON_STATE_DIR: '/opt/w', WALNUT_IN_PROCESS_DAEMON: '0', XDG_RUNTIME_DIR: '/run/user/1',
-      WALNUT_LEADER_PERMIT_VALID_MS: '9000', WALNUT_TEST_EXEC_GUARD: '1',
+      WALNUT_LEADER_PERMIT_VALID_MS: '9000',
       CLAUDECODE: '1', WALNUT_SESSION_ID: 'sess-1', WALNUT_TASK_DIR: '/tasks/t', VITEST: 'true', OPEN_WALNUT_HOME: '/the/jobs/home', NODE_OPTIONS: '--inspect',
     })
     expect(env).toEqual({
-      HOME: '/home/u', PATH: '/usr/bin', USER: 'u', TZ: 'UTC',
+      HOME: '/home/u', PATH: guardedPath(), USER: 'u', TZ: 'UTC',
       WALNUT_DAEMON_DIR: '/tmp/open-walnut', WALNUT_DAEMON_STATE_DIR: '/opt/w', WALNUT_IN_PROCESS_DAEMON: '0', XDG_RUNTIME_DIR: '/run/user/1',
       WALNUT_LEADER_PERMIT_VALID_MS: '9000',
     })
   })
 
   it('in a test run (its setup\'s mark) passes the whole env on, the session identity taken out', () => {
-    expect(cleanStartEnv({ [TEST_ENV_PASSES_ON]: '1', HOME: '/fake', WALNUT_TEST_EXEC_GUARD: '/g', WALNUT_ORG_AUTOSTART: '0', WALNUT_SESSION_ID: 's', WALNUT_TASK_DIR: '/t', CLAUDECODE: '1' }))
-      .toEqual({ [TEST_ENV_PASSES_ON]: '1', HOME: '/fake', WALNUT_TEST_EXEC_GUARD: '/g', WALNUT_ORG_AUTOSTART: '0' })
+    expect(cleanStartEnv({ [TEST_ENV_PASSES_ON]: '1', HOME: '/fake', WALNUT_START_QUEUE: '0', WALNUT_ORG_AUTOSTART: '0', WALNUT_SESSION_ID: 's', WALNUT_TASK_DIR: '/t', CLAUDECODE: '1' }))
+      .toEqual({ [TEST_ENV_PASSES_ON]: '1', HOME: '/fake', WALNUT_START_QUEUE: '0', WALNUT_ORG_AUTOSTART: '0' })
   })
 })
 

@@ -34,6 +34,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { getVersion } from '../../version.js'
+import { clause } from '../../../utils/format.js'
 import { markerRefusal, readMarker, summarize, type HandedOverMarker, type RecordSummary } from './records.js'
 import { permitHolderId, standbyServerFile } from './machine-id.js'
 import type { PermitRecord } from '../permit/types.js'
@@ -491,7 +492,7 @@ export function waitForOtherStandby(s: HandedOverStandby, running: StandbyServer
   }, o.lookMs ?? 1_000)
   return {
     server: http.createServer(),
-    line: `Walnut waits: a standby of this home already runs (pid ${running.pid}, port ${running.port}): ${s.message}. It takes no port and opens nothing until that standby ends`,
+    line: `Walnut waits: a standby of this home already runs (pid ${running.pid}, port ${running.port}): ${clause(s.message)}. It takes no port and opens nothing until that standby ends`,
     ended,
     close: async () => { closed = true; clearInterval(look) },
   }

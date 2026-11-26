@@ -3,7 +3,7 @@
  * refuses every other request with `handed_over`, keeps its pid file beside the instance lock and
  * writes nothing in the home. Fake homes in a temp folder, an ephemeral port.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
@@ -140,13 +140,11 @@ describe('the standby of a handed-over home', () => {
     open = await serveHandedOver(handedOverAtBoot({ home, env })!, { port: 0, host: '127.0.0.1', env })
     expect((await (await fetch(url(open, '/api/leader/status'))).json()).message).toMatch(/is handing the leader to machine-b/)
     writeMarker(home, { switchId: 's1', to: 'machine-b', state: 'handed-over', handover: 4, commit: 5, leaderDoors: ['wss://b.example/host-door'], at: new Date().toISOString() })
-    const deadline = Date.now() + 5_000
     let st: Record<string, unknown> = {}
-    while (Date.now() < deadline) {
-      st = await (await fetch(url(open, '/api/leader/status'))).json()
-      if (st.message === 'this machine handed the leader to machine-b (switch s1)') break
-      await new Promise((r) => setTimeout(r, 100))
-    }
+    await vi.waitFor(async () => {
+      st = await (await fetch(url(open!, '/api/leader/status'))).json()
+      expect(st.message).toBe('this machine handed the leader to machine-b (switch s1)')
+    }, { timeout: 5_000, interval: 100 })
     expect(st).toMatchObject({ message: 'this machine handed the leader to machine-b (switch s1)', leaderDoors: ['wss://b.example/host-door'], handedOver: { state: 'handed-over', commit: 5 } })
     const w = await fetch(url(open, '/api/tasks'), { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })
     expect(await w.json()).toEqual({ error: 'this machine handed the leader to machine-b (switch s1)', code: 'handed_over', leader: 'machine-b', leaderDoors: ['wss://b.example/host-door'], switchId: 's1' })
@@ -174,8 +172,7 @@ describe('the standby of a handed-over home', () => {
       expect(ended).toBeNull()
       // The other standby stops (its pid file goes with it): this one ends, for its launcher's next start.
       fs.rmSync(file)
-      await new Promise((r) => setTimeout(r, 120))
-      expect(ended).toMatch(/is gone; this waiting process ends/)
+      expect(await wait.ended).toMatch(/is gone; this waiting process ends/)
       // It wrote nothing anywhere: no pid file of its own, nothing in the home.
       expect(fs.existsSync(file)).toBe(false)
       expect(listing(home)).toEqual(before)

@@ -108,7 +108,8 @@ describe('a plain server\'s standby and this machine\'s session runtime', () => 
     m.hold = () => new Promise((resolve) => { finish = () => resolve({ kind: 'in-process', url: 'in-process://daemon' }) })
     const s = await load()
     const hold = s.holdServiceRuntimeInStandby(0)
-    await new Promise((r) => setTimeout(r, 10))
+    // The hold reached its start, which waits.
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
     await s.releaseServiceRuntimeInStandby('SIGTERM', 4_000)
     expect(m.stops).toEqual([{ reason: 'SIGTERM', budgetMs: 4_000, forGood: true }])
     finish()
@@ -167,7 +168,8 @@ describe('a service\'s standby and its runtime', () => {
     m.start = () => new Promise((resolve) => { finish = () => resolve({ kind: 'started' }) })
     const s = await serviceLoad()
     const hold = s.holdServiceRuntimeInStandby(4321)
-    await new Promise((r) => setTimeout(r, 10))
+    // The hold reached its start, which waits.
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
     await s.releaseServiceRuntimeInStandby('SIGTERM', 4_000)
     finish()
     expect(await hold).toBe(false)
