@@ -12,8 +12,10 @@
  *     (a start without it or with another one is refused, with it passes: the rollback's resume);
  *   - a CLI that outlives SIGTERM: an error and it still runs (no force kill);
  *   - an ACP worker that outlives its daemon: the same stop ends it (gone at the answer, its pid row
- *     and pipe gone), a retried stop answers stopped;
- *   - start and acpStart in a marked home (switching, handed-over, torn) are refused with
+ *     and pipe gone), a retried stop answers stopped; a tool its graceful shutdown leaves running gets
+ *     one SIGTERM to the group;
+ *   - start and acpStart in a marked home (switching, handed-over, torn), and a live adopt of a running
+ *     CLI there, are refused with
  *     HOME_HANDED_OVER, the home, the state and the machine; `<home>-c` starts as before;
  *   - a new runtime on the same dirs adopts the kept CLI and ACP worker and nothing of the stopped.
  *
@@ -95,10 +97,19 @@ describe.skipIf(!BUN)('a leader switch stop of the sessions in a data home, on b
       expect(out.acpRowGone).toBe(true)
       expect(out.acpSurviveFilesGone).toBe(true)
       expect(out.acpStopAgain).toMatchObject({ ok: true, stopped: true })
+      // A tool the graceful shutdown leaves running: one SIGTERM to the group after the wait, then the answer.
+      expect(out.acpToolStart).toEqual({ ok: true })
+      expect(out.toolRunning).toBe(true)
+      expect(out.acpToolStopped).toEqual({ ok: true, stopped: true, kind: 'acp' })
+      expect(out.acpToolStopMs).toBeGreaterThanOrEqual(3_000)
+      expect(out.acpToolGroupGone).toBe(true)
 
       // 4. A marked home refuses every start in it or under it, in both states and torn; the neighbour starts.
       expect(out.markedSwitching).toEqual(refused('switching', 'machine-b'))
       expect(out.markedResume).toEqual(refused('switching', 'machine-b'))
+      expect(out.markedLiveAdopt).toEqual(refused('switching', 'machine-b'))
+      expect(out.liveStillRuns).toBe(true)
+      expect(out.liveStop).toEqual({ ok: true, stopped: true })
       expect(out.markedAcp).toEqual(refused('switching', 'machine-b'))
       expect(out.markedHandedOver).toEqual(refused('handed-over', 'machine-b'))
       expect(out.markedHandedOverAcp).toEqual(refused('handed-over', 'machine-b'))

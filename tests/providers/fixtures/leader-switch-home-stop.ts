@@ -101,7 +101,7 @@ function groupAlive(pgid: number): boolean {
 const recorded: number[] = []
 function runsOurScript(pid: number): boolean {
   const args = spawnSync('ps', ['-ww', '-o', 'args=', '-p', String(pid)], { encoding: 'utf8' }).stdout ?? ''
-  return args.includes(lib) || args.includes(MOCK_AGENT) || args.includes(WORKER)
+  return args.includes(lib) || args.includes(MOCK_AGENT) || args.includes(WORKER) || args.includes('process.exit(0), 30000')
 }
 
 // ── One client of one runtime, the same calls for both twins ──
@@ -176,9 +176,15 @@ function start(c: Client, s: string, cwd: string, opts: { script?: string; lead?
     origin: { home: data }, ...(opts.stopFence ? { stopFence: opts.stopFence } : {}),
   })
 }
-const acpStart = (c: Client, s: string, cwd: string) => c.rpc('acpStart', {
-  sid: s, cwd, workerCmd: [process.execPath, WORKER], adapterCmd: [process.execPath, MOCK_AGENT], env: {}, survive: true, ownerHome: data,
+const acpStart = (c: Client, s: string, cwd: string, agentEnv: Record<string, string> = {}) => c.rpc('acpStart', {
+  sid: s, cwd, workerCmd: [process.execPath, WORKER], adapterCmd: [process.execPath, MOCK_AGENT], env: agentEnv, survive: true, ownerHome: data,
 })
+/** The members of process group `pgid` (pid and command line), read with ps. */
+function groupMembers(pgid: number): Array<{ pid: number; args: string }> {
+  const rows = spawnSync('ps', ['-A', '-ww', '-o', 'pid=,pgid=,args='], { encoding: 'utf8' }).stdout ?? ''
+  return rows.split('\n').map((l) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m && Number(m[2]) === pgid)
+    .map((m) => ({ pid: Number(m[1]), args: m[3]! }))
+}
 const marker = path.join(data, 'local', 'leader-switch', 'handed-over.json')
 function mark(text: string | null) {
   if (text === null) { fs.rmSync(marker, { force: true }); return }
@@ -249,10 +255,35 @@ try {
   out.acpSurviveFilesGone = await waitFor(() => !fs.existsSync(path.join(daemonDir + '-streams', `${r1}.acp-in`)), 5_000)
   out.acpStopAgain = pick(await c.rpc('stop', { sid: r1, reason: 'leader_switch', stopRequestId: fence(11), home: data }), 'ok', 'stopped', 'noop', 'reason')
 
+  // ── 3b. A tool the worker's graceful shutdown leaves running: the strict stop asks its group with SIGTERM ──
+  const r2 = sid(15)
+  out.acpToolStart = pick(await acpStart(c, r2, data, { MOCK_ACP_STATUS_TOOL_MS: '30000' }), 'ok', 'error')
+  const toolPgid = (JSON.parse(fs.readFileSync(path.join(daemonDir, 'acp-workers.json'), 'utf8')) as Record<string, { pid: number }>)[r2]?.pid ?? 0
+  if (toolPgid) recorded.push(toolPgid)
+  void c.rpc('acpSend', { sid: r2, commandId: 'acp-prompt:t-1', walnutMessageId: 't-1', text: 'status-slow-tool' }, 60_000).catch(() => null)
+  const toolOf = () => groupMembers(toolPgid).find((m) => m.args.includes('process.exit(0), 30000'))
+  out.toolRunning = await waitFor(() => !!toolOf())
+  const tool = toolOf()
+  if (tool) recorded.push(tool.pid)
+  const t1 = Date.now()
+  out.acpToolStopped = pick(await c.rpc('stop', { sid: r2, reason: 'leader_switch', stopRequestId: fence(15), home: data }), 'ok', 'stopped', 'kind', 'error')
+  out.acpToolStopMs = Date.now() - t1
+  out.acpToolGroupGone = !groupAlive(toolPgid)
+
   // ── 4. A marked home: no CLI, no ACP worker starts in it or under it, whatever the state ──
+  // A live CLI in the home takes no message as a live adopt either (a start with resume and a message).
+  const live = sid(8)
+  const liveStarted = await start(c, live, data)
+  const livePid = liveStarted.pid as number
+  recorded.push(livePid)
   mark(JSON.stringify({ switchId: 'sw-1', to: 'machine-b', state: 'switching', at: new Date().toISOString() }))
   out.markedSwitching = refusal(await start(c, sid(3), path.join(data, 'sub')))
   out.markedResume = refusal(await start(c, s1, data, { resume: true, stopFence: fence(2) }))
+  out.markedLiveAdopt = refusal(await c.rpc('start', {
+    sid: live, cwd: data, message: 'hello', resume: true, mode: 'default', origin: { home: data },
+    args: ['/bin/sh', '-c', 'exit 0', 'sh', '--session-id', live],
+  }))
+  out.liveStillRuns = alive(livePid)
   out.markedAcp = refusal(await acpStart(c, sid(12), data))
   mark(JSON.stringify({ switchId: 'sw-1', to: 'machine-b', state: 'handed-over', at: new Date().toISOString(), commit: 7 }))
   out.markedHandedOver = refusal(await start(c, sid(4), data))
@@ -267,6 +298,7 @@ try {
   if (typeof n.pid === 'number') recorded.push(n.pid)
   out.neighbourStop = pick(await c.rpc('stop', { sid: sid(6), reason: 'user', home: data }), 'ok', 'stopped')
   mark(null)
+  out.liveStop = pick(await c.rpc('stop', { sid: live, reason: 'leader_switch', stopRequestId: fence(8), home: data }), 'ok', 'stopped')
 
   // ── 5. A new runtime on the same dirs (the keep switch on) adopts the kept ones and nothing of the stopped ──
   await c.stop()

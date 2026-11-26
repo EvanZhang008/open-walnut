@@ -192,12 +192,7 @@ export function createDaemonSessionStart<W extends object>(deps: DaemonSessionSt
     }
     // leader-switch-home-stop-v1: no CLI starts (nor takes a message as a live adopt) in a data home a
     // leader switch is taking away or took away; the session runs on the new leader (lib/leader-home-gate.ts).
-    const handedOver = await handedOverHomeAt(cwd)
-    if (handedOver) {
-      const refusal = homeHandedOverRefusal('start', handedOver)
-      logMsg('warn', 'start refused: the working folder is in a handed-over data home', { sid, cwd, home: refusal.home, state: refusal.state, to: refusal.to })
-      throw Object.assign(new Error(refusal.error), refusal)
-    }
+    await refuseHandedOverHome(sid, cwd)
 
     // If a session with this sid already exists (e.g. adopted orphan still
     // running, or previous turn's process not yet reaped), clean it up BEFORE
@@ -545,6 +540,8 @@ export function createDaemonSessionStart<W extends object>(deps: DaemonSessionSt
     let barrier: ReturnType<typeof spawnBehindRegistry> | null = null
     let proc: ReturnType<typeof spawn>
     try {
+      // The awaits since the first look: a home marked meanwhile starts no CLI (only sync code from here to the spawn).
+      await refuseHandedOverHome(sid, cwd)
       // Last synchronous point before the CLI exists: a fence set during the awaits above wins.
       if (demoQuiesce.fenced) throw new Error('start: Demo is stopping; no new session starts')
       barrier = SERVICE_MODE ? spawnBehindRegistry(userShell, ['-c', shellCmd], spawnOptions, childUse) : null
@@ -699,6 +696,15 @@ export function createDaemonSessionStart<W extends object>(deps: DaemonSessionSt
       if (!ownerCommitted) await ownerClaim?.release()
       throw error
     }
+  }
+
+  /** leader-switch-home-stop-v1: a working folder in a marked data home refuses the start (lib/leader-home-gate.ts). */
+  async function refuseHandedOverHome(sid: string, cwd: string): Promise<void> {
+    const handedOver = await handedOverHomeAt(cwd)
+    if (!handedOver) return
+    const refusal = homeHandedOverRefusal('start', handedOver)
+    logMsg('warn', 'start refused: the working folder is in a handed-over data home', { sid, cwd, home: refusal.home, state: refusal.state, to: refusal.to })
+    throw Object.assign(new Error(refusal.error), refusal)
   }
 
   return { cmdStart, startSessionProcess }
