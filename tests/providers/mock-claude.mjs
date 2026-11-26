@@ -263,6 +263,30 @@ for (let i = 0; i < args.length; i++) {
   // know: skipped, never the message.
 }
 
+/**
+ * The mode this process runs in, as Claude Code picks it: the `--permission-mode` flag, else
+ * `permissions.defaultMode` of its settings (the project's local file over the project's over
+ * the user's), else `default`. Read only under MOCK_CLAUDE_HONOR_SETTINGS=1 (the browser
+ * fixture, whose HOME is its own): elsewhere HOME may be a developer's, whose settings must not
+ * steer a test. Without it the browser fixture's init said `default` for a start its settings
+ * run in `bypassPermissions`, and the session's record took that over the settings' mode
+ * (draft-mode-pill.spec test 5).
+ */
+function settingsDefaultMode() {
+  if (process.env.MOCK_CLAUDE_HONOR_SETTINGS !== '1') return null;
+  const user = process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || '', '.claude');
+  const project = path.join(process.cwd(), '.claude');
+  let mode = null;
+  for (const file of [path.join(user, 'settings.json'), path.join(project, 'settings.json'), path.join(project, 'settings.local.json')]) {
+    try {
+      const value = JSON.parse(fs.readFileSync(file, 'utf8'))?.permissions?.defaultMode;
+      if (typeof value === 'string' && value) mode = value;
+    } catch { /* absent or not JSON: no say */ }
+  }
+  return mode;
+}
+const runMode = permissionMode || settingsDefaultMode() || 'default';
+
 // Resolver for an init-only spawn awaiting its first FIFO user message (see below).
 let pendingUserResolve = null;
 
@@ -913,7 +937,7 @@ if (outputFormat === 'stream-json') {
     model: modelFlag || 'mock-model',
     tools: ['Read', 'Edit', 'Bash'],
     mcp_servers: mcpServerStatuses(),
-    permissionMode: permissionMode || 'default',
+    permissionMode: runMode,
     // Mirrors CLI 2.1.240: the command set THIS process accepts (names only) and
     // the terminal-only ones the palette must hide. `__internal-thing` stands in
     // for the CLI's `__remote-workflow`-style internal names.
@@ -1002,7 +1026,7 @@ if (outputFormat === 'stream-json') {
       // question's follow-up queued behind a running turn lost its anchor.
       lastInputUserUuid = queued.uuid ?? null;
       if (queued.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: queued.uuid, state: 'started', session_id: outputSessionId }) + '\n');
-      if (opts.announce) process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: outputSessionId, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' }) + '\n');
+      if (opts.announce) process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: outputSessionId, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: runMode }) + '\n');
       const c = queued.message.content;
       setTimeout(() => onUserLine?.(typeof c === 'string' ? c : JSON.stringify(c)), 0);
     }
@@ -1421,7 +1445,7 @@ if (outputFormat === 'stream-json') {
       const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
       const text = `API Error: ${modelFlag || 'mock-model'}'s safeguards flagged this message (https://www.anthropic.com/legal/aup). This sometimes happens with safe, normal conversations.\n\nDetails: \`[reasoning_extraction]\``;
       emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
-      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
+      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: runMode });
       setTimeout(() => {
         const refused = { id: randomUUID(), type: 'message', role: 'assistant', model: '<synthetic>', stop_reason: 'refusal', stop_sequence: '',
           stop_details: { type: 'refusal', category: 'reasoning_extraction', explanation: 'blocked' },
@@ -1440,7 +1464,7 @@ if (outputFormat === 'stream-json') {
       const sid = outputSessionId;
       const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
       emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
-      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
+      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: runMode });
       setTimeout(() => {
         const refused = { id: `msg_ptl_${randomUUID()}`, type: 'message', role: 'assistant', model: '<synthetic>', stop_reason: 'stop_sequence',
           content: [{ type: 'text', text: 'Prompt is too long' }], usage: { input_tokens: 0, output_tokens: 0 } };
@@ -1473,7 +1497,7 @@ if (outputFormat === 'stream-json') {
       mockContextTokens = tokens;
       emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
       // The real CLI announces itself at every turn's start (probed 2026-11-04, CLI 2.1.312).
-      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
+      emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: runMode });
       setTimeout(() => {
         emit(wrap({ type: 'message_start', message: { id, type: 'message', role: 'assistant', model: 'mock-model', content: [], usage } }));
         emit(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
@@ -1511,7 +1535,7 @@ if (outputFormat === 'stream-json') {
       onInterrupt = () => {
         clearTimeout(compacting);
         emit({ type: 'system', subtype: 'status', status: null, session_id: sid, uuid: randomUUID() });
-        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: runMode });
         emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, message: { id: `msg_compact_cancel_${randomUUID()}`, type: 'message', role: 'assistant', model: '<synthetic>',
           content: [{ type: 'text', text: 'Compaction canceled.' }], stop_reason: 'end_turn', usage: { input_tokens: 0, output_tokens: 0 } } });
         emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 300, num_turns: 0, result: '', session_id: sid,
@@ -1526,7 +1550,7 @@ if (outputFormat === 'stream-json') {
         mockContextTokens = 18_000;
         // Claude Code 2.1.31x re-announces itself mid-compaction, before the boundary (probed 2026-11-04).
         emit({ type: 'system', subtype: 'status', status: null, session_id: sid, uuid: randomUUID() });
-        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: runMode });
         // One uuid on the stream and in the transcript, as the real CLI writes it.
         const boundaryUuid = randomUUID();
         emit({ type: 'system', subtype: 'compact_boundary', session_id: sid, uuid: boundaryUuid,
@@ -1867,7 +1891,7 @@ if (outputFormat === 'stream-json') {
       setTimeout(() => {
         // ── Turn B: a BARE init. No {running}, no user line, no marker — this
         //    is the whole incident. Streaming follows immediately.
-        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: permissionMode || 'default' });
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: mcpServerStatuses(), permissionMode: runMode });
         emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'message_start', message: { id: `msg_edge_b_${seq}`, role: 'assistant', content: [], model: modelFlag || 'mock-model', usage: { input_tokens: 40, output_tokens: 0 } } } });
         emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
         emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'turnB ' } } });

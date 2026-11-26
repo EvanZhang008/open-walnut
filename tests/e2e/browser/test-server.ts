@@ -111,6 +111,9 @@ process.env.WALNUT_THREAD_AI_STUB = THREAD_AI_STUB_PREFIX
 // The mock CLI answers like a model here: the user's words echoed, none of the
 // spawn-flag suffixes the provider tests read (`[permission-mode:…] [cwd:…]`).
 process.env.MOCK_CLAUDE_PLAIN_ECHO = '1'
+// And it runs in the mode the fixture's own Claude Code settings name when no flag names one,
+// as Claude Code does (settingsDefaultMode in tests/providers/mock-claude.mjs).
+process.env.MOCK_CLAUDE_HONOR_SETTINGS = '1'
 
 /** Local `YYYY-MM-DD` N days from now — for fixtures that must stay in the future. */
 function futureDay(days: number): string {
