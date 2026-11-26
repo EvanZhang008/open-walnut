@@ -45,7 +45,9 @@ describe('every stored turn-end status answer reaches the answered check', () =>
     const src = read('src/core/sessions/status-question.ts')
     const save = src.slice(src.indexOf('async function saveStatusAnswer('), src.indexOf('export function statusQuestionPending('))
     const lines = save.indexOf('await applyThreadLines(')
-    const check = save.indexOf('checkTurnAnswers(taskId, sessionId, turnEndedMs)')
+    const check = save.indexOf('checkTurnAnswers(taskId, sessionId, turnEndedMs, storedAt)')
+    // `since` is when the answer was stored, taken right before the check is sent (never when a queued check starts).
+    expect(save.lastIndexOf('const storedAt = Date.now()', check)).toBeGreaterThan(lines)
     expect(lines).toBeGreaterThan(0)
     expect(check).toBeGreaterThan(lines)
     const line = save.slice(save.lastIndexOf('\n', check), check)
@@ -57,9 +59,10 @@ describe('every stored turn-end status answer reaches the answered check', () =>
   it('one model call per reply, never one per thread (2026-11-25 review: a busy node used a per-thread cap up on other replies)', () => {
     const src = read('src/core/org/thread-answered-check.ts')
     const body = src.slice(src.indexOf('async function checkOnce('), src.indexOf('export function checkTurnAnswers('))
-    // The one call, on the whole list, after the reply's dedupe and before the loop over what it named.
+    // The one call, on the whole list, after the reply's dedupe, then one locked write for all it named.
     expect(body.match(/\bjudge\(/g)).toHaveLength(1)
-    expect(body).toMatch(/judgedBefore\(taskId, replyKey\(row\)\)[\s\S]*await judge\(listed, prose, taskId\)[\s\S]*for \(const n of named\)/)
+    expect(body).toMatch(/judgedBefore\(taskId, replyKey\(row\)\)[\s\S]*await judge\(listed, prose, taskId\)[\s\S]*markAnsweredGroup\(cur, ids,/)
+    expect(body.match(/writeThreadsFor\(/g)).toHaveLength(1)
     expect(body.slice(0, body.indexOf('await judge('))).not.toMatch(/\bfor \(/)
     expect(src).not.toMatch(/PER_THREAD_MAX|PER_TURN_MAX/)
   })

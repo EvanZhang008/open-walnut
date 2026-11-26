@@ -24,6 +24,8 @@ const MOVERS: Record<string, { calls: number; tests: Array<[file: string, name: 
   'src/core/org/threads-store.ts': { calls: 2, tests: [[E2E, 'a node\'s thread_update merge_into and thread_split merge_into of his question are refused; his own merge goes through']] },
   'src/core/org/thread-tree-merge.ts': { calls: 1, tests: [[E2E, 'merge_into a thread on a task below refuses his question and moves nothing']] },
   'src/core/org/thread-join-check.ts': { calls: 3, tests: [[UNIT, 'splitWhereItIs: a split the check already did is not merged into another thread when it holds his question'], [UNIT, 'splitMessageInto: his question that opened its thread is not moved into another, a remark is']] },
+  // The answered check merges the threads of his questions one reply answers into the oldest's (2026-11-25, the user: "u need to combine them").
+  'src/core/org/thread-answered-check.ts': { calls: 1, tests: [['tests/core/org/thread-answered-check.test.ts', 'one reply answering two questions: one thread listed for him, holding both questions, each with the reply']] },
   'src/core/org/reply-card-stop.ts': { calls: 1, tests: [[E2E, 'a card line\'s merge of his question is refused at the turn end and by the reply, and he is told why']] },
   // reply-card.ts merges through threads-store.ts mergeThread and thread-tree-merge.ts mergeAcrossTree (counted there).
 }

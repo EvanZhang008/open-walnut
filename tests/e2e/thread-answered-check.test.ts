@@ -49,6 +49,8 @@ function numberOf(input: string, q: string): number {
 
 /** What the model was asked, and what it said: the number of the question a reply answers, else NONE. */
 const judged: Array<{ input: string; said: string }> = []
+/** The judgements of the one reply holding these words (its own call, whenever it ran). */
+const judgedOn = (words: string) => judged.filter((j) => j.input.includes(words))
 
 beforeAll(async () => {
   await startFlow({ sid: SID, title: 'Weekend trip helper', project: 'Trips' })
@@ -115,24 +117,33 @@ describe('a reply that answers his question marks its thread answered', () => {
     expect(cardView(t).summary).toMatchObject({ by: 'walnut', from: 'answer' })
     expect(cardView(t).summary.text).toContain('The 7:10 from the central station')
 
-    // An answered thread is no candidate any more: the next turn asks the model nothing.
+    // While he has not reacted, the answer the check put there may still be replaced: the next reply is judged too.
     flow.statusAnswer = WORKING
-    await questionAfter(await noticeTurnEnds(NOTICE, REAL))
+    await questionAfter(await noticeTurnEnds(NOTICE, `Again: ${REAL}`))
+    await vi.waitFor(async () => { expect((await thread(id)).messages[0].answer?.text).toBe(`Again: ${REAL}`) }, { timeout: 10_000 })
+    expect(judged).toHaveLength(3)
+    expect((await thread(id)).messages[0].answer).toMatchObject({ judged: true })
+
+    // He marks it read on his card: the answer is his, and the next turn asks the model nothing.
+    const read = await fetch(`${flow.base}/api/v1/tasks/${flow.taskId}/threads/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ known: 'all' }) })
+    expect(read.status, await read.clone().text()).toBe(200)
+    await questionAfter(await noticeTurnEnds(NOTICE, `Once more: ${REAL}`))
     await new Promise((r) => setTimeout(r, 1500))
-    expect(judged).toHaveLength(2)
-  }, 90_000)
+    expect(judged).toHaveLength(3)
+    expect((await thread(id)).messages[0].answer?.text).toBe(`Again: ${REAL}`)
+  }, 120_000)
 
   it('a busy node: eight replies about other matters, then the real answer in a turn he did not start, still marks his thread answered', async () => {
     const id = await askAndPromise('When does the hardware shop near the station close on Sunday?')
     flow.statusAnswer = WORKING
-    for (let i = 1; i <= 8; i++) {
-      await questionAfter(await noticeTurnEnds(NOTICE, `Plot ${i} update: the larch fence posts for plot ${i} are ordered and arrive on Thursday morning by van.`))
-    }
-    const before = judged.length
+    const plot = (i: number) => `Plot ${i} update: the larch fence posts for plot ${i} are ordered and arrive on Thursday morning by van.`
+    for (let i = 1; i <= 8; i++) await questionAfter(await noticeTurnEnds(NOTICE, plot(i)))
+    // The check runs after each status answer, not awaited: wait for each reply's own judgement, never a global count.
+    for (let i = 1; i <= 8; i++) await vi.waitFor(() => { expect(judgedOn(plot(i)).map((j) => j.said)).toEqual(['NONE']) }, { timeout: 10_000 })
     const real = 'The hardware shop near the station closes at five on Sunday and opens again at nine on Monday.'
     await questionAfter(await noticeTurnEnds(NOTICE, real))
     await vi.waitFor(async () => { expect((await thread(id)).state).toBe('answered') }, { timeout: 10_000 })
-    expect(judged.length).toBe(before + 1)
+    expect(judgedOn(real).map((j) => j.said)).toEqual(['ANSWERED: 1'])
     expect((await thread(id)).messages[0].answer?.text).toBe(real)
   }, 240_000)
 

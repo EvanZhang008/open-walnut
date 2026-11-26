@@ -190,7 +190,9 @@ async function saveStatusAnswer(
   if (taskLike) await (await import('../org/thread-report-ask.js')).askNowOnThread(taskId);
   // The turn's reply may have answered a question of his whose thread still reads working (a turn
   // he did not start among them): judged after the lines, never awaited (org/thread-answered-check.ts).
-  if (!opts.midTurn) void import('../org/thread-answered-check.js').then((m) => m.checkTurnAnswers(taskId, sessionId, turnEndedMs)).catch(() => {});
+  // `storedAt`: a summary written after this answer was stored is newer than the check, even one that waited in line.
+  const storedAt = Date.now();
+  if (!opts.midTurn) void import('../org/thread-answered-check.js').then((m) => m.checkTurnAnswers(taskId, sessionId, turnEndedMs, storedAt)).catch(() => {});
   const { applyReportPhase } = await import('./report-phase.js');
   if (!opts.midTurn) await applyReportPhase(taskId, sessionId, report, turnEndedMs);
   // A lead's or Main's promise with nothing to bring it back gets a follow-up (promise-alarm.ts).

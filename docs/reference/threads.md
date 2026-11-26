@@ -500,7 +500,8 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
 - **Merging** (`mergeThreads`, every merge goes through it): a thread his question opened
   (`ownQuestionOf`, its first message) that still waits for its answer (new, working or waiting:
   the states he does not see) is refused `own_question`, unless he merges it himself, the target
-  already holds the very same words, or he asked to combine them: the node sends `merge_into` with
+  already holds the very same words, one reply of the node answered both (the answered check
+  below), or he asked to combine them: the node sends `merge_into` with
   `user_words` quoting him, and the words must be in a message of his on that node's threads
   (`askedToCombine`). Once its answer is in (answered, or asking him) it merges like any thread.
   What the rule guards is a question going out of his sight unanswered, never two cards on one
@@ -552,24 +553,34 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   asks no status and runs nothing), the turn's last words are read from the node's chat, and ONE
   fast-model call per reply reads them beside the list of his questions whose threads he does not
   see (new, working or waiting; not needs or answered, not closed, moved, snoozed or acknowledged with
-  its result; nothing of his on it after the reply), and answers `ANSWERED: 2, 5` or `NONE`: a
+  its result; nothing of his on it after the reply, no newer answer on it, and read by the node: his
+  question's row is before the reply in the chat, or an answer from the chat is on it, so a question
+  he sent mid-turn waits for its own turn), and answers `ANSWERED: 2, 5` or `NONE`: a
   question is named only when the reply clearly gives its answer, not when it only promises, reports
   progress or speaks of something else. Per reply, never per thread: a cap per thread was used up on
   a busy lead's replies about other matters before the real answer came (review 2026-11-25). Each
-  question named gets one locked write by Walnut: the reply replaces the interim answer under his
-  message, the thread reads answered (his Done), and the summary written while it was out of his
-  sight is cleared, so the card's line is Walnut's stand-in from the answer itself (`thread-view.ts`
-  `cardView`). Bounds: one call per reply (each reply judged once per node, in memory, bounded), at
+  reply gets one locked write by Walnut. When it answers several of his questions, their threads
+  become ONE (the user, on two cards holding one answer: "u need to combine them"): the oldest
+  question's thread keeps and the others merge into it (`mergeThreads`, so his messages, tasks and
+  watch go with them); one that cannot merge (a letter or a choice it holds) is left as it was. On
+  that thread the reply, marked `judged`, replaces the interim answer under each question it answers
+  (an answer he wrote after stays his; the reply goes under his later words), the thread reads
+  answered (his Done), and the summary written while it was out of his sight is cleared unless the
+  node wrote one after its status answer was stored, so the card's line is Walnut's stand-in from
+  the answer itself (`thread-view.ts` `cardView`). While he has not reacted (no Acknowledge, mark or
+  word of his there) a thread the check answered stays a candidate, so a later reply the model names
+  replaces an interim reply it took for the answer. An older build keeps the `judged` field and
+  reads the answer as before. Bounds: one call per reply (each reply judged once per node, in memory, bounded), at
   most 12 questions in the list (newest first; older ones wait until newer ones are answered or
   closed), each title cut to 200 characters, his question to 300, his last later word there to 200,
   the reply to 3,000; none for an agent acknowledgement or a reply under 40 characters. A call reads
   about 1.8 KB typically (two questions, a 600-character reply) and at most about 13,100 characters
   (12 questions at their cuts, a full reply). One log line per reply (`org threads:
-  answered check`: the candidates, the threads named and marked, the call's ms). The model can be
+  answered check`: the candidates, the threads named, marked, merged and left, the call's ms). The model can be
   wrong both ways: a real answer it leaves out stays out of his sight until the node's line or the
   30-minute overdue reminder moves it (as before); an interim reply it names shows in his Done with
-  that reply as the answer, until the node's thread_update moves it (a line keeps an answer he has
-  not read in his sight). Tests: `tests/core/org/thread-answered-check.test.ts`,
+  that reply as the answer until a later reply it names replaces it or the node's thread_update moves
+  it (a line keeps an answer he has not read in his sight). Tests: `tests/core/org/thread-answered-check.test.ts`,
   `tests/core/org/thread-answered-check-guard.test.ts` (every caller of `applyStatusAnswer(`, the save
   reaching the check, one call per reply), `tests/e2e/thread-answered-check.test.ts` (a busy node
   among them).

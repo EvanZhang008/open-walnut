@@ -182,6 +182,12 @@ export interface ThreadAnswer {
   /** Read from the letter's own thread (a letter note's answer, thread-answers.ts letterAnswerOf). */
   from?: 'letter';
   /**
+   * Put here by the answered check (thread-answered-check.ts): a model judged this reply the answer to
+   * his question. While he has not reacted, a later reply the model names may replace it. An older
+   * build keeps the field (normalizeMessage spreads it) and reads the answer as before.
+   */
+  judged?: true;
+  /**
    * The session whose words these are: the transcript they were read from, or the letter turn's
    * recorded writer. Absent = not recorded (an answer kept before 2026-11-07, or a letter turn with
    * no writer on it): a path in it opens nowhere until the user picks a machine.

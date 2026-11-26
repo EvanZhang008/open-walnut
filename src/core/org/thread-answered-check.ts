@@ -30,10 +30,10 @@ import { log } from '../../logging/index.js';
 import { withoutWalnutControl } from '../../lib/walnut-control-text.js';
 import { readTurnMarker } from '../../lib/turn-end-marker.js';
 import { ownQuestionOf } from './thread-question.js';
-import { movedAway, setAnswers, ThreadError, updateThread, type OrgThread, type ThreadAnswer, type ThreadMessage, type ThreadsFile } from './threads-model.js';
+import { mergeThreads, movedAway, setAnswers, ThreadError, updateThread, type OrgThread, type ThreadAnswer, type ThreadMessage, type ThreadsFile } from './threads-model.js';
 import { snoozedNow } from './thread-view.js';
 import { ackHoldsResult } from './thread-known.js';
-import { answerOfRow, isReplyRow, ROW_BEFORE_MS, type AnswerRow } from './thread-answers.js';
+import { answerOfRow, isReplyRow, ROW_BEFORE_MS, rowMatches, type AnswerRow } from './thread-answers.js';
 
 export const ANSWERED_JUDGE_PROMPT = [
   'A user asked his AI assistant the numbered questions below; later the assistant wrote the reply below in their chat.',
@@ -76,14 +76,14 @@ export function replyProse(text: string): string | null {
   return prose.length > REPLY_MAX ? `${prose.slice(0, REPLY_MAX - 1)}…` : prose;
 }
 
-/** The turn's last words: the newest row of the node's words no later than the turn's end. Pure. */
-export function turnReply(rows: readonly AnswerRow[], endedAtMs: number): AnswerRow | null {
+/** The turn's last words: the index of the newest row of the node's words no later than the turn's end, or -1. Pure. */
+export function turnReply(rows: readonly AnswerRow[], endedAtMs: number): number {
   for (let i = rows.length - 1; i >= 0; i--) {
     const ts = Date.parse(rows[i].timestamp);
     if (ts > endedAtMs + END_SLACK_MS) continue;
-    if (isReplyRow(rows[i])) return rows[i];
+    if (isReplyRow(rows[i])) return i;
   }
-  return null;
+  return -1;
 }
 
 /** A thread his question opened, and that question. */
@@ -93,21 +93,46 @@ export interface AnswerCandidate { thread: OrgThread; question: ThreadMessage }
 const OUT_OF_SIGHT: ReadonlySet<OrgThread['state']> = new Set(['new', 'working', 'pending']);
 
 /**
+ * A thread this check moved to answered that he has not reacted to yet: its question's answer is the
+ * check's (`judged`), older than this reply, with no Acknowledge, mark, reaction or later word of his
+ * since and no summary the node wrote after it. A later reply judged its answer replaces it, so an
+ * interim reply the model took for the answer does not stay the answer. Pure.
+ */
+function judgedUnseen(t: OrgThread, q: ThreadMessage, replyAt: string): boolean {
+  const a = q.answer;
+  if (t.state !== 'answered' || !a?.judged || a.at >= replyAt) return false;
+  if (t.ackedAt || t.known || (t.reactedAt && t.reactedAt >= a.at) || (t.replyAt && t.replyAt > a.at)) return false;
+  return !t.messages.some((m) => m.at > a.at || (!!m.readAt && m.readAt >= a.at));
+}
+
+/**
  * The threads a reply written at `replyAt` may answer: his question opened it (ownQuestionOf), it is
  * open and here (not moved, not snoozed), it reads new, working or waiting (a node's line that moved
- * it to answered or needs wins), he has not acknowledged its result, his question came before the
- * reply and he wrote nothing there since. His newest questions first. Pure.
+ * it to answered or needs wins), or this check answered it and he has not reacted (judgedUnseen); he
+ * has not acknowledged its result, his question came before the reply, no newer answer is on it, and
+ * he wrote nothing there since. His newest questions first. Pure.
  */
 export function answerCandidates(file: ThreadsFile, replyAt: string, nowMs: number = Date.now()): AnswerCandidate[] {
   const out: AnswerCandidate[] = [];
   for (const t of file.threads) {
-    if (t.closed || movedAway(t) || !OUT_OF_SIGHT.has(t.state) || snoozedNow(t, nowMs) || ackHoldsResult(t)) continue;
+    if (t.closed || movedAway(t) || snoozedNow(t, nowMs) || ackHoldsResult(t)) continue;
     const question = ownQuestionOf(t);
-    if (!question || question.at >= replyAt) continue;
-    if (t.messages.some((m) => m.at > replyAt)) continue;
+    if (!question || question.at >= replyAt || !(OUT_OF_SIGHT.has(t.state) || judgedUnseen(t, question, replyAt))) continue;
+    // Never an older reply over a newer answer (a check that waited in line behind a later turn).
+    if ((question.answer && question.answer.at > replyAt) || t.messages.some((m) => m.at > replyAt)) continue;
     out.push({ thread: t, question });
   }
   return out.sort((a, b) => b.question.at.localeCompare(a.question.at));
+}
+
+/**
+ * The candidates the node had read when it wrote the reply at `replyIndex` of `rows`: his question's
+ * own row sits before it, or an answer from the chat is on it already. A question he sent mid-turn
+ * still waits in the queue, and that turn's reply is not about it. Pure.
+ */
+export function readByNode(cands: readonly AnswerCandidate[], rows: readonly AnswerRow[], replyIndex: number): AnswerCandidate[] {
+  const before = rows.slice(0, Math.max(0, replyIndex));
+  return cands.filter((c) => (!!c.question.answer && c.question.answer.from !== 'letter') || before.some((r) => rowMatches(r, c.question)));
 }
 
 /** The reply's key: the same words at the same time are one reply. Pure. */
@@ -149,25 +174,73 @@ export function readAnsweredList(answer: string, count: number): number[] {
   return [...new Set(named)];
 }
 
+/** What one reply's write did: the thread that now carries the answer, the threads merged into it, the ones left as they were. */
+export interface AnsweredWrite { marked: string | null; merged: string[]; left: string[] }
+
 /**
- * The write for a question the model named, under the store's lock: checked again as the thread is now (still
- * a candidate for this reply, and no summary written since the check began, `since`), the reply goes
- * on his question as its answer, and on each later message of his before it whose answer was none or
- * the same interim one (so the card shows one exchange); the thread reads answered, its summary
- * cleared. `out` is false and the file unchanged when anything refuses. Pure.
+ * The write for the questions the model named for one reply, under the store's lock, by Walnut.
+ * Each is checked again as it is now (still a candidate for this reply, and no summary written since
+ * the status answer was stored, `since`). One reply that answers several of his questions makes them
+ * ONE thread (2026-11-25, the user, on two cards holding one answer: "look all duplciated", "u need to
+ * combine them"): the oldest question's thread keeps, the others merge into it (threads-model.ts
+ * mergeThreads, which carries his messages with their answers, tasks, watch and pointers;
+ * `questionMoves: false` lets a thread his question opened move, as the question rule would refuse).
+ * One that cannot merge (a letter or a choice it holds) is left as it was. Then that thread reads
+ * answered (answerOne), unless another thread already carries this reply: one reply never sits under
+ * two threads. Nothing changes when no thread is left to write. Pure.
  */
+export function markAnsweredGroup(file: ThreadsFile, threadIds: readonly string[], answer: ThreadAnswer, at: string, since: string): { file: ThreadsFile; out: AnsweredWrite } {
+  const none: AnsweredWrite = { marked: null, merged: [], left: [] };
+  const named = answerCandidates(file, answer.at, Date.parse(at))
+    .filter((c) => threadIds.includes(c.thread.id) && !(c.thread.replyAt && c.thread.replyAt > since))
+    .sort((a, b) => a.question.at.localeCompare(b.question.at));
+  if (!named.length) return { file, out: none };
+  const into = named[0];
+  let next = file;
+  const merged: AnswerCandidate[] = [];
+  const left: string[] = [];
+  for (const c of named.slice(1)) {
+    try {
+      next = mergeThreads(next, c.thread.id, into.thread.id, 'agent', at, { questionMoves: false }).file;
+      merged.push(c);
+    } catch (err) {
+      if (!(err instanceof ThreadError)) throw err;
+      left.push(c.thread.id);
+    }
+  }
+  // Never one reply under two threads (thread-view.ts sharedAnswers reads that as misfiled and hides both).
+  const carried = next.threads.some((t) => t.id !== into.thread.id && t.messages.some((m) => m.answer?.at === answer.at && m.answer.text === answer.text));
+  if (carried) return { file, out: { ...none, left: named.map((c) => c.thread.id) } };
+  const done = answerOne(next, into.thread.id, new Set([into, ...merged].map((c) => c.question.id)), answer, at);
+  return done ? { file: done, out: { marked: into.thread.id, merged: merged.map((c) => c.thread.id), left } } : { file, out: none };
+}
+
+/** One question's thread: markAnsweredGroup with it alone; `out` is whether it wrote. Pure. */
 export function markAnswered(file: ThreadsFile, threadId: string, answer: ThreadAnswer, at: string, since: string): { file: ThreadsFile; out: boolean } {
-  const c = answerCandidates(file, answer.at, Date.parse(at)).find((x) => x.thread.id === threadId);
-  if (!c || (c.thread.replyAt && c.thread.replyAt > since)) return { file, out: false };
-  const interim = c.question.answer;
-  const same = (a: ThreadAnswer | undefined) => !!a && !!interim && a.at === interim.at && a.text === interim.text;
-  const ids = c.thread.messages.filter((m) => m.at >= c.question.at && m.at < answer.at && m.via !== 'letter' && (m.id === c.question.id || !m.answer || same(m.answer)));
-  const answered = setAnswers(file, new Map(ids.map((m) => [m.id, answer])), { replace: true }).file;
+  const r = markAnsweredGroup(file, [threadId], answer, at, since);
+  return { file: r.file, out: r.out.marked === threadId };
+}
+
+/**
+ * The reply, marked `judged`, on each message of his from the first of `questions` on whose answer is
+ * none or one he has not written after (an interim reply: replaced; a later question of the merge is
+ * no word of his after it); an answer he wrote after stays his, the reply going under his later words.
+ * The thread reads answered, its summary cleared, so the card's line is the answer's own. Null when
+ * nothing would be written or the thread refuses. Pure.
+ */
+function answerOne(file: ThreadsFile, threadId: string, questions: ReadonlySet<string>, answer: ThreadAnswer, at: string): ThreadsFile | null {
+  const t = file.threads.find((x) => x.id === threadId);
+  const first = t?.messages.find((m) => questions.has(m.id));
+  if (!t || !first) return null;
+  const followed = (a: ThreadAnswer) => t.messages.some((x) => x.at > a.at && x.at < answer.at && !questions.has(x.id));
+  const ids = t.messages.filter((m) => m.at >= first.at && m.at < answer.at && m.via !== 'letter' && (!m.answer || !followed(m.answer)));
+  if (!ids.length) return null;
+  const judged: ThreadAnswer = { ...answer, judged: true };
+  const answered = setAnswers(file, new Map(ids.map((m) => [m.id, judged])), { replace: true }).file;
   try {
-    const next = updateThread(answered, threadId, { state: 'answered', ...(c.thread.reply ? { reply: '' } : {}) }, 'agent', at);
-    return { file: next.file, out: true };
+    return updateThread(answered, threadId, { state: 'answered', ...(t.reply ? { reply: '' } : {}) }, 'agent', at).file;
   } catch (err) {
-    if (err instanceof ThreadError) return { file, out: false };
+    if (err instanceof ThreadError) return null;
     throw err;
   }
 }
@@ -211,7 +284,7 @@ function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([p, new Promise<T>((r) => { timer = setTimeout(() => r(fallback), ms); timer.unref?.(); })]).finally(() => clearTimeout(timer));
 }
 
-async function checkOnce(taskId: string, sessionId: string, turnEndedMs: number): Promise<number> {
+async function checkOnce(taskId: string, sessionId: string, turnEndedMs: number, storedAtMs: number): Promise<number> {
   const deadline = Date.now() + CHECK_DEADLINE_MS;
   const { isFollower } = await import('../server-role.js');
   if (isFollower()) return 0;
@@ -229,31 +302,30 @@ async function checkOnce(taskId: string, sessionId: string, turnEndedMs: number)
   const open = answerCandidates(await store.readThreads(taskId), endedAt);
   if (!open.length) return 0;
   const earliest = open.reduce((a, c) => (c.question.at < a ? c.question.at : a), open[0].question.at);
-  const since = new Date(Math.max(Date.parse(earliest) - ROW_BEFORE_MS, turnEndedMs - LOOK_BACK_MS)).toISOString();
+  const rowsFrom = new Date(Math.max(Date.parse(earliest) - ROW_BEFORE_MS, turnEndedMs - LOOK_BACK_MS)).toISOString();
   const { rowsSince, transcriptSource } = await import('./thread-answers.js');
-  const row = turnReply(await within(rowsSince(sessionId, since), ROWS_DEADLINE_MS, [] as AnswerRow[]), turnEndedMs);
+  const rows = await within(rowsSince(sessionId, rowsFrom), ROWS_DEADLINE_MS, [] as AnswerRow[]);
+  const at = turnReply(rows, turnEndedMs);
+  const row = at >= 0 ? rows[at] : null;
   const prose = row ? replyProse(row.text) : null;
   if (!row || !prose) return 0;
-  const all = answerCandidates(await store.readThreads(taskId), row.timestamp);
+  const all = readByNode(answerCandidates(await store.readThreads(taskId), row.timestamp), rows, at);
   if (!all.length || judgedBefore(taskId, replyKey(row))) return 0;
   const listed = all.slice(0, LIST_MAX);
   if (all.length > listed.length) log.task.debug('thread answered check: more questions wait than one list holds', { taskId, listed: listed.length, waiting: all.length - listed.length });
-  const startedAt = new Date().toISOString();
   const { named, ms } = await judge(listed, prose, taskId);
   const answer: ThreadAnswer = { ...answerOfRow(row), ...(await transcriptSource(sessionId)) };
-  const marked: string[] = [];
-  for (const n of named) {
-    if (Date.now() > deadline) break;
-    const id = listed[n - 1].thread.id;
-    const at = new Date().toISOString();
-    const written = await store.writeThreadsFor(taskId, (cur) => {
-      const r = markAnswered(cur, id, answer, at, startedAt);
-      return { file: r.file, out: r.out, ...(r.out ? { changed: { kind: 'updated' as const, threadId: id } } : {}) };
-    });
-    if (written) marked.push(id);
-  }
-  log.task.info('org threads: answered check', { taskId, sessionId, candidates: listed.length, named: named.map((n) => listed[n - 1].thread.id), marked, ms });
-  return marked.length;
+  // One locked write for the reply: the questions it answers become one thread, marked answered.
+  const ids = named.map((n) => listed[n - 1].thread.id);
+  const now = new Date().toISOString();
+  // A summary the node wrote after its status answer was stored (its next turn's thread_update) stays.
+  const done = ids.length && Date.now() <= deadline ? await store.writeThreadsFor(taskId, (cur) => {
+    const r = markAnsweredGroup(cur, ids, answer, now, new Date(storedAtMs).toISOString());
+    const kind = r.out.merged.length ? 'merged' as const : 'updated' as const;
+    return { file: r.file, out: r.out, ...(r.out.marked ? { changed: { kind, threadId: r.out.marked } } : {}) };
+  }) : null;
+  log.task.info('org threads: answered check', { taskId, sessionId, candidates: listed.length, named: ids, marked: done?.marked ?? null, merged: done?.merged ?? [], left: done?.left ?? [], ms });
+  return done?.marked ? 1 : 0;
 }
 
 /**
@@ -261,10 +333,10 @@ async function checkOnce(taskId: string, sessionId: string, turnEndedMs: number)
  * threads his questions opened (one check at a time per node, in order). Never throws; resolves to
  * how many threads it marked answered.
  */
-export function checkTurnAnswers(taskId: string, sessionId: string, turnEndedMs: number): Promise<number> {
+export function checkTurnAnswers(taskId: string, sessionId: string, turnEndedMs: number, storedAtMs: number = Date.now()): Promise<number> {
   let marked = 0;
   const prev = tails.get(taskId) ?? Promise.resolve();
-  const run = prev.then(() => checkOnce(taskId, sessionId, turnEndedMs)).then((n) => { marked = n; }).catch((err) => {
+  const run = prev.then(() => checkOnce(taskId, sessionId, turnEndedMs, storedAtMs)).then((n) => { marked = n; }).catch((err) => {
     log.task.warn('org threads: answered check failed, nothing changed', { taskId, sessionId, error: err instanceof Error ? err.message : String(err) });
   });
   tails.set(taskId, run);

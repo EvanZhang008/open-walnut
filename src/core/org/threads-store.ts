@@ -208,7 +208,7 @@ async function mutateThreads<R>(taskId: string, mutate: (cur: ThreadsFile) => { 
 }
 
 /** What a write of Walnut's own changed: one thread, or a sweep over several (thread-ended.ts). */
-type WrittenFor = { kind: 'opened' | 'updated'; threadId: string } | { kind: 'swept' };
+type WrittenFor = { kind: 'opened' | 'updated' | 'merged'; threadId: string } | { kind: 'swept' };
 
 /**
  * A write of Walnut's own that is no op of a node or of his (human-inbox/letter-threads.ts: the

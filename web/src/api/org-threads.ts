@@ -16,7 +16,7 @@ export interface OrgThreadMessage {
    * The node's answer, read by Walnut from its chat (src/core/org/thread-answers.ts). `sid`/`host`:
    * the session it was read from (absent on an answer kept before they were recorded: unknown).
    */
-  answer?: { text: string; at: string; about?: string[]; clipped?: boolean; from?: 'letter'; sid?: string; host?: string };
+  answer?: { text: string; at: string; about?: string[]; clipped?: boolean; from?: 'letter'; sid?: string; host?: string; judged?: true };
   readAt?: string;
   /** His reply from a card above the task that owns the thread, on its way there (src/core/org/thread-reply.ts). */
   delivery?: {
