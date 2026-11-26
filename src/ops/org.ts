@@ -6,6 +6,8 @@ import { NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { fitPage, line, nextPageCall, objOf, pageBudget, pageOf, pageWords, pick, receiptBase } from './org-answer-shapes.js';
 import { OwnRefusalError, badInput } from './own-refusal.js';
+import { agentReport } from '../core/org/report-outside.js';
+import type { MorningReport } from '../core/org/morning-report.js';
 
 /** Rows of org_get an agent reads when the call names no limit. */
 const ORG_ROWS_PAGE = 30;
@@ -344,16 +346,18 @@ defineOp({
     since: z.string().optional().describe('What counts as moved: an ISO time or a duration back like "12h" (default 12h; for `at`, the time you asked)'),
     of: z.string().optional().describe('Task id of Main or a lead; default your own task'),
   },
-  handler: async (args, call) => {
-    const body = await call('POST', '/org/report', args) as {
-      report?: { subject?: string; markdown?: string }; letterId?: string; scheduledAt?: string; since?: string;
+  handler: async (args, call, caller) => {
+    const answer = await call('POST', '/org/report', args) as {
+      report?: MorningReport; letterId?: string; scheduledAt?: string; since?: string;
     };
+    // An agent reads the subjects the report quotes of outside letters framed (morning-report.ts agentReport).
+    const body = answer?.report && caller?.kind === 'agent' && !caller.pluginId ? { ...answer, report: agentReport(answer.report) } : answer;
     if (body?.scheduledAt) {
       return withOutcome(body, `Scheduled: Walnut sends the report at ${body.scheduledAt}, covering everything since ${body.since}.`,
         'Nothing to do until then; it needs no turn of yours.');
     }
     if (body?.letterId) return withOutcome(body, `Sent to the user's inbox (${body.letterId}).`, 'His answers in its thread come to this session.');
-    return withOutcome(body ?? {}, body?.report?.subject ?? 'Report built.', 'send:true sends it; at schedules it.');
+    return withOutcome(body ?? {}, answer?.report?.subject ?? 'Report built.', 'send:true sends it; at schedules it.');
   },
   // Built and not sent, the report is what was asked for (content); sent or scheduled, a receipt.
   answer: {

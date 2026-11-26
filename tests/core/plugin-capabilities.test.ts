@@ -363,7 +363,9 @@ export default function register(api) {
 
     const shout = getPluginTools().find(t => t.name === 'agent_tool_shout');
     expect(shout).toBeDefined();
-    expect(await shout!.execute({ text: 'hi' })).toBe('HI');
+    // The model reads a plugin's answer framed as outside data (plugin-tools.ts framedToolResult).
+    const answer = await shout!.execute({ text: 'hi' }) as string;
+    expect(answer).toMatch(/^<external-content source="agent-tool plugin" tool="agent_tool_shout" trust="untrusted">\nHI\n<\/external-content>\n/);
   });
 
   it('a core op name always wins over a plugin tool', async () => {

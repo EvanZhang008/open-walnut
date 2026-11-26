@@ -386,6 +386,18 @@ ranks short text before long blocks and never answers with a page region that is
 site, then in one line, and in full again when those tabs change or after a sign-in step. Subagents of a session drive the browser as that session: the same task,
 tabs, approvals and agent cursor (the CLI and the MCP server both send the session's id).
 
+What a page wrote (its text, the snapshot's names, a find's matches, a title, a dialog's message, a
+response body, and the `outcome` line that quotes them) reaches an agent framed as outside data
+(`src/core/browser-control/page-frame.ts`). Over MCP the answer is one envelope: `ok`, `status`,
+`code`, `request`, `tab`, `next` and an inline `image` stay outside, everything else is under
+`external_content.data`, and the page's address is `external_content.url`. Every other caller (the
+`walnut browser` command on any host, `walnut tools call browser`) gets the answer's own shape with
+each page string replaced in place by an `<external-content source="web page" trust="untrusted">`
+block, so a CLI from before the frame still prints the page, framed. The shell command takes those
+blocks off and prints its output inside one block. `--json` prints the answer as it came (fields at
+the top, as in the table below, each page string a block); `guide --json` prints the skill's answer
+the same way, unframed, since it is Walnut's own.
+
 ```bash
 walnut browser status                         # browsers that let agents in, the sites
 walnut browser open https://example.com/ --read   # a new tab in the agent window, and its main text
@@ -407,7 +419,7 @@ walnut browser type --at 320,180 "hi" --slowly   # click the point, then one key
 walnut browser screenshot --annotate a.png    # numbers on the elements; prints number, ref, role, name
 walnut browser click-label 7                  # the element numbered 7
 walnut browser zoom 40 120 300 200 part.png   # that region at full pixel resolution
-walnut browser text --all-frames              # each frame's text on its own (--json: frames)
+walnut browser text --all-frames              # each frame's text on its own (--json: frames, each string framed)
 walnut browser drag e3 e9                     # always real input; also drag 100,200 300,240
 walnut browser dialog                         # the open alert, confirm or prompt (real input)
 walnut browser dialog accept --text "Ana"     # answer it (dismiss: Cancel)

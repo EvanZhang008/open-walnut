@@ -33,7 +33,7 @@ const explicitCallerScope = new AsyncLocalStorage<{ sid?: string; kind: 'person'
  */
 interface KeepMark { notKept?: string; parent?: KeepMark }
 const keepScope = new AsyncLocalStorage<KeepMark>()
-import { getOp, getOpOwner, type HttpBinding, type WalnutOp } from './registry.js'
+import { getOp, getOpOwner, type AnswerReader, type HttpBinding, type WalnutOp } from './registry.js'
 import { defaultAddressNote, demoApiHeaders, getSelfApiRoot, getSelfCallToken, walnutApiTarget } from '../lib/self-api-root.js'
 import { fetchErrorCode } from '../lib/fetch-error.js'
 import {
@@ -44,6 +44,7 @@ import { declaredKeysNote, inferRenames, invalidTypeHint, renameNote, unknownKey
 import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
 import { heldAwayResult, isBareAwayQueued } from './outcome.js'
+import { agentReadsFramed, frameOpAnswer } from './outside-answer.js'
 import { FULL_ARG, agentAnswer, answerFit, answersWhole, cutTextRefusal, takeFullArg, type AnswerFit, type AnswerSurface } from './answer.js'
 import { COLLECTION_MAX, oversizedCollection } from '../lib/zod-rules.js'
 import { capOverCounts, countCapNote } from './count-cap.js'
@@ -128,6 +129,8 @@ export const CALLER_JOB_HEADER = 'x-walnut-caller-job'
  */
 interface CallerProvenance {
   host?: string; proof?: string; trigger?: string; job?: string; sid?: string; unproven?: true; explicitSid?: string; callerKind: 'person' | 'agent'; pluginId?: string; pluginJob?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string
+  /** Who reads the answer (ExecuteOpOptions.answerReader), for the handler's caller. */
+  reader?: AnswerReader
   /** The op call's id (src/lib/op-call-id.ts): each write it makes carries an op id derived from it. */
   callId?: string
   /** Writes made so far per route, for those op ids. */
@@ -383,8 +386,14 @@ export function materializeBinding(
 export interface ExecuteOpOptions {
   apiBase?: string
   callerSid?: string
-  /** The plugin the call is made through (callPluginOp): provenance, whoever the caller is. */
+  /** The plugin the call is made through (callPluginOp): provenance, whoever the caller is. Never who reads the answer. */
   callerPluginId?: string
+  /**
+   * Who reads the answer when the caller's kind does not say it (OpCaller.reader, outside-answer.ts
+   * agentReadsFramed): `program` for a plugin's own code or a trigger check script, `model` for the
+   * in-process tool belt. Only for this call: a nested op's answer is read by the handler that asked.
+   */
+  answerReader?: AnswerReader
   /** The job of that plugin (a relayed plugin job call on a host replica): provenance only. */
   callerPluginJob?: string
   /** Human clicks never inherit a session id from headers or the process environment. */
@@ -636,7 +645,9 @@ export async function executeOp(
   // An agent's answer is held to the op's cap on the surface that prints it (answer.ts). An untyped
   // caller's `true` names no surface, so it gets the smaller one. A handler builds a part for it.
   const surface: AnswerSurface | undefined = options.forAgent ? (options.forAgent === 'mcp' ? 'mcp' : 'cli') : undefined
-  const fit = surface && !full && !human && !pluginId && !answersWhole(op, args) ? answerFit(op, surface) : undefined
+  // Who prints the answer to an agent, capped or not: a person's and a plugin's call has no such reader.
+  const agentSurface = surface && !human && !pluginId ? surface : undefined
+  const fit = agentSurface && !full && !answersWhole(op, args) ? answerFit(op, agentSurface) : undefined
   const run = async (): Promise<OpOutcome> => {
     // A session's words for the user in another language than his setting are not sent
     // (reply-language-gate.ts): only an agent's own tool call (forAgent), never a program's fixed
@@ -662,10 +673,11 @@ export async function executeOp(
       ...(options.callerProof ? { proof: options.callerProof } : {}),
       ...(options.callerTrigger ? { trigger: options.callerTrigger } : {}),
       ...(options.callerJob ? { job: options.callerJob } : {}),
+      ...(options.answerReader ? { reader: options.answerReader } : {}),
       ...(unproven ? { unproven: true as const } : {}),
       ...(once ? { callId: once } : {}),
     }
-    const outcome = await humanCallerScope.run(human, () => explicitCallerScope.run({ sid: explicitSid, kind: callerKind, ...(pluginId ? { pluginId } : {}), ...(unproven ? { unproven: true as const } : {}) }, () => runOp(op, args, base, prov, fit)))
+    const outcome = await humanCallerScope.run(human, () => explicitCallerScope.run({ sid: explicitSid, kind: callerKind, ...(pluginId ? { pluginId } : {}), ...(unproven ? { unproven: true as const } : {}) }, () => runOp(op, args, base, prov, fit, agentSurface)))
     // A handler that caught a lost or refused-for-now self-call and answered ok (a bulk op's
     // failed row): a copy must run it again, and the ledger answers the rows that applied.
     if (outcome.ok) {
@@ -697,11 +709,17 @@ export async function executeOp(
   // Text a session hands on gets one line back when it names a draft in a temp dir (tmp-draft-path.ts)
   // or, for the user, an id with no link to open it (missing-links.ts).
   if (!human && !pluginId) notes.push(...await handedTextNotes(op.name, args, outcome, origin, explicitSid))
+  // Outside text (a plugin's data) reaches a model framed, before the cap: a cut inside the envelope
+  // leaves it whole (outside-answer.ts). A person and a program (a plugin's own code, a check script)
+  // read the data as it is; a plugin id alone is attribution, never the reader (agentReadsFramed).
+  const framed = op.outside && outcome.ok && agentReadsFramed({ kind: callerKind, reader: options.answerReader })
+    ? { ...outcome, result: frameOpAnswer(op.outside, outcome.result) }
+    : outcome
   // An agent reads a receipt for a write and capped content for a read (answer.ts). The notes go on
   // after it: an op's own shape builds a new answer and would leave them out.
-  const shaped = human || pluginId || !surface || outcome.result === undefined
-    ? outcome
-    : { ...outcome, result: agentAnswer(op, args, outcome.result, full, surface) }
+  const shaped = human || pluginId || !surface || framed.result === undefined
+    ? framed
+    : { ...framed, result: agentAnswer(op, args, framed.result, full, surface) }
   const clean = op.answer?.clean
   const answered = clean && shaped.ok && shaped.result !== undefined ? { ...shaped, result: clean(shaped.result) } : shaped
   return notes.length ? withNote(answered, notes.join(' ')) : answered
@@ -785,6 +803,7 @@ async function runOp(
   base: string,
   prov: CallerProvenance,
   fit: AnswerFit | undefined,
+  agentSurface: AnswerSurface | undefined,
 ): Promise<OpOutcome> {
   const timeoutMs = (typeof op.timeoutMs === 'function' ? op.timeoutMs(args) : op.timeoutMs) ?? REQUEST_TIMEOUT_MS
   if (op.handler) {
@@ -798,7 +817,7 @@ async function runOp(
       }
       // A handler that runs another op in-process (a plugin's walnut.ops.call)
       // acts for the same caller: the nested call cannot climb above this origin.
-      const result = await withCallerOrigin(prov.origin, () => op.handler!(args, call, { sid: prov.explicitSid, kind: prov.callerKind, ...(fit ? { answer: fit } : {}) }))
+      const result = await withCallerOrigin(prov.origin, () => op.handler!(args, call, { sid: prov.explicitSid, kind: prov.callerKind, ...(prov.pluginId ? { pluginId: prov.pluginId } : {}), ...(prov.reader ? { reader: prov.reader } : {}), ...(fit ? { answer: fit } : {}) }))
       const message = op.resultError?.(result)
       return message ? { ok: false, message, result, ...resultErrorFields(op), ...(reachedNoServer(prov) ? { unreachable: true as const } : {}) } : { ok: true, result }
     } catch (err) {
@@ -839,7 +858,7 @@ async function runOp(
   const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs, prov)
   if (!r.ok) return r
   try {
-    const result = op.mapResult ? op.mapResult({ body: r.result, args, ...(fit ? { answer: fit } : {}) }) : r.result
+    const result = op.mapResult ? op.mapResult({ body: r.result, args, ...(fit ? { answer: fit } : {}), ...(agentSurface ? { surface: agentSurface } : {}) }) : r.result
     const message = op.resultError?.(result)
     return message ? { ok: false, message, result, ...resultErrorFields(op) } : { ok: true, result }
   } catch (err) {

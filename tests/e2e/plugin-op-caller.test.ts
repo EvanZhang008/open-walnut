@@ -53,6 +53,7 @@ import { executeOp } from '../../src/ops/executor.js'
 import { definePluginOp } from '../../src/ops/registry.js'
 import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../src/lib/caller-origin.js'
 import type { Task } from '../../src/core/types.js'
+import { isFramedOutside, outsideDataOf } from '../../src/core/outside-content.js'
 
 let server: HttpServer
 let port: number
@@ -93,6 +94,12 @@ export function activate(walnut) {
   })
 }
 `
+
+/** An agent's answer: framed as the plugin's outside data (ops/outside-answer.ts), the probe's answer inside. */
+function framed<T>(result: unknown): T {
+  expect(isFramedOutside(result), JSON.stringify(result)?.slice(0, 200)).toBe(true)
+  return outsideDataOf(result) as T
+}
 
 type Who = { ctx: { kind: string; sid: string | null }; echo: { sid: string | null; kind: string | null; plugin: string | null; origin: string | null }; reads: Record<string, string> }
 
@@ -166,7 +173,7 @@ describe('the plugin op route runs the op for its own caller', () => {
 
   it('an automated caller is an agent with no session, and reads a router\'s task like any task', async () => {
     const r = await who({ 'x-walnut-caller-kind': 'automation' })
-    expect(r.data.result).toEqual({
+    expect(framed(r.data.result)).toEqual({
       ctx: { kind: 'agent', sid: null },
       echo: { sid: null, kind: 'automation', plugin: 'probe', origin: LOCAL_ORIGIN },
       reads: { [routerTaskId]: 'ok', [plainId]: 'ok' },
@@ -175,7 +182,7 @@ describe('the plugin op route runs the op for its own caller', () => {
 
   it('an ordinary session keeps its id in every nested call, never the plugin\'s', async () => {
     const r = await who({ 'x-walnut-caller-sid': ordinarySid })
-    expect(r.data.result).toEqual({
+    expect(framed(r.data.result)).toEqual({
       ctx: { kind: 'agent', sid: ordinarySid },
       echo: { sid: ordinarySid, kind: null, plugin: 'probe', origin: LOCAL_ORIGIN },
       reads: { [routerTaskId]: 'ok', [plainId]: 'ok' },
@@ -194,7 +201,7 @@ describe('the plugin op route runs the op for its own caller', () => {
   it('a session id that is not one runs as the plugin, never as a person', async () => {
     for (const bad of ['x'.repeat(201), 'two ids', '']) {
       const r = await who({ 'x-walnut-caller-sid': bad })
-      expect(r.data.result).toEqual({
+      expect(framed(r.data.result)).toEqual({
         ctx: { kind: 'agent', sid: 'plugin:probe' },
         echo: { sid: 'plugin:probe', kind: null, plugin: 'probe', origin: LOCAL_ORIGIN },
         reads: { [routerTaskId]: 'ok', [plainId]: 'ok' },
@@ -221,7 +228,7 @@ describe('a nested call cannot change who it runs for', () => {
     const out = await executeOp('caller_scope_outer', { claim: 'person' }, {
       apiBase: getPluginApiBase(), origin: LOCAL_ORIGIN, callerSid: ordinarySid, callerPluginId: 'outer-plugin',
     }) as { ok: true; result: { ok: true; result: Who } }
-    expect(out.result.result).toEqual({
+    expect(framed(out.result.result)).toEqual({
       ctx: { kind: 'agent', sid: ordinarySid },
       echo: { sid: ordinarySid, kind: null, plugin: 'probe', origin: LOCAL_ORIGIN },
       reads: { [routerTaskId]: 'ok' },
@@ -251,26 +258,30 @@ describe('the companion\'s relay carries the caller, and an older one names none
       reads: { [routerTaskId]: 'ok' },
     })
     const session = await callPrimaryPluginOp('probe', 'probe_who', { read: [routerTaskId] }, { kind: 'agent', sid: ordinarySid }) as { ok: true; result: Who }
-    expect(session.result.echo).toEqual({ sid: ordinarySid, kind: null, plugin: 'probe', origin: REMOTE_HTTP_ORIGIN })
-    expect(session.result.reads).toEqual({ [routerTaskId]: 'ok' })
+    const seen = framed<Who>(session.result)
+    expect(seen.echo).toEqual({ sid: ordinarySid, kind: null, plugin: 'probe', origin: REMOTE_HTTP_ORIGIN })
+    expect(seen.reads).toEqual({ [routerTaskId]: 'ok' })
   })
 
   it('no caller (an older companion) or a caller of any other shape runs as the plugin, never a person', async () => {
     relayed.params.length = 0
     const old = await callPrimaryPluginOp('probe', 'probe_who', { read: [routerTaskId] }) as { ok: true; result: Who }
     expect('caller' in (relayed.params[0] ?? {})).toBe(false)
-    expect(old.result.ctx).toEqual({ kind: 'agent', sid: 'plugin:probe' })
-    expect(old.result.reads).toEqual({ [routerTaskId]: 'ok' })
+    // Whoever asked through an older companion, a model may read it: framed.
+    const oldSeen = framed<Who>(old.result)
+    expect(oldSeen.ctx).toEqual({ kind: 'agent', sid: 'plugin:probe' })
+    expect(oldSeen.reads).toEqual({ [routerTaskId]: 'ok' })
     for (const caller of [
       { kind: 'person', sid: ordinarySid }, { kind: 'admin' }, { kind: 'agent', sid: 'x'.repeat(201) },
       { kind: 'person', scope: 'all' }, 'person', ['person'],
     ]) {
       const out = await handlePluginControlRelay('server.plugin-op', { pluginId: 'probe', opName: 'probe_who', args: { read: [routerTaskId] }, caller })
-      expect(out).toMatchObject({ ok: true, result: { ok: true, result: {
+      expect(out).toMatchObject({ ok: true, result: { ok: true } })
+      expect(framed((out as { result: { result: unknown } }).result.result)).toMatchObject({
         ctx: { kind: 'agent', sid: 'plugin:probe' },
         echo: { sid: 'plugin:probe', kind: null, plugin: 'probe', origin: REMOTE_HTTP_ORIGIN },
         reads: { [routerTaskId]: 'ok' },
-      } } })
+      })
     }
   })
 })

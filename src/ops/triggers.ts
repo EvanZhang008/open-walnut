@@ -10,8 +10,8 @@
 
 import { z } from 'zod'
 import { defineOp, type HttpBinding } from './registry.js'
-import { clipText, tailText } from './doc-page.js'
 import { awayAnswer, withOutcome } from './outcome.js'
+import { framedTemplateCheck, framedTestRun, testedRun } from './trigger-test-frame.js'
 import { triggerRunState } from '../core/cron/trigger-run-state.js'
 import { TIME_LIMIT_DEFAULT_S, TIME_LIMIT_MAX_S, testCallTimeoutMs } from '../core/cron/trigger-time-limit.js'
 import { buildTriggerUpdatePatch, type TriggerUpdateField } from '../core/routines/trigger-update-patch.js'
@@ -284,9 +284,11 @@ defineOp({
     params: z.record(z.string(), z.string()).optional().describe('The params stored with the trigger'),
     input: z.record(z.string(), z.unknown()).optional().describe('The trigger input: {state, lastFireAt, now}'),
   },
-  handler: async (args, call) => call('POST', `/trigger-templates/${encodeURIComponent(String(args.template))}/check`, {
+  // The stored check prints this answer as its contract line, so it reads it plain; a session's call
+  // reads what the plugin watched framed (trigger-test-frame.ts says how the two are told apart).
+  handler: async (args, call, caller) => framedTemplateCheck(await call('POST', `/trigger-templates/${encodeURIComponent(String(args.template))}/check`, {
     params: args.params ?? {}, input: args.input ?? {},
-  }),
+  }), caller),
   // A check script reads this answer as the check's own output ({fire, items, state}): a cut item would never fire.
   answer: { kind: 'content', whole_for: () => true },
   tags: { readonly: true, remote: 'allow' },
@@ -419,50 +421,6 @@ defineOp({
   tags: { readonly: true, remote: 'allow' },
 })
 
-/** What trigger_test's answer keeps of each tail, from its end, and of the parsed object's items. */
-const STDOUT_TAIL = 2_000
-const STDERR_TAIL = 1_200
-const ITEMS_SHOWN = 20
-const INPUT_HEAD = 1_000
-const STATE_MAX = 600
-
-const tailOf = (v: unknown, max: number): unknown =>
-  typeof v === 'string' ? tailText(v, max) : v
-
-/** trigger_test's answer for an agent: the verdict whole, the tails and the parsed object short. */
-function testedRun(result: unknown): unknown {
-  const r = rec(result)
-  const run = rec(r.result)
-  if (!r.result) return result
-  const parsed = run.parsed && typeof run.parsed === 'object' ? rec(run.parsed) : null
-  const items = parsed && Array.isArray(parsed.items) ? parsed.items : []
-  const state = parsed && 'state' in parsed ? JSON.stringify(parsed.state) ?? 'null' : ''
-  const cut: string[] = []
-  if (typeof run.stdoutTail === 'string' && run.stdoutTail.length > STDOUT_TAIL) cut.push(`stdout to its last ${STDOUT_TAIL} characters`)
-  if (typeof run.stderrTail === 'string' && run.stderrTail.length > STDERR_TAIL) cut.push(`stderr to its last ${STDERR_TAIL} characters`)
-  if (items.length > ITEMS_SHOWN) cut.push(`items to the first ${ITEMS_SHOWN} of ${items.length}`)
-  if (typeof parsed?.input === 'string' && parsed.input.length > INPUT_HEAD) cut.push(`input to its first ${INPUT_HEAD} characters`)
-  if (state.length > STATE_MAX) cut.push(`state (${state.length} characters of JSON)`)
-  if (!cut.length) return result
-  return {
-    ...r,
-    result: {
-      ...run,
-      stdoutTail: tailOf(run.stdoutTail, STDOUT_TAIL),
-      stderrTail: tailOf(run.stderrTail, STDERR_TAIL),
-      ...(parsed ? {
-        parsed: {
-          ...parsed,
-          ...(items.length > ITEMS_SHOWN ? { items: items.slice(0, ITEMS_SHOWN), itemCount: items.length } : {}),
-          ...(typeof parsed.input === 'string' && parsed.input.length > INPUT_HEAD ? { input: clipText(parsed.input, INPUT_HEAD) } : {}),
-          ...(state.length > STATE_MAX ? { state: `(${state.length} characters of JSON)` } : {}),
-        },
-      } : {}),
-    },
-    shortened: `Shortened for this answer, nothing failed: ${cut.join('; ')}. Repeat the same trigger_test with "_full": true for all of it.`,
-  }
-}
-
 defineOp({
   name: 'trigger_test',
   title: 'Test a trigger check script',
@@ -507,7 +465,7 @@ defineOp({
     } | undefined
     // Run on this host while the server is away (a host's follower): its own words.
     const away = awayAnswer(body)
-    if (away) return away
+    if (away) return framedTestRun(away)
     // A run longer than the call may wait (a session on another host gets about 20 s) goes on there.
     if (body?.pending) {
       const p = body.pending
@@ -539,7 +497,7 @@ defineOp({
     const time = limit?.line ? ` It ${limit.line}.` : ''
     const timeWarning = limit?.warning ? ` WARNING: ${limit.warning}` : ''
     return withOutcome(
-      { ...(body ?? {}) },
+      framedTestRun({ ...(body ?? {}) }),
       `${outcome}${time}${timeWarning}`,
       !result.parsed
         ? 'Fix the script so its LAST stdout line is one JSON object with a boolean "fire", then test again.'

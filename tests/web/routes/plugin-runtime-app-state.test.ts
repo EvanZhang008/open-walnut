@@ -144,7 +144,8 @@ describe('the app_state op', () => {
     const out = (r as { result: Record<string, any> }).result
     expect(out.taskId).toBe(mine.taskId)
     expect(out.states).toHaveLength(1)
-    expect(out.states[0].state).toEqual({ mine: true })
+    // The App's state reaches the session framed as outside data (ops/work.ts), its label beside it.
+    expect(out.states[0].state).toMatchObject({ external_content: { source: 'app state', trust: 'untrusted', data: { mine: true } } })
     expect(JSON.stringify(out)).toContain('One App shares state about your task.')
   })
 

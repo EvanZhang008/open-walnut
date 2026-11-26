@@ -30,7 +30,8 @@ The task's session panel shows a live picture of your tab (the Browser view) wit
   number with its ref; `click-label 7` clicks number 7 (it holds until the next annotated
   screenshot). `zoom 40 120 300 200 part.png` saves that region of the screen (CSS pixels) at
   full pixel resolution, for small print the screenshot shrinks.
-- `text --all-frames` gives each frame's text on its own (`--json`: `frames: [{frame, url, text}]`).
+- `text --all-frames` gives each frame's text on its own (`--json`: `frames: [{frame, url, text}]`,
+  each string inside an `<external-content>` block: what a page wrote always comes framed).
 - `upload e5 ./invoice.pdf` puts a file from your machine into a file field (10 MB in all);
   `upload --selector '#image-upload' ./a.png` reaches a file field the page hides behind a
   button of its own (snapshot does not list it).

@@ -7,7 +7,9 @@ it('the router_context op always asks for bounded evidence, regardless of caller
   const result = await getOp('router_context')!.handler!({
     kind: 'mail', account: 'desk@example.invalid', message: 'INBOX:1:10', version: 'v1', preview: '0',
   }, call);
-  expect(result).toEqual({ body: { text: 'Preview' } });
+  // The body is the sender's: it comes back inside the outside-data envelope.
+  expect(result).toMatchObject({ external_content: { trust: 'untrusted', data: { body: { text: 'Preview' } } } });
+  expect(result).not.toHaveProperty('body');
   const [method, path] = call.mock.calls[0] as unknown as [string, string];
   expect(method).toBe('GET');
   const url = new URL(path, 'https://example.invalid');

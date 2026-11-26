@@ -213,6 +213,7 @@ SOURCES=(
   src/providers/trigger-state-seed-core.ts
   src/providers/clock-schedule-core.ts
   src/core/cron/trigger-timing.ts
+  src/core/outside-content.ts
   src/core/transcript-chain.ts
   src/core/transcript-chain-leaf.ts
   src/providers/history-ready-core.ts
@@ -414,6 +415,7 @@ SOURCES=(
   src/core/approvals/types.ts
   src/core/browser-control/browser-cli.ts
   src/core/browser-control/gone-words.ts
+  src/core/browser-control/page-frame.ts
   src/core/op-cards.ts
   src/core/vault/pass-cli.ts
   src/lib/tool-use-id.ts

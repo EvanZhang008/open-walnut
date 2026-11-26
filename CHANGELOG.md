@@ -14,6 +14,7 @@ breaking changes).
 - A remote host two Walnuts share becomes the one service of whichever leader asks first; the other Walnut's running sessions keep their CLI and their conversation, and it keeps sending to them and hearing them
 - On one computer account, the Walnut server runs this computer's sessions in its own process: a second server on the same daemon dir refuses to start and names the running one (pid, port, data dir), and a newer server that finds an older one's daemon program takes it over, its sessions adopted with their conversations
 - With the experiment "Small hosts run the one Walnut service, without a copy of your data", a host's Walnut switch turned off means the service runs there with no copy of your data, no port and no console (about 170 MB of memory against 80 MB for the session helper alone); Linux hosts only for now
+- A plugin op's answer, and the `api` op's answer for a route that carries outside text (plugins, letters, notifications, the mail router, any method), reach a session or a script inside an untrusted-data envelope: the value is under `external_content.data`. A script that parses such an answer (`walnut tools call calendar_query ... | jq`) reads `.external_content.data.events` instead of `.events`. A trigger check script, a plugin's own `walnut.ops.call` and a person read the plain value as before
 
 ### Fixed
 

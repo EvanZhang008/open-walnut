@@ -187,6 +187,8 @@ interface PluginOpSpec {
   destructive?: boolean
   /** Deadline for EACH `ctx.call`, not for the handler as a whole. */
   timeoutMs?: number
+  /** The answer already frames the outside text it carries; left out, the host frames it for agents. */
+  framesOwnAnswer?: boolean
   handler(
     args: Record<string, unknown>,
     ctx: { callerSid?: string; callerKind: 'person' | 'agent'; call(method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> },
@@ -253,12 +255,17 @@ export function getPluginApiBase(): string | undefined {
 // only lower it.
 // `caller`: who a route or relay ran it for; absent or invalid runs as the plugin (an agent),
 // never a person. The plugin id travels apart from the caller, so a person keeps the plugin's attribution.
+// `reader`: 'plugin-code' only for the plugin's own code (walnut.ops.call), which parses the answer and
+// so reads outside data plain. A route or a relay never passes it: whoever asked through them (a
+// session, a script, an older companion that names nobody), a model may read the answer, so it is
+// framed unless a person asked (2026-11-26 review: the plugin id alone skipped the frame for a session).
 export async function callPluginOp<T = unknown>(
   pluginId: string,
   name: string,
   args: Record<string, unknown>,
   origin: string,
   caller?: PluginOpCaller,
+  reader?: 'plugin-code',
 ): Promise<{ ok: true; result: T } | { ok: false; message: string }> {
   await import('../../ops/index.js')
   const checked = caller === undefined ? undefined : parsePluginOpCaller(caller)
@@ -271,6 +278,7 @@ export async function callPluginOp<T = unknown>(
     apiBase: configuredApiBase,
     ...who,
     callerPluginId: pluginId,
+    ...(reader === 'plugin-code' ? { answerReader: 'program' as const } : {}),
     origin,
   }) as { ok: true; result: T } | { ok: false; message: string }
 }
@@ -1085,7 +1093,8 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         name: string,
         args: Record<string, unknown> = {},
       ): Promise<{ ok: true; result: T } | { ok: false; message: string }> {
-        return callPluginOp<T>(pluginId, name, args, LOCAL_ORIGIN)
+        // The plugin's own code reads the answer: plain, never framed for it.
+        return callPluginOp<T>(pluginId, name, args, LOCAL_ORIGIN, undefined, 'plugin-code')
       },
       unwrap<T>(result: { ok: true; result: T } | { ok: false; message: string }): T {
         if (!result.ok) throw new Error(result.message)
@@ -1302,13 +1311,14 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           if (contributions.extIndex === internal) contributions.extIndex = null
         }))
       },
-      tool(spec: { name: string; description: string; inputSchema?: Record<string, unknown>; execute(input: Record<string, unknown>, meta?: { toolUseId?: string; source?: string; callerSid?: string; callerKind?: 'person' | 'agent' }): unknown | Promise<unknown> }) {
+      tool(spec: { name: string; description: string; inputSchema?: Record<string, unknown>; framesOwnAnswer?: boolean; execute(input: Record<string, unknown>, meta?: { toolUseId?: string; source?: string; callerSid?: string; callerKind?: 'person' | 'agent' }): unknown | Promise<unknown> }) {
         assertLive(`registry.tool("${spec.name}")`)
         const before = contributions.tools.length
         legacyApi.registerTool({
           name: spec.name,
           description: spec.description,
           input_schema: spec.inputSchema ?? { type: 'object', properties: {} },
+          ...(spec.framesOwnAnswer === true ? { framesOwnAnswer: true } : {}),
           async execute(input, meta) {
             const result = await spec.execute(input, meta)
             if (typeof result === 'string' || Array.isArray(result)) return result as never
@@ -1344,6 +1354,9 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           // so `call` is the only way it can reach a route, exactly like a core handler.
           handler: async (args, call, caller) => structuredOpResult(await spec.handler(args, { call, callerKind: caller?.kind ?? 'agent', ...(caller?.sid ? { callerSid: caller.sid } : {}) })),
           ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
+          // A plugin's data comes from outside Walnut (an organizer's event, a colleague's ticket):
+          // an agent reads it framed (ops/outside-answer.ts) unless the plugin frames its own.
+          ...(spec.framesOwnAnswer === true ? {} : { outside: { source: `${pluginId} plugin`, attrs: { op: name } } }),
           tags: {
             readonly,
             remote: spec.remote ?? (readonly ? 'allow' : 'deny'),

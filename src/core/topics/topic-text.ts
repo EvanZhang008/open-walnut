@@ -4,7 +4,8 @@
  */
 import { buildWalnutMessage, escapeAttr, escapeTagIn } from '../peers/walnut-message-tag.js';
 import { NO_ACTION_TAG } from '../../lib/turn-end-marker.js';
-import { authorName, hostOf, type Topic, type TopicMember, type TopicMessage } from './topics-model.js';
+import { authorName, hostOf, messageWords, type Topic, type TopicMember, type TopicMessage } from './topics-model.js';
+import { frameOutsideText, OUTSIDE_ITEMS_REMINDER } from '../outside-content.js';
 import { wakesLeft } from './topic-wake.js';
 
 /** The rider outcome of a folded topic notice (lib/history-walnut-riders.ts, sessions/wake-policy.ts). */
@@ -51,10 +52,16 @@ function authorKind(m: TopicMessage): TopicLineAuthor {
  * person's line breaks can never make words read as the user's (review 2026-11-20).
  */
 export function messageLine(topic: Topic, m: TopicMessage, userName: string): string {
-  const text = escapeTagIn(clip(m.text.trim(), LINE_MAX_CHARS), TOPIC_LINE_TAG);
   const kind = authorKind(m);
   const name = kind === 'user' ? userName : kind === 'walnut' ? 'Walnut' : authorName(topic, m.author, userName);
-  return `<${TOPIC_LINE_TAG} author="${kind}" name="${escapeAttr(name)}">${text}</${TOPIC_LINE_TAG}>`;
+  const clipped = clip(m.text.trim(), LINE_MAX_CHARS);
+  // A person member's words (by mail) are an outside party's: inside the line they ride one
+  // <external-content> block with the items reminder after it, so the topic's rules (outside the
+  // block) stay the instruction and nothing in the mail is (topics-model.ts messageWords decides).
+  const body = messageWords(topic, m) === 'outside'
+    ? `\n${frameOutsideText({ source: 'topic message by mail', attrs: { from: name } }, clipped, undefined, OUTSIDE_ITEMS_REMINDER)}\n`
+    : clipped;
+  return `<${TOPIC_LINE_TAG} author="${kind}" name="${escapeAttr(name)}">${escapeTagIn(body, TOPIC_LINE_TAG)}</${TOPIC_LINE_TAG}>`;
 }
 
 /** The messages `member` has not been given, oldest first, up to and including `upto`, without its own. */

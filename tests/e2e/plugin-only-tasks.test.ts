@@ -24,6 +24,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-plugin-only-
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { settleUserStatusSync } from '../../src/core/user-status-sync.js'
+import { outsideDataOf } from '../../src/core/outside-content.js'
 
 let server: HttpServer
 let port: number
@@ -45,7 +46,8 @@ async function api(method: string, route: string, body?: unknown, headers: Recor
 async function op<T = any>(pluginId: string, name: string, args: Record<string, unknown> = {}, headers: Record<string, string> = {}): Promise<T> {
   const r = await api('POST', `/api/plugin-runtime/${pluginId}/ops/${pluginId}_${name}`, args, headers)
   if (!r.data?.ok) throw new Error(`${pluginId}_${name}: ${JSON.stringify(r.data)}`)
-  return r.data.result as T
+  // A session's call reads it framed as the plugin's outside data (ops/outside-answer.ts): the answer inside.
+  return outsideDataOf(r.data.result) as T
 }
 
 async function until<T>(what: string, probe: () => Promise<T>, ok: (v: T) => boolean, ms = 15_000): Promise<T> {

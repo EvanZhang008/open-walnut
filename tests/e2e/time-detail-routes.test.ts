@@ -179,7 +179,11 @@ describe('meetings in the timeline', () => {
     expect(ignored.ok && (ignored.result as any).ignore).toEqual(['lunch'])
     const tl = await op('time_timeline', { date: D })
     expect(tl.ok).toBe(true)
-    const day = (tl.ok ? tl.result as any : undefined).days[0]
+    // The op frames the days (calendar titles are the organizer's words: src/ops/time-outside.ts).
+    const framed = tl.ok ? tl.result as any : undefined
+    expect(framed.external_content).toMatchObject({ trust: 'untrusted' })
+    expect(framed.days).toBeUndefined()
+    const day = framed.external_content.data.days[0]
     expect(day.plan.map((p: any) => p.title)).toEqual(['Design review', 'Team sync'])
     expect(day.plan[1]).toMatchObject({ attendance: 'attended', attendanceBasis: 'user', meetingMin: 30 })
     expect(day.summary.ignoredMeetings).toBe(1)

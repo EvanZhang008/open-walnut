@@ -23,6 +23,7 @@ import { sameAreaTasks, sameTaskArea } from '../router/same-area.js';
 import { awaitsUserDecision } from '../human-inbox/open-decision.js';
 import { briefOffNow } from './brief-off.js';
 import { homeWritesStopped } from '../../lib/leader-clocks.js';
+import { letterOutsideSource } from '../human-inbox/letter-outside.js';
 
 const SCHEDULE_FILE = path.join(WALNUT_HOME, 'org', 'report-schedule.json');
 /** A report the clock could not send this long after its time is dropped, with a log line. */
@@ -34,6 +35,9 @@ export interface MorningReport {
   /** Open decision letters left out because Walnut cannot tell their area: the sending task is
    *  gone from the store. Only how many, never their words. Absent when none. */
   withheld?: { decisions: number };
+  /** The subjects it quotes of letters whose words are outside (letterOutsideSource: a plugin's, a
+   *  router's), as quoted, for agentReport (report-outside.ts). Absent when none. */
+  quoted?: Array<{ letterId: string; subject: string; source: string }>;
 }
 
 const flat = (v: string, max = 240): string => {
@@ -82,6 +86,14 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
   for (const t of [...shown(needs), ...shown(done), ...shown(moved)]) refs.add(t.id);
   const orphan = decisions.filter((l) => !needs.some((t) => l.sender.taskId === t.id || l.taskRefs?.includes(t.id))
     && (owner.org_role === 'main' || (!!l.sender.taskId && scope.some((t) => t.id === l.sender.taskId)) || l.sender.taskId === owner.id));
+  // A subject of a letter whose words are outside is noted as quoted, for an agent's read (agentReport).
+  const quoted = new Map<string, { letterId: string; subject: string; source: string }>();
+  const subjectOf = (l: LetterRecord, max: number): string => {
+    const subject = flat(l.subject, max);
+    const source = letterOutsideSource(l);
+    if (source) quoted.set(`${l.id}\u0000${subject}`, { letterId: l.id, subject, source });
+    return subject;
+  };
   // The words are the letter registry's (human-inbox/walnut-letters/org-report.ts); the rows are the tasks' own.
   const report = ORG_REPORT.render(lang, {
     owner: owner.org_role === 'main' ? null : flat(owner.title, 60),
@@ -97,11 +109,11 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
         ...(s?.ask ? { ask: flat(form?.summary ?? s.ask) } : {}),
         ...(s?.checkedAt ? { checked: hhmm(Date.parse(s.checkedAt)), unverified: !!s.unverified } : {}),
         ...(form?.kind === 'yes_no' ? { yesNo: true } : form?.options?.length ? { options: form.options.map((o) => o.label) } : {}),
-        ...(letter ? { letter: flat(letter.subject, 120) } : {}),
+        ...(letter ? { letter: subjectOf(letter, 120) } : {}),
       };
     }),
     ...(toLook ? { toLook } : {}),
-    decisions: orphan.map((l) => ({ subject: flat(l.subject, 160), ...(l.sender.taskTitle ? { from: flat(l.sender.taskTitle, 80) } : {}) })),
+    decisions: orphan.map((l) => ({ subject: subjectOf(l, 160), ...(l.sender.taskTitle ? { from: flat(l.sender.taskTitle, 80) } : {}) })),
     done: done.map((t) => ({ title: flat(t.title, 120), ...(t.result_report?.result ? { result: flat(t.result_report.result) } : {}) })),
     moved: moved.map((t) => {
       const s = t.user_status;
@@ -121,6 +133,7 @@ export function buildMorningReport(owner: Task, tasks: readonly Task[], letters:
   return {
     subject: report.subject, markdown: report.markdown, text: report.text ?? '', taskRefs: [...refs].slice(0, 30), counts,
     ...(withheldDecisions ? { withheld: { decisions: withheldDecisions } } : {}),
+    ...(quoted.size ? { quoted: [...quoted.values()] } : {}),
   };
 }
 

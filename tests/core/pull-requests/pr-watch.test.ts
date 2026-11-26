@@ -210,7 +210,7 @@ describe('waking the session', () => {
     expect(sent).toHaveLength(1)
     expect(sent[0]!.sessionId).toBe('sess-1')
     expect(sent[0]!.text).toContain('<walnut-message kind="trigger" from="Walnut: pull request watch"')
-    expect(sent[0]!.text).toContain('- A check failed (commit aaa1111):')
+    expect(sent[0]!.text).toContain('- A check failed (commit aaa1111).')
     expect(sent[0]!.text).toContain('  - test: https://ci.example/test')
     expect(snap('t1').watch).toMatchObject({ lastWake: 'checks failed' })
     await tick()
@@ -223,7 +223,7 @@ describe('waking the session', () => {
     prs.get(URL1)!.checks = [check('build', 'passed'), check('test', 'failed')]
     await tick()
     expect(sent).toHaveLength(2)
-    expect(sent[1]!.text).toContain('- A check failed (commit ccc2222):')
+    expect(sent[1]!.text).toContain('- A check failed (commit ccc2222).')
   })
 
   it('a check already failing when the pull request is linked wakes nobody', async () => {
@@ -246,7 +246,7 @@ describe('waking the session', () => {
     prs.get(URL1)!.remarks.push(remark('c2', 'kim', '2026-11-04T10:03:00Z', 'Please split this function \u{1F600}'))
     await tick()
     expect(sent).toHaveLength(1)
-    expect(sent[0]!.text).toContain('- 2 new comments or reviews:')
+    expect(sent[0]!.text).toContain('- 2 new comments or reviews.')
     expect(sent[0]!.text).toContain(`  - kim, changes requested, 2 inline comments (${URL1}#r2)`)
     expect(sent[0]!.text).toContain('  - kim: Please split this function \u{1F600}')
     await tick()

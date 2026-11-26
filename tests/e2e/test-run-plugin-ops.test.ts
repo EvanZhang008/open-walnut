@@ -84,10 +84,12 @@ describe('walnut.testRun() in a plugin op', () => {
   })
 
   it('the companion\'s relay: the label in its params reaches the op; none, and the op reads none', async () => {
-    const relayed = await handlePluginControlRelay('server.plugin-op', { pluginId: 'probe', opName: 'probe_who', args: {}, testRun: 'companion-run' })
+    // A person's call through the relay reads the op's answer plain (an agent's is framed: plugin-op-entry-frame.test.ts).
+    const person = { kind: 'person' }
+    const relayed = await handlePluginControlRelay('server.plugin-op', { pluginId: 'probe', opName: 'probe_who', args: {}, testRun: 'companion-run', caller: person })
     // The relay's result is the op route's own answer, envelope included.
     expect(relayed).toMatchObject({ ok: true, result: { ok: true, result: { first: 'companion-run', later: 'companion-run' } } })
-    const plain = await handlePluginControlRelay('server.plugin-op', { pluginId: 'probe', opName: 'probe_who', args: {} })
+    const plain = await handlePluginControlRelay('server.plugin-op', { pluginId: 'probe', opName: 'probe_who', args: {}, caller: person })
     expect(plain).toMatchObject({ ok: true, result: { ok: true, result: { first: null, later: null } } })
   })
 })

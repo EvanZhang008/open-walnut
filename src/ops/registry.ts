@@ -20,8 +20,17 @@
 import { z } from 'zod'
 import { OwnedRegistry } from '../core/plugins/owned-registry.js'
 import type { Disposable } from '../core/plugins/disposable.js'
-import type { AnswerFit, OpAnswer } from './answer.js'
+import type { AnswerFit, AnswerSurface, OpAnswer } from './answer.js'
+import type { OutsideSource } from '../core/outside-content.js'
 import { callerInputShape } from './count-cap.js'
+
+/**
+ * An op's outside source (WalnutOp.outside). `fields`: the answer's top-level keys an outside party
+ * wrote (an MCP tool's `text`); the rest is Walnut's own (status, call id, outcome, next) and stays
+ * beside the frame. An answer with none of them (a call still running) is not framed. Left out, the
+ * whole answer is framed.
+ */
+export type OpOutside = OutsideSource & { fields?: readonly string[] }
 
 /** How an op reaches the server when it has no custom handler. */
 export interface HttpBinding {
@@ -49,12 +58,30 @@ export interface OpResultContext {
    * A part asked for (a document's page) is built for it, so no later cut shortens it.
    */
   answer?: AnswerFit
+  /**
+   * The surface that prints the answer to an agent, set whether or not it is capped (`answer` is
+   * left out for `_full` and an answer the op keeps whole). Left out, a person, a plugin's code or a
+   * program reads the result.
+   */
+  surface?: AnswerSurface
 }
+
+/** Who reads an answer when the caller's kind does not say it (OpCaller.reader). */
+export type AnswerReader = 'program' | 'model'
 
 /** Who a handler runs for. */
 export interface OpCaller {
   sid?: string
   kind: 'person' | 'agent'
+  /** The plugin the call is made through: attribution only, never who reads the answer (`reader`). */
+  pluginId?: string
+  /**
+   * Who reads the answer, when the caller's kind does not say it (ops/outside-answer.ts
+   * agentReadsFramed): `program` for a plugin's own code or a trigger check script, which parse it
+   * (a check's output reaches a session only through the fire's frame); `model` for a model that
+   * reads it whatever the caller's kind (the in-process tool belt on a person's turn).
+   */
+  reader?: AnswerReader
   /**
    * Set when the answer goes to an agent through the op's shape (answer.ts): the cap it is held to,
    * on the surface that prints it. A part the handler builds itself (a document's page) is built
@@ -128,6 +155,13 @@ export interface WalnutOp {
    * `kind: 'content'`; an op with a known large object gives its compact `shape`.
    */
   answer?: OpAnswer
+  /**
+   * The answer carries text an outside party wrote (every plugin op unless its spec frames its own
+   * answers, and the core ops that relay an MCP tool's answer): an agent caller reads it inside an
+   * `external_content` envelope with this source (ops/outside-answer.ts, applied by executor.ts); a
+   * person or a plugin reads it as it is.
+   */
+  outside?: OpOutside
   /** When a write partly succeeds the result is kept, but every entry point must clearly report the op as failed. */
   resultError?: (result: unknown) => string | undefined
   /**

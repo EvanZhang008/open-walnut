@@ -24,7 +24,7 @@ describe('notification titles', () => {
     const segs = parseSessionEnvelopes(text) ?? []
     expect(segs[0]).toMatchObject({ kind: 'text' })
     const [env] = envelopes(text)
-    expect(env).toMatchObject({ kind: 'notification', title: 'Attached Mail: Lunch tomorrow' })
+    expect(env).toMatchObject({ kind: 'notification', title: 'Attached Mail item' })
   })
 
   it('a notice with a title keeps it; one without still has none', () => {

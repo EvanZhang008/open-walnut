@@ -393,6 +393,9 @@ export interface PluginToolSpec {
   /** JSON Schema for the tool's arguments (object schema). */
   input_schema: Record<string, unknown>;
   execute(params: Record<string, unknown>, meta?: PluginToolMeta): Promise<PluginToolResult>;
+  /** The result already frames the outside text it carries (the mail plugin's wrapUntrusted):
+   *  the host does not frame it again. Left out, the host frames it (plugins/plugin-tools.ts). */
+  framesOwnAnswer?: boolean;
 }
 
 // ── HttpRoute: plugin-registered HTTP routes ──

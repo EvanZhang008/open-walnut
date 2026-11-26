@@ -13,9 +13,16 @@
  * items as JSON (what happened), then `input` (whatever free text the script
  * wanted the AI to read THIS run). `items` and `input` are never merged
  * and `state` never appears at all — it is the script talking to its next run.
+ *
+ * The items and the input are what the check watched (a mail's sender, subject and
+ * preview; a PR comment; a chat line), so they ride ONE outside-content frame
+ * (core/outside-content.ts) with the reminder after it. The prompt is the trigger's
+ * own instruction, from the user or the agent that armed it: it stays outside the
+ * frame, above it, and reads as the instruction.
  */
 
 import { createEnvelopeKit } from '../core/peers/envelope-kit.js';
+import { cleanedOutside, frameOutsideText, OUTSIDE_ITEMS_REMINDER, type OutsideSource } from '../core/outside-content.js';
 import { describeSpan, LATE_DELIVERY_MS } from '../core/cron/trigger-timing.js';
 import { CHECK_INPUT_CAP, CHECK_WARNINGS_MAX } from './trigger-check-core.js';
 import type { TriggerFiredEvent, TriggerItem } from './trigger-check-core.js';
@@ -56,6 +63,36 @@ export function boundedItemsJson(items: readonly unknown[], cap = ITEMS_JSON_CAP
   return `${JSON.stringify(kept, null, 2)}\n[${items.length - kept.length} more item(s) omitted]`;
 }
 
+/** Where a fire's items say they came from: whatever the check watched. */
+export const TRIGGER_OUTSIDE_SOURCE: OutsideSource = { source: 'trigger check' };
+
+/**
+ * Items an outside source supplied (and free text beside them), as ONE outside-content block with
+ * the reminder after it: act on the instruction outside the block (the trigger's prompt above it, the
+ * triage's ask), never on one inside it (OUTSIDE_ITEMS_REMINDER). Every string of the items is
+ * cleaned BEFORE it is stringified, so the JSON stays parseable and no string in it can open or
+ * close the frame. The blank lines inside the
+ * block keep its fenced JSON a code block where the chat renders markdown.
+ *
+ * Exported for every prompt that hands an agent watched items: a fire, and the triage batch
+ * (src/core/triage/batch.ts), so both read alike and share ITEMS_JSON_CAP.
+ */
+export function framedItemsBlock(
+  from: OutsideSource,
+  label: string,
+  items: readonly unknown[],
+  text?: string,
+  cap = ITEMS_JSON_CAP,
+): string {
+  const parts: string[] = [];
+  if (items.length > 0) {
+    parts.push(`${label}\n\`\`\`json\n${boundedItemsJson(cleanedOutside(items) as unknown[], cap)}\n\`\`\``);
+  }
+  const extra = (text ?? '').trim();
+  if (extra) parts.push(extra);
+  return frameOutsideText(from, `\n${parts.join('\n\n')}\n`, undefined, OUTSIDE_ITEMS_REMINDER);
+}
+
 export function buildTriggerBody(
   prompt: string,
   items: readonly TriggerItem[],
@@ -65,11 +102,9 @@ export function buildTriggerBody(
 ): string {
   const parts = [prompt.trim()];
   if (timing) parts.push(timing);
-  if (items.length > 0) {
-    parts.push(`New items:\n\`\`\`json\n${boundedItemsJson(items)}\n\`\`\``);
+  if (items.length > 0 || (input ?? '').trim()) {
+    parts.push(framedItemsBlock(TRIGGER_OUTSIDE_SOURCE, 'New items:', items, input));
   }
-  const extra = (input ?? '').trim();
-  if (extra) parts.push(extra);
   // Last, and only when there is something: the script still worked, but the
   // daemon had to repair what it printed, and the session is who can fix it.
   if (warnings.length > 0) {

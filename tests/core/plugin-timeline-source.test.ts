@@ -157,6 +157,21 @@ describe('walnut.registry.timelineSource', () => {
   })
 })
 
+describe('the calendar timeline source', () => {
+  it('reads calendar_query through the frame an agent would get (Walnut\'s own read for the person)', async () => {
+    const { api } = pluginApi('calendar')
+    api.registry.op({
+      name: 'query', title: 'Query', description: 'Events.', readonly: true,
+      inputSchema: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } } },
+      handler: async () => ({ status: 'ok', events: [{ id: 'ev-1', title: 'Design review', start: at(10), end: at(11), location: 'https://meet.example.test/x' }] }),
+    })
+    const { calendarSegments } = await import('../../src/core/time-tracking/timeline/core-sources.js')
+    const out = await calendarSegments({ from: MON, to: MON } as TimelineRange)
+    expect(out.coverage, JSON.stringify(out.coverage)).toEqual({ available: true })
+    expect(out.segments).toEqual([expect.objectContaining({ kind: 'meeting', label: 'Design review' })])
+  })
+})
+
 describe('plugin op answers', () => {
   it('JSON text becomes the object; prose stays text', () => {
     expect(structuredOpResult('{"status":"ok","n":2}')).toEqual({ status: 'ok', n: 2 })
@@ -173,9 +188,11 @@ describe('plugin op answers', () => {
       handler: async () => JSON.stringify({ status: 'ok', events: [{ title: 'Standup' }] }, null, 2),
     })
     const name = pluginOpName('cal-fake', 'query')
-    const local = await callPluginOp('cal-fake', name, {}, LOCAL_ORIGIN)
+    // The plugin's own code (walnut.ops.call) reads it plain.
+    const local = await callPluginOp('cal-fake', name, {}, LOCAL_ORIGIN, undefined, 'plugin-code')
     expect(local).toEqual({ ok: true, result: { status: 'ok', events: [{ title: 'Standup' }] } })
     const gateway = await handleGatewayCapability('tools.call', 'a1b2c3d4-1111-2222-3333-444455556666', { name, args: {} }, 'devbox', { throttle: new PeerThrottle(), cloudMode: false })
-    expect(gateway).toEqual({ ok: true, result: { status: 'ok', events: [{ title: 'Standup' }] } })
+    // A session reads it framed as the plugin's outside data (ops/outside-answer.ts), the object inside.
+    expect(gateway.ok && gateway.result).toMatchObject({ external_content: { source: 'cal-fake plugin', trust: 'untrusted', op: name, data: { status: 'ok', events: [{ title: 'Standup' }] } } })
   })
 })

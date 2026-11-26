@@ -51,6 +51,8 @@ export async function activate(walnut: WalnutServerApi) {
 
 Walnut exposes that local `ping` registration to the model as `my_plugin_ping`. Tool local names must match `/^[a-z0-9_]+$/`; the host normalizes and prefixes the Plugin id automatically.
 
+A plugin's tool and op answers are outside text to Walnut: an agent, and a script outside a trigger check (`walnut tools call <your op>`, `walnut mcp <server> tools call`), reads them under `external_content.data`, framed, unless the registration sets `framesOwnAnswer`. Your plugin's own code (`walnut.ops.call`) and a trigger check read the answer as you returned it.
+
 ### Server API
 
 | Member | Purpose |

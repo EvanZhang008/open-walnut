@@ -247,7 +247,8 @@ describe('the sign-in hand-off', () => {
     expect(r.body.hand_off).toMatchObject({ why: 'google_refused_browser', next: 'request_sign_in' })
     const { getOp } = await import('../../src/ops/registry.js')
     await import('../../src/ops/browser.js')
-    const mapped = getOp('browser')!.mapResult!({ body: r.body, args: { action: 'navigate' } } as never) as { outcome?: string; next?: string }
+    const { readPageAnswer } = await import('../../src/core/browser-control/page-frame.js')
+    const mapped = readPageAnswer(getOp('browser')!.mapResult!({ body: r.body, args: { action: 'navigate' } } as never) as Record<string, unknown>).fields as { outcome?: string; next?: string }
     expect(mapped.outcome).toMatch(/Do not try again: call request_sign_in/)
     expect(mapped.next).toMatch(/^request_sign_in/)
     // An ordinary page carries none.

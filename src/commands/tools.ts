@@ -392,7 +392,15 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
     // A session's call reads a receipt or capped content (ops/answer.ts), held to what its shell
     // keeps of the pretty JSON printed below; a person's or a check script's reads the result as it is.
     const forAgent = process.env.WALNUT_SESSION_ID?.trim() && !process.env.WALNUT_CHECK_TOKEN ? 'cli' as const : undefined
-    let r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, forAgent, ...caller })
+    // A check script parses the answer: outside data in it reads plain (ops/outside-answer.ts), since
+    // the check's output reaches a session only inside the fire's frame. Any other script reads it framed.
+    // Both env vars are this process's own environment, trusted as far as the cache file this CLI
+    // reads is, and the token is not verified here (the gateway's triggerCaller verifies it for a
+    // relayed call). The frame keeps outside words from reading as instructions; it is no access
+    // control: an agent that sets WALNUT_CHECK_TOKEN and clears WALNUT_SESSION_ID in its own shell
+    // only reads its own call plain, data it could read anyway.
+    const answerReader = !process.env.WALNUT_SESSION_ID?.trim() && process.env.WALNUT_CHECK_TOKEN?.trim() ? 'program' as const : undefined
+    let r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, forAgent, ...(answerReader ? { answerReader } : {}), ...caller })
     // A server older than the run id refused it before anything ran: the same call without it.
     if (!r.ok && runId && refusedRunId(name, r.message)) {
       dropRunId(name, parsed)
@@ -402,7 +410,7 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       // The id is gone from the call: a stop now must not name it (2026-11-05 review).
       answered()
       answered = () => {}
-      r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, forAgent, ...caller })
+      r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, callId, forAgent, ...(answerReader ? { answerReader } : {}), ...caller })
     }
     if (!r.ok && r.unreachable) {
       // The same call id: a write the server took before its connection reset runs once.

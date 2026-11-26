@@ -1239,6 +1239,7 @@ function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<s
         description: tool.description.slice(0, MAX_TOOL_DESCRIPTION),
         input_schema: schema,
         execute: tool.execute.bind(tool),
+        ...(tool.framesOwnAnswer === true ? { framesOwnAnswer: true } : {}),
       });
     },
 

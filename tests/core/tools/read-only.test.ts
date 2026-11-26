@@ -92,7 +92,7 @@ describe('execute routes through executeOp', () => {
 
     const result = await (await tool('task_list')).execute({ project: 'Marina' });
 
-    expect(executeOp).toHaveBeenCalledWith('task_list', { project: 'Marina' }, { origin: LOCAL_ORIGIN });
+    expect(executeOp).toHaveBeenCalledWith('task_list', { project: 'Marina' }, { origin: LOCAL_ORIGIN, answerReader: 'model' });
     expect(result).toBe(JSON.stringify({ count: 1, tasks: [{ id: 'abc' }] }, null, 2));
   });
 
@@ -100,11 +100,11 @@ describe('execute routes through executeOp', () => {
     executeOp.mockResolvedValue({ ok: true, result: [] });
     const read = await tool('task_list');
     await read.execute({}, { source: 'cron' });
-    expect(executeOp).toHaveBeenLastCalledWith('task_list', {}, { origin: LOCAL_ORIGIN });
+    expect(executeOp).toHaveBeenLastCalledWith('task_list', {}, { origin: LOCAL_ORIGIN, answerReader: 'model' });
     await read.execute({}, { callerSid: 'fixture-session', callerKind: 'agent' });
-    expect(executeOp).toHaveBeenLastCalledWith('task_list', {}, { origin: LOCAL_ORIGIN, callerSid: 'fixture-session' });
+    expect(executeOp).toHaveBeenLastCalledWith('task_list', {}, { origin: LOCAL_ORIGIN, answerReader: 'model', callerSid: 'fixture-session' });
     await read.execute({}, { callerKind: 'person' });
-    expect(executeOp).toHaveBeenLastCalledWith('task_list', {}, { origin: LOCAL_ORIGIN, callerMode: 'human' });
+    expect(executeOp).toHaveBeenLastCalledWith('task_list', {}, { origin: LOCAL_ORIGIN, answerReader: 'model', callerMode: 'human' });
   });
 
   it('passes {} when the model sends no params at all', async () => {
@@ -112,7 +112,7 @@ describe('execute routes through executeOp', () => {
 
     await (await tool('project_list')).execute(undefined as never);
 
-    expect(executeOp).toHaveBeenCalledWith('project_list', {}, { origin: LOCAL_ORIGIN });
+    expect(executeOp).toHaveBeenCalledWith('project_list', {}, { origin: LOCAL_ORIGIN, answerReader: 'model' });
   });
 
   it('turns a failed op into an "Error:" string — the loop\'s error signal', async () => {

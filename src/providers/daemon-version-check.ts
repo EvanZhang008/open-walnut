@@ -290,6 +290,8 @@ export const DAEMON_SOURCE_FILES = [
   'src/providers/trigger-state-seed-core.ts',
   'src/providers/clock-schedule-core.ts',
   'src/core/cron/trigger-timing.ts',
+  // The outside-content frame the items of a fire ride (trigger-envelope-core.ts): same lockstep rule.
+  'src/core/outside-content.ts',
   'src/core/transcript-chain.ts',
   'src/core/transcript-chain-leaf.ts',
   // The first-paint history view (history.readyView), bundled into the binary AND shipped as
@@ -571,6 +573,7 @@ export const DAEMON_SOURCE_FILES = [
   'src/core/approvals/types.ts',
   'src/core/browser-control/browser-cli.ts',
   'src/core/browser-control/gone-words.ts',
+  'src/core/browser-control/page-frame.ts',
   'src/core/op-cards.ts',
   'src/core/vault/pass-cli.ts',
   'src/lib/tool-use-id.ts',

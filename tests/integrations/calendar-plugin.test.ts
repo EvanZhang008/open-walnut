@@ -154,6 +154,25 @@ describe('calendar plugin lifecycle over a real server', () => {
     expect((await read()).some((e) => e.id === 'ev-holiday')).toBe(true);
   });
 
+  it('calendar_query reaches an agent framed as the organizers\' words, and a person plain', async () => {
+    const { executeOp } = await import('../../src/ops/executor.js');
+    const { LOCAL_ORIGIN } = await import('../../src/lib/caller-origin.js');
+    const { isFramedOutside } = await import('../../src/core/outside-content.js');
+    const args = { from: '2026-08-03', to: '2026-08-09' };
+    const agent = await executeOp('calendar_query', args, { origin: LOCAL_ORIGIN, callerSid: 'a1b2c3d4-1111-2222-3333-444455556666', forAgent: 'cli' });
+    expect(agent.ok).toBe(true);
+    const framed = (agent.ok ? agent.result : {}) as { external_content?: { source?: string; data?: { events?: Array<{ title: string }> } } };
+    expect(isFramedOutside(framed)).toBe(true);
+    expect(framed.external_content?.source).toBe('calendar plugin');
+    expect(framed.external_content?.data?.events?.some((e) => e.title === 'Standup')).toBe(true);
+    const person = await fetch(apiUrl('/api/plugin-runtime/calendar/ops/calendar_query'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(args),
+    }).then((r) => r.json()) as { ok: boolean; result?: { events?: unknown[] } };
+    expect(person.ok).toBe(true);
+    expect(isFramedOutside(person.result)).toBe(false);
+    expect(Array.isArray(person.result?.events)).toBe(true);
+  });
+
   it('publishes the same five definitions as ops, and an op write updates open views live', async () => {
     const listed = await fetch(apiUrl('/api/plugin-runtime/calendar/ops')).then((r) => r.json()) as {
       ops: { name: string; readonly: boolean; owner: string }[];

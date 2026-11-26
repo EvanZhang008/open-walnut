@@ -7,11 +7,16 @@
  * read-only. Anything that may change something is `mcp_call`: this Mac only, and only on a
  * server whose plugin opened it to sessions. A plugin that puts its writes behind an approval
  * (posting to a chat) keeps that approval, because its server stays read-only to everyone else.
+ *
+ * A tool's answer is the server's, which may relay anyone's words (a chat message, a web page): an
+ * agent reads mcp_read's and mcp_call's framed as outside data (outside-answer.ts MCP_ANSWER_OUTSIDE).
  */
 
 import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { DOC_ANSWER_MAX_CHARS, clipText, pagedResult } from './doc-page.js'
+import { MCP_ANSWER_OUTSIDE } from './outside-answer.js'
+import { isFramedOutside } from '../core/outside-content.js'
 
 const SERVER = z.string().min(1).max(64).describe('Server name, as `mcp_servers` lists it')
 const TOOL = z.string().min(1).max(128).describe('Tool name, as `mcp_tools` lists it')
@@ -126,12 +131,14 @@ defineOp({
   },
   bind: { method: 'POST', path: '/api/mcp/servers/:server/read' },
   timeoutMs: OP_TIMEOUT_MS,
-  // A text answer is read in pages (doc-page.ts); a `data` (JSON) answer keeps the generic cut.
+  // A text answer is read in pages (doc-page.ts); a `data` (JSON) answer keeps the generic cut. An
+  // agent's answer is framed first (outside), so its text is paged inside the frame, `page` beside it.
   answer: {
     kind: 'content',
     max: DOC_ANSWER_MAX_CHARS,
-    shape: ({ result, args, max, surface }) => pagedResult(result, 'text', args, (more) => `mcp_read ${JSON.stringify({ ...args, ...more })}`, { fit: { max, surface } }),
+    shape: ({ result, args, max, surface }) => pagedResult(result, isFramedOutside(result) ? 'external_content.data.text' : 'text', args, (more) => `mcp_read ${JSON.stringify({ ...args, ...more })}`, { fit: { max, surface } }),
   },
+  outside: MCP_ANSWER_OUTSIDE,
   tags: { readonly: true, remote: 'allow' },
 })
 
@@ -147,5 +154,6 @@ defineOp({
   timeoutMs: OP_TIMEOUT_MS,
   // Content, not a receipt: the answer is the tool's own answer, which is what the call is for.
   answer: { kind: 'content', max: 12_000 },
+  outside: MCP_ANSWER_OUTSIDE,
   tags: { readonly: false, remote: 'deny' },
 })

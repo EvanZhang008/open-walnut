@@ -20,6 +20,7 @@
  */
 
 import { log } from '../../../logging/index.js'
+import { outsideDataOf } from '../../outside-content.js'
 import { readDayRecords } from '../store.js'
 import { outsideDayRecords } from '../outside-store.js'
 import { WALNUT_DESKTOP_BUNDLE_ID } from '../outside-view.js'
@@ -276,7 +277,9 @@ export async function calendarSegments(range: TimelineRange): Promise<TimelineSo
   const { LOCAL_ORIGIN } = await import('../../../lib/caller-origin.js')
   const out = await executeOp('calendar_query', { from: range.from, to: range.to }, { origin: LOCAL_ORIGIN })
   if (!out.ok) return { segments: [], coverage: { available: false, note: `the calendar did not answer: ${out.message.slice(0, 160)}` } }
-  let body = out.result as Record<string, unknown> | string
+  // Walnut's own read for the person's timeline: the data inside the frame an agent would get. An agent
+  // reads these titles framed again in time_timeline's answer (ops/time-outside.ts).
+  let body = outsideDataOf(out.result) as Record<string, unknown> | string
   if (typeof body === 'string') {
     try { body = JSON.parse(body) as Record<string, unknown> } catch { body = {} }
   }

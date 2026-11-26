@@ -45,6 +45,7 @@ import {
   type WalnutOp,
 } from '../../src/ops/registry.js'
 import { pluginOpName } from '../../src/core/plugins/ids.js'
+import { outsideDataOf } from '../../src/ops/outside-answer.js'
 import { PluginContext, type PluginLogger } from '../../src/core/plugins/plugin-context.js'
 import {
   callPluginOp,
@@ -229,7 +230,10 @@ describe('registry.op validation', () => {
     api.registry.op(opSpec({ name: 'inner', handler: async (_args: unknown, ctx: { callerSid?: string }) => ({ sid: ctx.callerSid }) }))
     api.registry.op(opSpec({ name: 'outer', handler: async () => executeOp('ops_demo_inner', {}, { origin: LOCAL_ORIGIN, callerMode: 'human', callerSid: 'forged-session' }) }))
     const out = await executeOp('ops_demo_outer', {}, { origin: LOCAL_ORIGIN, callerSid: 'explicit-session' })
-    expect(out).toEqual({ ok: true, result: { ok: true, result: { sid: 'explicit-session' } } })
+    // An agent reads each plugin answer framed as outside data (ops/outside-answer.ts), the nested one too.
+    expect(out.ok).toBe(true)
+    const outer = outsideDataOf(out.ok ? out.result : undefined) as { ok: boolean; result: unknown }
+    expect({ ...outer, result: outsideDataOf(outer.result) }).toEqual({ ok: true, result: { sid: 'explicit-session' } })
     const human = await executeOp('ops_demo_outer', {}, { origin: LOCAL_ORIGIN, callerMode: 'human' })
     expect(human).toEqual({ ok: true, result: { ok: true, result: { sid: undefined } } })
   })
@@ -238,7 +242,7 @@ describe('registry.op validation', () => {
     const { api } = pluginApi('ops-demo')
     api.registry.op(opSpec({ handler: async (_args: unknown, ctx: { callerSid?: string }) => ({ sid: ctx.callerSid }) }))
     const out = await handleGatewayCapability('tools.call', 'gateway-session', { name: 'ops_demo_ping', args: {} }, '__local__', { throttle: new PeerThrottle(), cloudMode: false })
-    expect(out).toEqual({ ok: true, result: { sid: 'gateway-session' } })
+    expect(out.ok && outsideDataOf(out.result)).toEqual({ sid: 'gateway-session' })
   })
   it('rejects a missing or oversized description', () => {
     const { api } = pluginApi('ops-demo')
@@ -409,11 +413,12 @@ describe('registry.op through a loaded plugin', () => {
   })
 
   it('runs the handler in-process for any caller, and validates args first', async () => {
-    // A different plugin id on purpose: pluginId is provenance, not authorization.
-    const ok = await callPluginOp('some-other-plugin', 'ops_demo_ping', { who: 'ada' }, LOCAL_ORIGIN)
+    // A different plugin id on purpose: pluginId is provenance, not authorization. Its own code
+    // (walnut.ops.call) reads the answer plain; plugin-op-entry-frame.test.ts holds the other entries.
+    const ok = await callPluginOp('some-other-plugin', 'ops_demo_ping', { who: 'ada' }, LOCAL_ORIGIN, undefined, 'plugin-code')
     expect(ok).toEqual({ ok: true, result: { greeting: 'hello ada', pluginId: 'ops-demo' } })
 
-    const bad = await callPluginOp('some-other-plugin', 'ops_demo_ping', {}, LOCAL_ORIGIN)
+    const bad = await callPluginOp('some-other-plugin', 'ops_demo_ping', {}, LOCAL_ORIGIN, undefined, 'plugin-code')
     expect(bad.ok).toBe(false)
     expect(bad.ok === false && bad.message).toMatch(/who/)
   })
@@ -423,7 +428,7 @@ describe('registry.op through a loaded plugin', () => {
       payload: { any: 1, deep: { kept: true } },
       filter: { project: 'walnut', extra: 7 },
       tag: 42,
-    }, LOCAL_ORIGIN)
+    }, LOCAL_ORIGIN, undefined, 'plugin-code')
     expect(outcome).toEqual({
       ok: true,
       result: {
@@ -440,7 +445,7 @@ describe('registry.op through a loaded plugin', () => {
     const outcome = await callPluginOp('ops-demo', 'ops_demo_echo', {
       payload: {},
       filter: { project: 'walnut' },
-    }, LOCAL_ORIGIN)
+    }, LOCAL_ORIGIN, undefined, 'plugin-code')
     expect(outcome.ok).toBe(false)
     expect(outcome.ok === false && outcome.message).toMatch(/tag: Required/)
   })
@@ -455,7 +460,7 @@ describe('registry.op through a loaded plugin', () => {
     expect(rows.find((row) => row.name === 'ops_demo_drop_ping')?.remote).toBe('deny')
 
     const called = await handleGatewayCapability('tools.call', GATEWAY_CALLER, { name: 'ops_demo_ping', args: { who: 'ada' } }, 'devbox', deps)
-    expect(called).toEqual({ ok: true, result: { greeting: 'hello ada', pluginId: 'ops-demo' } })
+    expect(called.ok && outsideDataOf(called.result)).toEqual({ greeting: 'hello ada', pluginId: 'ops-demo' })
 
     const denied = await handleGatewayCapability('tools.call', GATEWAY_CALLER, { name: 'ops_demo_drop_ping' }, 'devbox', deps)
     expect(denied.ok).toBe(false)
@@ -468,7 +473,7 @@ describe('registry.op through a loaded plugin', () => {
     // plugin op through the local daemon or not at all (2026-10-06: mail_mark_read).
     const deps = { throttle: new PeerThrottle(), cloudMode: false }
     const local = await handleGatewayCapability('tools.call', GATEWAY_CALLER, { name: 'ops_demo_drop_ping' }, '__local__', deps)
-    expect(local).toEqual({ ok: true, result: { dropped: true } })
+    expect(local.ok && outsideDataOf(local.result)).toEqual({ dropped: true })
 
     const remote = await handleGatewayCapability('tools.call', GATEWAY_CALLER, { name: 'ops_demo_drop_ping' }, 'devbox', deps)
     expect(remote.ok === false && remote.error.message).toMatch(/local-only/)
@@ -479,7 +484,7 @@ describe('registry.op through a loaded plugin', () => {
   })
 
   it('forgets the op when the plugin disposes its own handle', async () => {
-    expect(await callPluginOp('ops-demo', 'ops_demo_drop_ping', {}, LOCAL_ORIGIN)).toEqual({ ok: true, result: { dropped: true } })
+    expect(await callPluginOp('ops-demo', 'ops_demo_drop_ping', {}, LOCAL_ORIGIN, undefined, 'plugin-code')).toEqual({ ok: true, result: { dropped: true } })
 
     expect(getOp('ops_demo_ping')).toBeUndefined()
     expect((await listPluginOps()).some((entry) => entry.name === 'ops_demo_ping')).toBe(false)
@@ -494,7 +499,7 @@ describe('registry.op through a loaded plugin', () => {
     const occurrences = listOpEntries().filter((entry) => entry.op.name === 'ops_demo_ping')
     expect(occurrences).toHaveLength(1)
     expect(occurrences[0].owner).toBe('ops-demo')
-    expect(await callPluginOp('ops-demo', 'ops_demo_ping', { who: 'ada' }, LOCAL_ORIGIN))
+    expect(await callPluginOp('ops-demo', 'ops_demo_ping', { who: 'ada' }, LOCAL_ORIGIN, undefined, 'plugin-code'))
       .toEqual({ ok: true, result: { greeting: 'hello ada', pluginId: 'ops-demo' } })
   })
 

@@ -74,6 +74,11 @@ describe('passive app state rides the next message', () => {
     expect(first).toContain('lastRun:\n  passed: 3\n  total: 7')
     expect(first).toContain('    step(119)')
     expect(first.endsWith('\n\nwhat do you think so far?')).toBe(true)
+    // The state is the App's data, framed; the plugin's note and Walnut's lines stay outside the frame.
+    const block = first.slice(first.indexOf('<external-content source="app state" app="Interview Practice" trust="untrusted">'), first.indexOf('</external-content>'))
+    expect(block).toContain('lastRun:\n  passed: 3')
+    expect(block).not.toContain('The pattern is left out on purpose.')
+    expect(block).not.toContain('Background, not a request.')
 
     // The parser the web and history use reads it as one app-state card, then the text.
     const segments = parseSessionEnvelopes(first)!
@@ -96,7 +101,8 @@ describe('passive app state rides the next message', () => {
     expect(third).toContain('+    fixed(60)')
     expect(third).not.toContain('step(10)')
     expect(third).not.toContain('half')
-    expect(third.length).toBeLessThan(1_000)
+    expect(third).toMatch(/since you last saw it:\n<external-content source="app state" app="Interview Practice" trust="untrusted">\nlevel: 1 → 2/)
+    expect(third.length).toBeLessThan(1_300)
   })
 
   it('any message carries it, a peer or a trigger too; a slash command goes raw and leaves it for the next', async () => {
@@ -201,7 +207,8 @@ describe('passive app state rides the next message', () => {
     await publish(task.id, { files: { 'big.py': code(1_500) } })
     await sendMessageToSession(sid, 'look', { source: 'ui' })
     const [row] = await rows(sid)
-    expect(row).toContain('too long to show here (keys: files)')
+    expect(row).toContain('too long to show here.')
+    expect(row).toMatch(/Its keys:\n<external-content source="app state" app="Interview Practice" trust="untrusted">\nfiles\n<\/external-content>/)
     expect(row).toContain('walnut tools call app_state')
     expect(row.length).toBeLessThan(2_000)
   })

@@ -9,7 +9,7 @@ import type { CronJob } from '../cron/types.js';
 import { buildScheduledMessage } from '../../providers/trigger-envelope-core.js';
 
 export {
-  ITEMS_JSON_CAP, boundedItemsJson, buildScheduledMessage, buildTriggerBody, buildTriggerMessage, triggerNote,
+  ITEMS_JSON_CAP, boundedItemsJson, buildScheduledMessage, buildTriggerBody, buildTriggerMessage, framedItemsBlock, triggerNote, TRIGGER_OUTSIDE_SOURCE,
 } from '../../providers/trigger-envelope-core.js';
 
 /**

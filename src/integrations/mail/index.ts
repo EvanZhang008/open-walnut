@@ -493,11 +493,12 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     const fresh: Array<{ dispose(): void | Promise<void> }> = []
     try {
       // Each call runs as its session's, so a step that goes ahead with approvals off names it (caller-scope.ts).
+      // Every answer quotes the message's text in its own frame (untrusted.ts): the host does not frame it again.
       for (const tool of createMailTools(agentDeps)) {
-        fresh.push(walnut.registry.tool({ ...tool, execute: (input, meta) => withMailCaller(meta?.callerSid, () => tool.execute(input)) }))
+        fresh.push(walnut.registry.tool({ ...tool, framesOwnAnswer: true, execute: (input, meta) => withMailCaller(meta?.callerSid, () => tool.execute(input)) }))
       }
       for (const op of createMailOps(agentDeps)) {
-        fresh.push(walnut.registry.op({ ...op, handler: (args, ctx) => withMailCaller(ctx?.callerSid, () => op.handler(args)) }))
+        fresh.push(walnut.registry.op({ ...op, framesOwnAnswer: true, handler: (args, ctx) => withMailCaller(ctx?.callerSid, () => op.handler(args)) }))
       }
       fresh.push(walnut.registry.skill({ id: 'walnut-mail', directory: SKILL_DIR }))
       fresh.push(walnut.registry.triggerTemplate(createMailTriggerTemplate({

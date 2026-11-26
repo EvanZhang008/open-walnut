@@ -8,6 +8,7 @@
 import type { HttpBinding } from './registry.js'
 import { addDays, isValidTz, localDate, localParts, systemTz, zonedMidnight } from '../core/health/day-key.js'
 import { badInput } from './own-refusal.js'
+import { frameOutsideData, outsideDataOf } from '../core/outside-content.js'
 
 type Call = (method: HttpBinding['method'], path: string, body?: unknown) => Promise<unknown>
 
@@ -172,13 +173,17 @@ async function calendarSection(call: Call, date: string): Promise<SectionResult>
     .filter((e) => e.status !== 'canceled' && e.selfStatus !== 'declined')
     .slice(0, 40)
     .map((e) => ({ title: e.title, start: e.start, end: e.end, allDay: e.allDay === true }))
-  return { ok: true, value: { events: events.length, items: events } }
+  // An event's title is the organizer's words: the agent reads them framed (core/outside-content.ts).
+  return { ok: true, value: { events: events.length, items: frameOutsideData({ source: 'calendar' }, events) } }
 }
 
 async function focusSection(call: Call, date: string): Promise<SectionResult> {
   const reply = rec(await call('POST', '/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status', {}))
   if (reply.ok !== true) return { ok: false, reason: String(reply.message ?? 'Rhythm did not answer').slice(0, 200) }
-  const today = rec(rec(reply.result).today)
+  // The plugin's route frames the op's answer when this review runs for an agent (its self-call names
+  // the session: core/plugins/server-api.ts callPluginOp, ops/outside-answer.ts) and answers a person
+  // plain; the review reads the data either way. Its own answer quotes no Rhythm text, only numbers.
+  const today = rec(rec(outsideDataOf(reply.result)).today)
   if (today.date !== date) return { ok: false, reason: 'Rhythm keeps only today\'s focus log' }
   return {
     ok: true,

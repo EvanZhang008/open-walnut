@@ -292,7 +292,9 @@ describe('buildTriggerMessage', () => {
 
     const withoutInput = parseWalnutMessage(buildTriggerMessage(job, { atMs: 1, items: [{ id: 'x' }] }, 'look'))!;
     expect(withoutInput.body).not.toContain('undefined');
-    expect(withoutInput.body.trim().endsWith('```')).toBe(true);
+    // Both ride the one outside-content frame: with no input, the items' fence is the last thing in it.
+    expect(withInput.body.indexOf('OOM')).toBeLessThan(withInput.body.indexOf('</external-content>'));
+    expect(withoutInput.body.slice(0, withoutInput.body.indexOf('</external-content>')).trim().endsWith('```')).toBe(true);
   });
 
   it('a bare fire (no items) is just the prompt — no empty JSON block', () => {

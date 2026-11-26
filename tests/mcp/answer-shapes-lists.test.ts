@@ -142,10 +142,14 @@ describe('trigger_test', () => {
     expect(size(result)).toBeGreaterThan(20_000)
     const a = answer('trigger_test', args, result)
     const run = a.result as Rec
-    expect(String(run.stdoutTail).endsWith(lastLine)).toBe(true)
+    // What the script printed rides the outside-data envelope; the verdict stays beside it.
+    const output = ((run.output as Rec).external_content as Rec).data as Rec
+    expect(((run.output as Rec).external_content as Rec).trust).toBe('untrusted')
+    expect(run).not.toHaveProperty('stdoutTail')
+    expect(String(output.stdoutTail).endsWith(lastLine)).toBe(true)
     expect(run).toMatchObject({ wouldFire: true, newItemCount: 150, exitCode: 0 })
-    expect((run.parsed as Rec).itemCount).toBe(150)
-    expect(((run.parsed as Rec).items as unknown[]).length).toBe(20)
+    expect((output.parsed as Rec).itemCount).toBe(150)
+    expect(((output.parsed as Rec).items as unknown[]).length).toBe(20)
     expect(String(a.shortened)).toContain('"_full": true')
     expect(a.outcome).toBe(result.outcome)
   })

@@ -24,6 +24,7 @@
  */
 import type { WalnutOp } from './registry.js'
 import { ANSWER_LIMITS, PROGRAM_CLIENT, cliAnswerText } from '../lib/tool-answer-size.js'
+import { OUTSIDE_DATA_NOTE } from '../core/outside-content.js'
 
 export interface OpAnswer {
   /**
@@ -197,7 +198,8 @@ interface Leaf { parent: Record<string, unknown> | unknown[]; key: string | numb
 function leaves(value: unknown, path: string, out: { strings: Leaf[]; arrays: Leaf[] }, parent?: Leaf['parent'], key?: Leaf['key']): void {
   if (typeof value === 'string') {
     // A kept key is kept while it is short: an id or a path, never a 10,000 character value under such a name.
-    if (parent && !(typeof key === 'string' && keepKey(key) && value.length <= 300)) out.strings.push({ parent, key: key!, path, size: value.length })
+    // The reading note of an outside-data frame (core/outside-content.ts) is never shortened either.
+    if (parent && !(typeof key === 'string' && ((keepKey(key) && value.length <= 300) || (key === 'note' && value === OUTSIDE_DATA_NOTE)))) out.strings.push({ parent, key: key!, path, size: value.length })
     return
   }
   if (Array.isArray(value)) {
@@ -391,7 +393,8 @@ export function cutToFit(value: unknown, max: number, whole?: string): unknown {
   }
   root._cut = noteOf()
   // Nothing left to shorten and still over (a wide object of short kept values): whole keys go, last first.
-  const first = new Set(['id', 'ok', 'outcome', 'next', 'ref', 'error', 'code', '_cut'])
+  // An outside-data frame's reading note goes after the data it is about, never before.
+  const first = new Set(['id', 'ok', 'outcome', 'next', 'ref', 'error', 'code', '_cut', ...(root.note === OUTSIDE_DATA_NOTE ? ['note'] : [])])
   const rest = Object.keys(root).filter((k) => !first.has(k))
   let left = 0
   while (size(root) > max && rest.length) {

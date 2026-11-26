@@ -22,6 +22,7 @@ import { OPEN_ITEMS_ANSWER } from './org-answer-shapes.js'
 import { TASK_DIR_VAR, stopTmpPathNote } from '../lib/tmp-draft-path.js';
 import { STATUS_REPORT_CHANNEL } from '../lib/internal-lines.js';
 import { OwnRefusalError, badInput } from './own-refusal.js';
+import { frameOutsideData } from '../core/outside-content.js';
 
 defineOp({
   name: 'task_start',
@@ -601,8 +602,15 @@ defineOp({
     const count = Array.isArray(read.states) ? read.states.length : 0;
     const briefs = Array.isArray(read.briefs) ? read.briefs.length : 0;
     const shared = count === 1 ? 'One App shares state about your task.' : count ? `${count} Apps share state about your task.` : 'No App shares state about your task.';
+    // An App's state is plugin-written data (what it shows can come from outside Walnut): the session
+    // reads each one framed, as in its notes (core/sessions/app-state.ts framedState). The App's label
+    // and note are the plugin's own words and stay beside it.
+    const states = Array.isArray(read.states) ? read.states.map((raw) => {
+      const s = (raw ?? {}) as { label?: unknown; state?: unknown }
+      return { ...s, state: frameOutsideData({ source: 'app state', attrs: { app: String(s.label ?? '') } }, s.state ?? {}) }
+    }) : read.states
     return withOutcome(
-      { ...read },
+      { ...read, states },
       briefs ? `${shared} ${briefs === 1 ? 'One App brief is' : `${briefs} App briefs are`} for you alone; its text comes as a note ahead of your next message.` : shared,
       count || briefs ? 'Later messages carry only what changes after this read.' : 'Nothing else is required.',
     );

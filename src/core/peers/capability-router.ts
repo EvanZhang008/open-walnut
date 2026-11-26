@@ -449,6 +449,11 @@ async function handleToolsCall(
   // Held to that surface only for a session's call: a check script or a plugin job reads the result as
   // it is, and so does a call no session made (a person's terminal on that host, an outside script).
   const forAgent = surface && !payload.triggerCaller && !meta.pluginJob && !!callerSid && !isExternalCallerSid(callerSid) ? surface : undefined;
+  // A program parses the answer, so outside data in it reads plain (ops/outside-answer.ts agentReadsFramed):
+  // a check script (its output reaches a session only inside the fire's frame) and a plugin's job. Both
+  // are the daemon's own stamps, which a caller cannot write (trigger-check-core.ts, gateway-answer.ts).
+  // Every other call through here (a session, a person's terminal or a script on that host) reads it framed.
+  const answerReader = payload.triggerCaller || meta.pluginJob ? 'program' as const : undefined;
   // Asked for whole (`_full`, taken out of the arguments by executeOp): read before the call.
   const { FULL_ARG } = await import('../../ops/answer.js');
   const askedWhole = typeof args === 'object' && args !== null && (args as Record<string, unknown>)[FULL_ARG] === true;
@@ -468,6 +473,7 @@ callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { caller
 ...(jobToken ? { callerJob: jobToken } : {}),
 ...(unproven ? { callerUnproven: true } : {}),
   ...(forAgent ? { forAgent } : {}),
+  ...(answerReader ? { answerReader } : {}),
 })).finally(() => releaseRelayJob(jobToken));
   // Real use (core/usage-watch): the call's outcome and its answer's size as its client prints it.
   // A test run's calls stay out of it.

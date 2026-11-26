@@ -7,6 +7,7 @@ import { definiteRefusal, waitThroughRestart } from '../../lib/wait-through-rest
 import fs from 'node:fs'
 import path from 'node:path'
 import { noBrowserLine, type GoneBrowser } from './gone-words.js'
+import { framePageText, readPageAnswer } from './page-frame.js'
 import { clause } from '../../utils/format.js'
 
 export const BROWSER_USAGE = [
@@ -361,9 +362,12 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
       return exitOf(r.code)
     }
     away.answered()
-    const body = (r.result ?? {}) as Record<string, unknown>
+    // A page's answer comes framed (page-frame.ts): read its fields with the frames off, and print
+    // its words in one frame. `--json` prints the answer as it came, page strings still framed.
+    const raw = (r.result ?? {}) as Record<string, unknown>
+    const { fields: body, from: pageFrom } = p.op === 'browser' ? readPageAnswer(raw) : { fields: raw, from: undefined }
     if (p.guide) {
-      if (p.json) { io.out(JSON.stringify(body, null, 2) + '\n'); return BROWSER_EXIT.ok }
+      if (p.json) { io.out(JSON.stringify(raw, null, 2) + '\n'); return BROWSER_EXIT.ok }
       const text = guideText(body)
       if (!text) { io.say(`walnut browser: Walnut has no ${GUIDE_SKILL} skill to print`); return BROWSER_EXIT.error }
       io.out(text)
@@ -396,16 +400,18 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
       fs.mkdirSync(path.dirname(file), { recursive: true })
       fs.writeFileSync(file, Buffer.from(m[2], 'base64'))
       delete body.image
-      if (p.json) io.out(JSON.stringify({ ...body, file }, null, 2) + '\n')
-      else io.out(`${file}\n${labelLines(body)}`)
+      const { image: _image, ...shown } = raw
+      const labels = labelLines(body)
+      if (p.json) io.out(JSON.stringify({ ...shown, file }, null, 2) + '\n')
+      else io.out(`${file}\n${pageFrom && labels ? `${framePageText(pageFrom, labels.trimEnd())}\n` : labels}`)
       return BROWSER_EXIT.ok
     }
     // A step done whose --read failed is not all done: the read's own code (2026-11-11, a review:
     // `open --read` on a tab closed meanwhile read nothing and exited 0, so a cheap model took it as read).
     const read = body.page_text as { error?: unknown; code?: string } | undefined
     const code = read && typeof read.error === 'string' ? exitOf(read.code) : BROWSER_EXIT.ok
-    if (p.json) { io.out(JSON.stringify(body, null, 2) + '\n'); return code }
-    io.out(render(p.args.action as string | undefined, body) + '\n')
+    if (p.json) { io.out(JSON.stringify(raw, null, 2) + '\n'); return code }
+    io.out(framePageText(pageFrom, render(p.args.action as string | undefined, body)) + '\n')
     return code
   }
 }

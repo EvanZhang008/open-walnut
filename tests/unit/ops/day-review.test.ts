@@ -64,6 +64,8 @@ describe('day_review', () => {
     expect(out.sections.apps).toMatchObject({ totalMin: 120, walnutMin: 40 })
     expect(out.sections.screentime[0]).toMatchObject({ device: 'Phone', totalMin: 50, pickups: 12 })
     expect(out.sections.calendar.events).toBe(1)
+    // An event's title is the organizer's words: framed as outside data (core/outside-content.ts).
+    expect(out.sections.calendar.items).toMatchObject({ external_content: { source: 'calendar', trust: 'untrusted', data: [{ title: 'Standup' }] } })
     expect(out.sections.focus).toMatchObject({ focusMin: 75, blocks: 2, longestSittingMin: 50 })
     // The hypnogram and the other-sources list stay out of the compact review.
     expect(out.sections.sleep).toMatchObject({ caveats: ['estimate'] })
@@ -265,5 +267,15 @@ describe('day_review', () => {
     expect(defaultReviewDate(new Date(2026, 8, 21, 9, 0))).toBe('2026-09-20')
     expect(defaultReviewDate(new Date(2026, 8, 21, 13, 0))).toBe('2026-09-21')
     expect(defaultReviewDate(new Date(Date.parse('2026-09-21T09:00:00-04:00')), 'America/New_York')).toBe('2026-09-20')
+  })
+})
+
+describe('day_review reads a plugin op answer framed for an agent', () => {
+  it('takes the focus log from inside the frame', async () => {
+    const { frameOutsideData } = await import('../../../src/core/outside-content.js')
+    const rhythm = PRESENT['/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status'] as { ok: boolean; result: unknown }
+    const { call } = fakeCall({ ...PRESENT, '/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status': { ok: true, result: frameOutsideData({ source: 'walnut-rhythm plugin' }, rhythm.result) } })
+    const out = await runDayReview({ date: DATE, sections: 'focus' }, call as never, { now: NOW }) as any
+    expect(out.sections.focus).toMatchObject({ focusMin: 75, blocks: 2 })
   })
 })

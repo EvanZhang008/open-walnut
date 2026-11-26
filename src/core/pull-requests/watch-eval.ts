@@ -16,6 +16,7 @@
 import type { PrCheck, PrRemark, PrSnapshot, PrWatchState } from './model.js'
 import { oneLine } from './model.js'
 import { OWN_WAIT_TURN_END } from '../../lib/turn-end-marker.js'
+import { frameOutsideText, OUTSIDE_ITEMS_REMINDER } from '../outside-content.js'
 
 /** Wakes in a row that carried only comments before the watcher stops waking for comments
  *  (a bot answering the agent answering the bot). A check, a conflict or a push resets it. */
@@ -157,19 +158,29 @@ export function prWakeSummary(changes: readonly PrWatchChange[]): string {
   }).join(', ')
 }
 
-/** The body of the message the session gets (pr-watch.ts wraps it in a walnut-message). */
+/** A branch name as the head line may say it: one plain token, or nothing (a name with words in it stays out). */
+const BRANCH_NAME = /^[A-Za-z0-9._/-]{1,100}$/
+
+/**
+ * The body of the message the session gets (pr-watch.ts wraps it in a walnut-message). Walnut's own
+ * lines (which PR, what changed, the next step) stay outside the frame, where the session acts on
+ * them; the title, check names, authors and comment bodies are other people's words and ride one
+ * outside-content frame (core/outside-content.ts) whose reminder points at the next step outside it.
+ */
 export function prWakeBody(pr: Pick<PrSnapshot, 'number' | 'url' | 'base' | 'headSha' | 'title'>, report: Pick<PrWatchReport, 'changes' | 'exhausted'>): string {
   const commit = pr.headSha ? ` (commit ${pr.headSha.slice(0, 7)})` : ''
-  const lines: string[] = [`Pull request #${pr.number}${pr.title ? ` "${pr.title}"` : ''}, linked to this task, changed: ${pr.url}`]
+  const base = pr.base && BRANCH_NAME.test(pr.base) ? pr.base : 'its base branch'
+  const own: string[] = [`Pull request #${pr.number}, linked to this task, changed: ${pr.url}`]
+  const words: string[] = pr.title ? [`Title: ${JSON.stringify(pr.title)}`] : []
   for (const change of report.changes) {
     if (change.kind === 'checks-failed') {
-      lines.push(`- ${change.failed.length === 1 ? 'A check' : `${change.failed.length} checks`} failed${commit}:`)
-      lines.push(...listed(change.failed, (c) => `  - ${c.name}${c.url ? `: ${c.url}` : ''}`))
+      own.push(`- ${change.failed.length === 1 ? 'A check' : `${change.failed.length} checks`} failed${commit}.`)
+      words.push('Failed checks:', ...listed(change.failed, (c) => `  - ${c.name}${c.url ? `: ${c.url}` : ''}`))
     } else if (change.kind === 'conflicting') {
-      lines.push(`- It can no longer merge cleanly into ${pr.base || 'its base branch'}: the branch has conflicts.`)
+      own.push(`- It can no longer merge cleanly into ${base}: the branch has conflicts.`)
     } else {
-      lines.push(`- ${change.remarks.length === 1 ? 'A new comment or review' : `${change.remarks.length} new comments or reviews`}:`)
-      lines.push(...listed(change.remarks, (r) => {
+      own.push(`- ${change.remarks.length === 1 ? 'A new comment or review' : `${change.remarks.length} new comments or reviews`}.`)
+      words.push('Comments and reviews:', ...listed(change.remarks, (r) => {
         const verdict = r.review && r.review !== 'COMMENTED' ? `, ${r.review.toLowerCase().replace(/_/g, ' ')}` : ''
         const inline = r.inline ? `, ${r.inline} inline ${r.inline === 1 ? 'comment' : 'comments'}` : ''
         const text = snippet(r.body)
@@ -177,9 +188,12 @@ export function prWakeBody(pr: Pick<PrSnapshot, 'number' | 'url' | 'base' | 'hea
       }))
     }
   }
-  lines.push('')
-  lines.push(report.exhausted
-    ? `This was the ${PR_COMMENT_WAKE_LIMIT}th update in a row with only comments, so comments alone no longer wake this task; a failed check, a conflict or a new push still does.`
-    : `Handle what this task needs from the items above, then ${OWN_WAIT_TURN_END}. Walnut keeps watching this pull request on its own (no trigger needed) and writes again when something else changes; when it merges, the task is completed unless the user switched that off.`)
-  return lines.join('\n')
+  return [
+    ...own,
+    ...(words.length ? [frameOutsideText({ source: 'pull request', attrs: { url: pr.url } }, words.join('\n'), undefined, OUTSIDE_ITEMS_REMINDER)] : []),
+    '',
+    report.exhausted
+      ? `This was the ${PR_COMMENT_WAKE_LIMIT}th update in a row with only comments, so comments alone no longer wake this task; a failed check, a conflict or a new push still does.`
+      : `Handle what this task needs from the items above, then ${OWN_WAIT_TURN_END}. Walnut keeps watching this pull request on its own (no trigger needed) and writes again when something else changes; when it merges, the task is completed unless the user switched that off.`,
+  ].join('\n')
 }

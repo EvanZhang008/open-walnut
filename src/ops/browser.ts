@@ -3,6 +3,7 @@ import { defineOp } from './registry.js';
 import { ANSWER_CEILING_CHARS } from './answer.js';
 import { withOutcome } from './outcome.js';
 import { noBrowserLine, noBrowserNext, type GoneBrowser } from '../core/browser-control/gone-words.js';
+import { framePageAnswer, framePageFields } from '../core/browser-control/page-frame.js';
 
 /**
  * The person's own browser, through the Walnut browser extension (routes/browser-v1.ts). One op
@@ -10,7 +11,7 @@ import { noBrowserLine, noBrowserNext, type GoneBrowser } from '../core/browser-
  * shell and saves screenshots as files.
  */
 
-const ACTIONS = [
+export const BROWSER_ACTIONS = [
   'tabs', 'open', 'navigate', 'back', 'close', 'snapshot', 'text', 'find', 'form_values', 'click', 'hover', 'type', 'fill_form', 'select', 'press',
   'scroll', 'wait', 'screenshot', 'upload', 'downloads', 'take', 'fill_login', 'fill_code', 'dialog', 'evaluate',
   'network', 'network_body', 'network_request_body', 'console', 'resize', 'request_sign_in', 'drag', 'zoom', 'click_label',
@@ -211,7 +212,7 @@ defineOp({
     + 'Every refusal says what to do (window_hidden, browser_not_connected, site_denied, not_your_tab, trusted_off: pass its message on as it is). '
     + 'Full rules: docs/reference/browser-control.md ("For agents") in the Walnut repository.',
   input: {
-    action: z.enum(ACTIONS).describe('What to do'),
+    action: z.enum(BROWSER_ACTIONS).describe('What to do'),
     tab: z.number().int().optional().describe('The tab id (from open or tabs). Needed once the task holds two or more tabs (subagents share them); with one, that one'),
     read_text: z.boolean().optional().describe('open / navigate / back / click / press / type / select / fill_form: also read the page\'s main text (page_text; a new tab the step opened is the one read)'),
     max: z.number().int().min(1).max(100_000).optional().describe('text (or read_text): at most this many characters (default 4000)'),
@@ -282,14 +283,20 @@ defineOp({
   // Its answer is what the page showed (a snapshot, its text, a response body): content, up to the ceiling.
   // An inline screenshot is an image the CLI saves to a file: cut, it is a broken file.
   answer: { kind: 'content', max: ANSWER_CEILING_CHARS, whole_for: (args) => args.inline === true },
-  mapResult: ({ body, args }) => {
+  mapResult: ({ body, args, answer, surface }) => {
     const b = { ...((body ?? {}) as Record<string, unknown>) }
     if ((args.action === 'screenshot' || args.action === 'zoom') && !args.inline) delete b.image
     const { outcome, next } = outcomeOf(args, b)
+    // What the page showed (and the outcome line that quotes it) reaches every caller framed (page-frame.ts):
+    // one envelope for an agent, on any surface (MCP, `walnut tools call`), so the answer cap shortens the
+    // page's data and never cuts through a frame (2026-11-26 review R3: in place, a cut left a frame open
+    // and a snapshot grew 11x). In place only for a program with no cap that prints the fields where it
+    // always read them: the `walnut browser` command on any host, of any version.
+    const frame = surface ?? answer?.surface ? framePageAnswer : framePageFields
     // A page that refuses this browser's sign-in (sign-in-refusal.ts): the person signs in instead.
     const off = b.hand_off as { note?: string } | undefined
-    if (off?.note) return withOutcome(b, `${outcome} ${off.note}`, 'request_sign_in on this tab, with text saying what to sign in to.')
-    return withOutcome(b, outcome, next)
+    if (off?.note) return frame(withOutcome(b, `${outcome} ${off.note}`, 'request_sign_in on this tab, with text saying what to sign in to.'))
+    return frame(withOutcome(b, outcome, next))
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });

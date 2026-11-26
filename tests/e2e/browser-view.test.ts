@@ -200,8 +200,12 @@ describe('a session in the person\'s browser', () => {
     const mapped = op.mapResult!({
       body: { tab: agentTab, url: 'https://login.bank.example.test/', title: 'Bank login', where: 'In Walnut\'s agent window (behind theirs, not minimized), tab 5 "Bank login" (x).', person_tabs_note: 'They already have example.test open in tab 11 ("Accounts"). If they are signed in there, ask them to hand that tab over. Do not sign in again.' },
       args: { action: 'open' },
-    } as never) as { outcome?: string; next?: string }
-    expect(mapped.outcome).toMatch(/^In Walnut's agent window .* They already have example\.test open in tab 11/)
+      answer: { surface: 'mcp', max: 100_000 },
+    } as never) as Record<string, unknown>
+    // The line quotes the page (its title, the person's tab titles): over MCP it sits inside the page's envelope.
+    expect(mapped.external_content).toMatchObject({ source: 'web page', trust: 'untrusted', url: 'https://login.bank.example.test/' })
+    const { readPageAnswer } = await import('../../src/core/browser-control/page-frame.js')
+    expect(readPageAnswer(mapped).fields.outcome).toMatch(/^In Walnut's agent window .* They already have example\.test open in tab 11/)
     expect(mapped.next).toMatch(/Ask the person for their tab/)
     const plain = op.mapResult!({ body: { tab: 5, url: 'https://shop.test/', where: 'In Walnut\'s agent window (behind theirs, not minimized), tab 5.' }, args: { action: 'open' } } as never) as { next?: string }
     expect(plain.next).toMatch(/first line which window and tab/)

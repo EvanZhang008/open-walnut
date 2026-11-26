@@ -58,6 +58,8 @@ const CORE_HELPERS = new Set([
   'src/core/hosts/mac-places.ts',
   'src/core/drained-sends.ts',
   'src/core/hints/hint-format.ts',
+  // The outside-content frame (strings in, strings out) a trigger fire's items ride (trigger-envelope-core.ts).
+  'src/core/outside-content.ts',
   'src/core/history-parse.ts',
   // Reads which tasks a chat message names, for the transcript parser.
   'src/core/org/message-about.ts',

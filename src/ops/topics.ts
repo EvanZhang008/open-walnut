@@ -7,6 +7,9 @@ import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 import { ROUND_WAKES } from '../core/topics/topics-model.js'
 import { cut, fitPage, pageBudget, line, nextPageCall, objOf, pageOf, pageWords, pick, receiptBase } from './org-answer-shapes.js'
+import { agentReadsFramed } from './outside-answer.js'
+import { cutLastLine, cutTopicText, framedTopicList, framedTopicRead } from './topic-outside.js'
+import type { Topic } from '../core/topics/topics-model.js'
 
 /** Topics an agent's topic_list shows, and messages its topic_read shows, when the call names no limit. */
 const TOPIC_LIST_PAGE = 20
@@ -89,10 +92,11 @@ defineOp({
     offset: z.number().int().min(0).optional().describe('Skip this many (the next page)'),
     limit: z.number().int().min(1).max(100).optional().describe(`At most this many (default ${TOPIC_LIST_PAGE})`),
   },
-  handler: async (_args, call) => {
+  handler: async (_args, call, caller) => {
     const body = await call('GET', '/api/topics') as { topics: Array<TopicView & { closed?: unknown }> }
     const open = body.topics.filter((t) => !t.closed).length
-    return withOutcome(body, `${body.topics.length} topic(s), ${open} open.`, 'No further action is required.')
+    // A person member's last line is mail, an outside party's words: an agent reads it framed (topic-outside.ts).
+    return withOutcome(agentReadsFramed(caller) ? framedTopicList(body) : body, `${body.topics.length} topic(s), ${open} open.`, 'No further action is required.')
   },
   answer: {
     kind: 'content', whole: 'topic_read {"id":"<id>"}',
@@ -102,7 +106,7 @@ defineOp({
       const { rows, page: window } = pageOf(all, args, TOPIC_LIST_PAGE)
       const topics = rows.map((t) => {
         const last = objOf(objOf(t).last)
-        return { ...topicHead(t), ...(last.at ? { last: { author: last.author, at: last.at, text: line(last.text, 120) } } : {}) }
+        return { ...topicHead(t), ...(last.at ? { last: { author: last.author, at: last.at, text: cutLastLine(last, (text) => line(text, 120)) } } : {}) }
       })
       return fitPage(topics, window.offset, window.total, (shown, page) => {
         const more = nextPageCall('topic_list', args, page)
@@ -128,9 +132,10 @@ defineOp({
     since: z.string().regex(/^tpm-[a-f0-9]{12}$/).optional().describe('Only the messages after this one (tpm-...)'),
     limit: z.number().int().min(1).max(500).optional().describe(`The newest this many messages (default ${TOPIC_READ_MESSAGES})`),
   },
-  handler: async (args, call) => {
+  handler: async (args, call, caller) => {
     const body = await call('GET', `/api/topics/${encodeURIComponent(String(args.id))}${args.since ? `?since=${encodeURIComponent(String(args.since))}` : ''}`) as { topic: TopicView }
-    return withOutcome(body, `Topic ${body.topic.id} "${body.topic.title}": ${body.topic.members?.length ?? 0} members, ${body.topic.messages?.length ?? 0} message(s) shown${body.topic.closed ? ', closed' : ''}.`, 'No further action is required.')
+    // A person member's messages came by mail, an outside party's words: an agent reads them framed (topic-outside.ts).
+    return withOutcome(agentReadsFramed(caller) ? framedTopicRead(body) : body, `Topic ${body.topic.id} "${body.topic.title}": ${body.topic.members?.length ?? 0} members, ${body.topic.messages?.length ?? 0} message(s) shown${body.topic.closed ? ', closed' : ''}.`, 'No further action is required.')
   },
   answer: {
     kind: 'content', whole: 'topic_read {"id":"<id>","since":"<tpm-id>"}',
@@ -147,10 +152,11 @@ defineOp({
             ...topicHead(t), ...pick(t, ['round', 'mail', 'thread']),
             messages: shown.map((m) => {
               const x = objOf(m)
-              const text = typeof x.text === 'string' ? x.text : ''
+              // A framed text (a person's mail) is cut inside its envelope.
+              const { text, length } = cutTopicText(t as unknown as Topic, x, (raw) => cut(raw, max))
               return {
                 ...pick(x, ['id', 'at', 'author', 'via', 'woke', 'folded', 'mailed', 'refused']),
-                text: cut(text, max), ...(text.length > max ? { chars: text.length } : {}),
+                text, ...(length > max ? { chars: length } : {}),
               }
             }),
             ...(earlier ? { earlier_messages: earlier } : {}),

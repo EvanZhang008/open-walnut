@@ -29,7 +29,7 @@
  * (tests/core/triage-no-mail.test.ts guards this).
  */
 
-import { boundedItemsJson, ITEMS_JSON_CAP } from '../routines/trigger-envelope.js';
+import { framedItemsBlock, ITEMS_JSON_CAP } from '../routines/trigger-envelope.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
 import type { TriagePendingSlack } from './state.js';
 import { TRIAGE_AGENT_NAME } from './types.js';
@@ -189,9 +189,10 @@ export function buildTriageBatch(input: TriageBatchInput): TriageBatch {
     const dropped = counts.droppedSlack > 0
       ? ` ${counts.droppedSlack} older item(s) did not fit the buffer and are only in Slack.`
       : '';
+    // The rows are what other people wrote in Slack: one outside-content frame, as a fire's items.
     parts.push(
       `Slack — ${plural(counts.slackItems, 'item')}.${dropped}\n`
-      + `\`\`\`json\n${boundedItemsJson(slack.map(slackRow), ITEMS_JSON_CAP)}\n\`\`\``,
+      + framedItemsBlock({ source: 'slack' }, 'Items:', slack.map(slackRow), undefined, ITEMS_JSON_CAP),
     );
   } else {
     parts.push('Slack — nothing new was reported since the last run.');

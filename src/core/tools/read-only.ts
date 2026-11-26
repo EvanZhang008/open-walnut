@@ -27,7 +27,11 @@ function opAsTool(op: WalnutOp): ToolDefinition {
     // Read-only by definition, so a batch of them may run concurrently.
     parallelSafe: true,
     execute: async (params, meta) => {
-      const outcome = await executeOp(op.name, params ?? {}, { origin: LOCAL_ORIGIN, ...(meta?.callerSid ? { callerSid: meta.callerSid } : {}), ...(meta?.callerKind === 'person' ? { callerMode: 'human' as const } : {}) });
+      // A model reads this answer whatever the turn's caller, so it is framed by the one rule every
+      // op follows (ops/outside-answer.ts agentReadsFramed, `reader: 'model'`): a plugin op's data
+      // and the ops that frame their own (the inbox ops, `api`) alike, a person's turn too. The
+      // caller's kind still decides what the call may do.
+      const outcome = await executeOp(op.name, params ?? {}, { origin: LOCAL_ORIGIN, answerReader: 'model', ...(meta?.callerSid ? { callerSid: meta.callerSid } : {}), ...(meta?.callerKind === 'person' ? { callerMode: 'human' as const } : {}) });
       // "Error:" prefix is the loop's error signal — it marks the tool_result
       // `is_error` so the model retries or reports instead of trusting the text.
       return outcome.ok ? JSON.stringify(outcome.result, null, 2) : `Error: ${outcome.message}`;

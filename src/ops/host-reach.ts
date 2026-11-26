@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { MCP_ANSWER_OUTSIDE } from './outside-answer.js';
 
 const GRANT_NOTE = 'The first call for this task on a host asks the user by letter (403 exec_grant_required), the same grant host_exec uses: '
   + 'do other work, you get a notice when they allow it.'
@@ -89,6 +90,8 @@ defineOp({
   mapResult: ({ body }) => mcpOutcome(body),
   // Its answer is the tool's answer (what it ran), not an object it changed: content, with a larger cap.
   answer: { kind: 'content', max: 12_000 },
+  // The tool's text and structured answer are the server's (outside-answer.ts); a call still running is not framed.
+  outside: MCP_ANSWER_OUTSIDE,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
@@ -105,6 +108,8 @@ defineOp({
   bind: { method: 'GET', path: '/hosts/:host/mcp-calls/:call_id' },
   timeoutMs: 2 * 60_000,
   mapResult: ({ body }) => mcpOutcome(body),
+  // A call's answer as host_mcp_call frames it; a tools list (host_mcp_tools' late answer) holds none of its fields.
+  outside: MCP_ANSWER_OUTSIDE,
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });
 
@@ -115,7 +120,7 @@ defineOp({
     'One HTTP request made FROM another host Walnut knows, for a web service only it reaches: a dev server on its localhost '
     + '(http://localhost:3000/...), a service on its own network. ' + GRANT_NOTE + ' http and https only; redirects are followed; it ends by '
     + 'timeout_ms (default 30 s, at most 5 min; about 12 s from a session on another host). Up to 256 KB of the body comes back, text as '
-    + '`body`, anything else as `bodyBase64`; Set-Cookie values and lines that look like a credential are hidden. Never your own host (use curl).',
+    + '`body`, anything else as `bodyBase64`, both with the headers framed as outside data under `external_content.data`; Set-Cookie values and lines that look like a credential are hidden. Never your own host (use curl).',
   input: {
     host: z.string().min(1).describe('Host alias ("__local__" = the machine the Walnut server runs on, usually the Mac) or a selector like "@ios"'),
     url: z.string().min(1).describe('The full address as that host sees it, e.g. http://localhost:3000/api/health'),
@@ -134,5 +139,7 @@ defineOp({
   },
   // Its answer is the response it fetched: content, with a larger cap ("_full": true for the whole body).
   answer: { kind: 'content', max: 12_000 },
+  // The body and headers are what the web service answered, outside text (outside-answer.ts); status, url and timing stay beside.
+  outside: { source: 'web response', fields: ['body', 'bodyBase64', 'headers'] },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });

@@ -118,7 +118,8 @@ describe('the op\'s outcome', () => {
     const { getOp } = await import('../../../src/ops/registry.js')
     await import('../../../src/ops/browser.js')
     const op = getOp('browser')!
-    const out = (body: Record<string, unknown>, args: Record<string, unknown>) => op.mapResult!({ body, args } as never) as { outcome: string; next: string }
+    const { readPageAnswer } = await import('../../../src/core/browser-control/page-frame.js')
+    const out = (body: Record<string, unknown>, args: Record<string, unknown>) => readPageAnswer(op.mapResult!({ body, args } as never) as Record<string, unknown>).fields as { outcome: string; next: string }
     expect(out({ tab: 4, since: 'T', total: 9, matched: 2, requests: [{}, {}] }, { action: 'network' }).outcome).toBe('2 of 2 matching request(s) (tab 4), of 9 recorded since T.')
     expect(out({ tab: 4, stopped: true }, { action: 'network', stop: true }).outcome).toMatch(/^Stopped recording/)
     expect(out({ request_id: '1.2', length: 40, base64: true }, { action: 'network_body' }).outcome).toBe('Response body of 1.2 (40 characters, base64).')

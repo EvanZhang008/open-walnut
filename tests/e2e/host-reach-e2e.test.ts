@@ -173,7 +173,9 @@ describe('host_mcp and host_http', () => {
     const viaOp = await executeOp('host_mcp_call', { host: 'macbox', server: 'fake', tool: 'env', arguments: { name: 'FAKE_TOKEN' } },
       { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }) as { ok: boolean; result: Record<string, unknown> }
     // The value lives in that host's config and is used there; only the tool's answer comes back.
-    expect(viaOp).toMatchObject({ ok: true, result: { host: 'macbox', server: 'fake', tool: 'env', isError: false, running: false, text: 'only-on-macbox' } })
+    // The tool's text is the server's, framed for the session (ops/outside-answer.ts); the call's status beside it.
+    expect(viaOp).toMatchObject({ ok: true, result: { host: 'macbox', server: 'fake', tool: 'env', isError: false, running: false, external_content: { source: 'MCP tool answer', trust: 'untrusted', data: { text: 'only-on-macbox' } } } })
+    expect(viaOp.result.text).toBeUndefined()
     expect(sent.find((m) => m.cmd === 'mcp.call')!.params).toMatchObject({ taskId, server: 'fake', tool: 'env' })
     expect(JSON.stringify(sent.map((m) => m.params))).not.toContain('only-on-macbox')
 
@@ -223,8 +225,12 @@ describe('host_mcp and host_http', () => {
     const web = await executeOp('host_http', { host: 'macbox', url: `http://127.0.0.1:${servicePort}/api/health?q=1`, method: 'post', body: '{}' },
       { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }) as { ok: boolean; result: Record<string, unknown> }
     expect(web).toMatchObject({ ok: true, result: { host: 'macbox', status: 200, contentType: 'application/json' } })
-    expect(JSON.parse(String(web.result.body))).toEqual({ path: '/api/health?q=1', method: 'POST' })
-    expect((web.result.headers as Record<string, string>)['set-cookie']).toBe('[hidden by Walnut]')
+    // The body and headers are the web service's, framed for the session (ops/outside-answer.ts); status, url and timing beside.
+    const fetched = (web.result.external_content as { source: string; trust: string; data: { body: string; headers: Record<string, string> } })
+    expect(fetched).toMatchObject({ source: 'web response', trust: 'untrusted' })
+    expect(web.result.body).toBeUndefined()
+    expect(JSON.parse(fetched.data.body)).toEqual({ path: '/api/health?q=1', method: 'POST' })
+    expect(fetched.data.headers['set-cookie']).toBe('[hidden by Walnut]')
     expect(String(web.result.outcome)).toMatch(/^HTTP 200 from /)
     const leak = await api('POST', '/api/v1/hosts/macbox/http', { url: `http://127.0.0.1:${servicePort}/leak` }, SID)
     expect(leak.body.body).not.toContain('ghp_')

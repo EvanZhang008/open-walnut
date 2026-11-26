@@ -36,6 +36,7 @@
 import { log } from '../../logging/index.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { renderChanges, renderFull, type JsonObject } from './app-state-render.js';
+import { frameOutsideText } from '../outside-content.js';
 import {
   anyAppBrief, briefsOf, disposeAppBriefOwner, dueBriefNotes, rememberBriefsTold, resetAppBriefsForTesting, type AppBriefView,
 } from './app-brief.js';
@@ -234,6 +235,16 @@ interface Note {
 /** Said in a proactive note: it starts a turn, so it is not background. */
 const PROACTIVE_LINE = 'The App sent this on its own: something changed that it asks you to look at.';
 
+/**
+ * The state's values (and its keys) as the session reads them: framed as outside data. An App shows
+ * what came from outside Walnut (a page, an event, a stranger's message) as readily as what the
+ * person typed, so its state never reaches the model in Walnut's voice. The plugin's `note` and its
+ * AI-only brief are the plugin's own instructions and stay outside the frame.
+ */
+function framedState(entry: Published, text: string): string {
+  return frameOutsideText({ source: 'app state', attrs: { app: entry.label } }, text);
+}
+
 function buildNote(entry: Published, before: Told | undefined, proactive: boolean): Note | null {
   const intro = entry.note ? `${entry.note}\n` : '';
   let summary: string;
@@ -242,19 +253,19 @@ function buildNote(entry: Published, before: Told | undefined, proactive: boolea
     summary = 'current state';
     body = `${intro}Live state of ${entry.label} for this task, shared by the App. Later messages carry only what changed; `
       + `\`walnut tools call app_state\` reads all of it at any time. ${proactive ? PROACTIVE_LINE : 'Background, not a request.'}\n\n`
-      + renderFull(entry.state);
+      + framedState(entry, renderFull(entry.state));
     if (body.length > MAX_NOTE_CHARS) {
-      body = `${intro}Live state of ${entry.label} for this task, too long to show here (keys: `
-        + `${Object.keys(entry.state).join(', ')}). Read it with \`walnut tools call app_state\`.`;
+      body = `${intro}Live state of ${entry.label} for this task, too long to show here. Read it with \`walnut tools call app_state\`. Its keys:\n`
+        + framedState(entry, Object.keys(entry.state).join(', '));
     }
   } else {
     const changes = renderChanges(before.state, entry.state);
     if (changes.count === 0) return null;
     summary = `${changes.count} change${changes.count === 1 ? '' : 's'}`;
-    body = `Changed in ${entry.label} since you last saw it:\n${changes.lines.join('\n')}`;
+    body = `Changed in ${entry.label} since you last saw it:\n${framedState(entry, changes.lines.join('\n'))}`;
     if (body.length > MAX_NOTE_CHARS) {
-      body = `Changed in ${entry.label} since you last saw it: ${changes.paths.join(', ')}. `
-        + 'Too long to show here: read the values with `walnut tools call app_state`.';
+      body = 'Changed in ' + entry.label + ' since you last saw it, too long to show here: read the values with `walnut tools call app_state`. What changed:\n'
+        + framedState(entry, changes.paths.join(', '));
     }
   }
   if (proactive && !body.includes(PROACTIVE_LINE)) body += `\n\n${PROACTIVE_LINE}`;
@@ -351,6 +362,7 @@ export interface AppStateView {
   note?: string;
   version: number;
   updatedAt: string;
+  /** Plain here; the `app_state` op frames it for the session that reads it (ops/work.ts). */
   state: JsonObject;
 }
 

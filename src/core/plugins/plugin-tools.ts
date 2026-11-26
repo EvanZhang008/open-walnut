@@ -24,7 +24,8 @@ import { registry } from '../integration-registry.js';
 // and let a plugin tool through under a core op's name.
 import { listOpEntries } from '../../ops/index.js';
 import { log } from '../../logging/index.js';
-import type { ToolDefinition, ToolResultContent } from '../../model/tools.js';
+import type { ToolDefinition, ToolImageBlock, ToolResultContent } from '../../model/tools.js';
+import { frameOutsideText } from '../outside-content.js';
 
 export function getPluginTools(): ToolDefinition[] {
   let specs: Array<{ owner: string; spec: import('../integration-types.js').PluginToolSpec }>;
@@ -61,8 +62,44 @@ export function getPluginTools(): ToolDefinition[] {
       name: spec.name,
       description: spec.description,
       input_schema: spec.input_schema,
-      execute: (params, meta) => spec.execute(params, meta) as Promise<ToolResultContent>,
+      execute: async (params, meta) => {
+        const result = await spec.execute(params, meta) as ToolResultContent;
+        return spec.framesOwnAnswer === true ? result : framedToolResult(owner, spec.name, result);
+      },
     });
   }
   return out;
+}
+
+/** What model/micro-agent.ts isToolResultError reads as an error, with the space after it. */
+const ERROR_PREFIX = /^Error[:\s]\s*/i;
+
+/**
+ * A plugin tool's result as the model reads it: its text framed as outside data (a plugin's data
+ * comes from outside Walnut), always. Never skipped for text that looks framed: an outside party can
+ * write a look-alike tag, and framing twice is safe (the inner tag is escaped). An image block is no
+ * text and stays as it is. An `Error...` result keeps its first word, the loop's error signal, and
+ * the rest is framed: a remote API's error body is a stranger's words too. A legacy result that is
+ * neither a string nor a block list (a plugin returning an object) is framed as its JSON.
+ */
+export function framedToolResult(owner: string, tool: string, result: ToolResultContent): ToolResultContent {
+  const from = { source: `${owner} plugin`, attrs: { tool } };
+  // The loop's own test for an error (model/micro-agent.ts isToolResultError) still holds after the frame.
+  const frame = (text: string): string => {
+    const error = ERROR_PREFIX.exec(text);
+    return error ? `Error: ${frameOutsideText(from, text.slice(error[0].length))}` : frameOutsideText(from, text);
+  };
+  if (typeof result === 'string') return frame(result);
+  if (Array.isArray(result)) {
+    return result.map((block) => (block && block.type === 'text' && typeof block.text === 'string' ? { ...block, text: frame(block.text) } : block));
+  }
+  const legacy: unknown = result;
+  if (isImageBlock(legacy)) return [legacy];
+  if (legacy === undefined || legacy === null) return frame('');
+  return frame(JSON.stringify(legacy));
+}
+
+function isImageBlock(value: unknown): value is ToolImageBlock {
+  const v = value as { type?: unknown; source?: { type?: unknown; data?: unknown } } | null;
+  return !!v && typeof v === 'object' && v.type === 'image' && !!v.source && typeof v.source.data === 'string';
 }

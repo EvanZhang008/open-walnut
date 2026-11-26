@@ -20,6 +20,7 @@ import { defineOp } from './registry.js'
 import { withTaskRouting } from './task-routing-rows.js'
 import { DOC_ANSWER_MAX_CHARS, DOC_PART_INPUT, askedPart, clipText, pageOnce, pagedResult } from './doc-page.js'
 import { cutTextPath } from './answer.js'
+import { agentReadsFramed, frameApiAnswer } from './outside-api-routes.js'
 import { OwnRefusalError, SHORTENED_TEXT_CODE, badInput } from './own-refusal.js'
 
 /** How long an agent's search waits for the meaning lane's query embedding. */
@@ -693,13 +694,14 @@ defineOp({
     'Escape hatch for an endpoint with no named operation. `path` must start with /api/. Prefer named ' +
     'operations because they carry validation, authorization, and product semantics. For a caller that is not on ' +
     'the Walnut host it refuses every route a local-only operation owns (Apple Health, task deletion); that ' +
-    'refusal is final.',
+    'refusal is final. The answer of a route that answers outside text (plugins, letters, notifications, the mail router), ' +
+    'any method, comes back framed as data under external_content.',
   input: {
     method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).describe('HTTP method'),
     path: z.string().min(1).describe('Absolute API path starting with /api/'),
     body: z.record(z.string(), z.unknown()).optional().describe('JSON body for write methods'),
   },
-  handler: async (args, call) => {
+  handler: async (args, call, caller) => {
     const method = String(args.method) as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
     const path = String(args.path)
     if (!path.startsWith('/api/')) {
@@ -714,7 +716,10 @@ defineOp({
     }
     // A path starting with /api/ is server-root-absolute by the executor's
     // contract (rawRequest), so non-v1 routes are reachable too.
-    return call(method, path, args.body)
+    // The answer of a route that answers outside text, any method, comes back framed as data
+    // (outside-api-routes.ts) when a model may read it; a person and a program read it plain (agentReadsFramed).
+    const answer = await call(method, path, args.body)
+    return agentReadsFramed(caller) ? frameApiAnswer(path, answer, caller?.kind === 'agent') : answer
   },
   // Its answer is what the endpoint answered (a GET as much as a write): content, with a larger cap.
   answer: { kind: 'content', max: 12_000 },

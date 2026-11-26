@@ -50,6 +50,16 @@ describe('frameOutsideText', () => {
 })
 
 describe('frameOutsideData', () => {
+  it('keeps data nested past the walk as cleaned JSON text, never drops it', () => {
+    let deep: Record<string, unknown> = { attrs: { href: 'https://x.example/a', title: NASTY } }
+    for (let i = 0; i < 20; i++) deep = { child: deep }
+    const env = frameOutsideData({ source: 'MCP tool answer' }, deep)
+    const text = JSON.stringify(env)
+    expect(text).toContain('https://x.example/a')
+    expect(text).not.toContain('[dropped')
+    expect(text).not.toMatch(/<\s*\/?\s*external-content/i)
+  })
+
   it('an envelope whose every string is cleaned, the note and Walnut\'s own words outside the data', () => {
     const env = frameOutsideData({ source: 'calendar', attrs: { account: 'a<b' } }, { events: [{ title: NASTY }] }, 'Only the person answers invites.')
     expect(isFramedOutside(env)).toBe(true)

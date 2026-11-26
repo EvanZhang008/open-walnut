@@ -109,7 +109,7 @@ describe('POST /api/v1/content/ceo', () => {
     expect(message.startsWith(`${words}\n\n`)).toBe(true)
     expect(message).not.toContain('Please take over')
     // The content rides a Walnut notice: the row is the person's, its own words theirs alone.
-    expect(message).toContain('<walnut-message kind="notification" from="Walnut" title="Attached Mail: Benefits enrollment closes Nov 15" outcome="handed-over"')
+    expect(message).toContain('<walnut-message kind="notification" from="Walnut" title="Attached Mail item" outcome="handed-over"')
     expect(personTextOf(message)).toBe(words)
     expect(message).toContain('<external-content source="Mail">')
     expect(message).toContain('Title: Benefits enrollment closes Nov 15')

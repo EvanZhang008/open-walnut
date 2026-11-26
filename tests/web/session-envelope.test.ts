@@ -340,7 +340,10 @@ describe('v2 trigger (walnut-trigger fire)', () => {
     expect(env.statusLine).toBe('fired 2026-09-15T12:00:00.000Z, 2 new items');
     expect(env.body).toContain('Read each new comment and answer it.');
     expect(env.body).toContain('"id": "c1"');
-    expect(env.body?.trim().endsWith('two threads')).toBe(true);
+    // The items and the input ride one outside-content frame, after the prompt.
+    const body = env.body ?? '';
+    expect(body.indexOf('Read each new comment')).toBeLessThan(body.indexOf('<external-content source="trigger check"'));
+    expect(body.slice(body.indexOf('<external-content'), body.indexOf('</external-content>'))).toContain('two threads');
     expect(env.raw).toBe(text);
   });
 

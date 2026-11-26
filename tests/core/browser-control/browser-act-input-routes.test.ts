@@ -22,6 +22,7 @@ import { browserV1Router, _resetBrowserRoutesForTesting } from '../../../src/web
 import * as h from '../../../src/core/browser-control/hub.js'
 import { cleanArgs } from '../../../src/core/browser-control/act-args.js'
 import { getOp, opInputJsonSchema } from '../../../src/ops/index.js'
+import { readPageAnswer } from '../../../src/core/browser-control/page-frame.js'
 
 const A = { device: 'extension-input', label: 'Browser A', browser: 'chrome', version: '9.9', caps: ['screenshot', 'trusted-input', 'input-v2'] }
 /** The extension of before this input: the same caps but `input-v2`. */
@@ -229,7 +230,8 @@ describe('act-args', () => {
 
 describe('the browser op', () => {
   const op = () => getOp('browser')!
-  const map = (args: Record<string, unknown>, body: Record<string, unknown>) => op().mapResult!({ args, body }) as Record<string, any>
+  // The page's fields come framed (page-frame.ts); read back beside the outside ones as the CLI does.
+  const map = (args: Record<string, unknown>, body: Record<string, unknown>) => readPageAnswer(op().mapResult!({ args, body }) as Record<string, unknown>).fields as Record<string, any>
 
   it('starts with the commands an agent needs first, and types the short read args', () => {
     const d = op().description

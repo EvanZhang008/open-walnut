@@ -140,6 +140,30 @@ export function isAgentMember(m: TopicMember): boolean {
   return m.ref.kind === 'task' || m.ref.kind === 'org';
 }
 
+/**
+ * Whose words a member's messages are, for an agent that reads them: a task's or an org node's are an
+ * agent's own; a person's (or another's bot) come by mail from outside Walnut, and an agent reads them
+ * framed as outside data (core/outside-content.ts). Typed by every MemberRef kind, so a new kind does
+ * not compile until it is classified here (tests/core/topics/topic-outside.test.ts reads the union too).
+ */
+export const MEMBER_WORDS: Readonly<Record<MemberRef['kind'], 'agent' | 'outside'>> = { task: 'agent', org: 'agent', person: 'outside' };
+
+/** Whose words a message is: the user's, Walnut's own line, an agent member's, or an outside party's. */
+export type MessageWords = 'user' | 'walnut' | 'agent' | 'outside';
+
+/**
+ * Decided by the author the store records, never by the text: the user (`human`), Walnut, or a member
+ * by its ref's kind. Anything that came by mail, and an author no member holds (a hand-edited file),
+ * reads as outside: unknown words are never passed as an agent's.
+ */
+export function messageWords(topic: Pick<Topic, 'members'>, m: Pick<TopicMessage, 'author' | 'via'>): MessageWords {
+  if (m.author === 'human') return 'user';
+  if (m.author === 'walnut') return 'walnut';
+  if (m.via === 'mail') return 'outside';
+  const member = memberById(topic, m.author);
+  return member ? MEMBER_WORDS[member.ref.kind] ?? 'outside' : 'outside';
+}
+
 export function sameRef(a: MemberRef, b: MemberRef): boolean {
   if (a.kind === 'task' && b.kind === 'task') return a.taskId === b.taskId;
   if (a.kind === 'org' && b.kind === 'org') return a.node === b.node;
@@ -211,7 +235,8 @@ export interface TopicSummary {
   title: string;
   members: Array<Pick<TopicMember, 'id' | 'name' | 'ref' | 'role' | 'status'>>;
   host?: MemberId;
-  last?: { author: string; text: string; at: string };
+  /** `outside`: a person member (by mail) wrote it, so an agent reads its text framed (ops/topic-outside.ts). */
+  last?: { author: string; text: string; at: string; outside?: true };
   updatedAt: string;
   closed?: Topic['closed'];
   thread?: Topic['thread'];
@@ -225,7 +250,12 @@ export function summarize(topic: Topic, userName?: string): TopicSummary {
     title: topic.title,
     members: topic.members.map(({ id, name, ref, role, status }) => ({ id, name, ref, role, status })),
     ...(host ? { host: host.id } : {}),
-    ...(last ? { last: { author: authorName(topic, last.author, userName), text: last.text.slice(0, 200), at: last.at } } : {}),
+    ...(last ? {
+      last: {
+        author: authorName(topic, last.author, userName), text: last.text.slice(0, 200), at: last.at,
+        ...(messageWords(topic, last) === 'outside' ? { outside: true as const } : {}),
+      },
+    } : {}),
     updatedAt: topic.updatedAt,
     ...(topic.closed ? { closed: topic.closed } : {}),
     ...(topic.thread ? { thread: topic.thread } : {}),

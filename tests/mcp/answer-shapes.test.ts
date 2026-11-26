@@ -431,7 +431,14 @@ describe('router_context answers the item whole and its histories folded by owne
     expect(thread.map((o) => o.taskId ?? o.status)).toEqual(['not_routed', 't-billing'])
     expect(thread.find((o) => o.taskId === 't-billing')).toMatchObject({ times: 16, targetTitle: 'Billing and invoices', targetOpen: true })
     expect((a.senderOwners as unknown[]).length).toBe(2)
-    expect((a.body as { text: string }).text).toBe(raw.body.text)
+    // What the sender wrote is in the envelope, the ids outside it (core/router/context-frame.ts).
+    const data = (a.external_content as { data: Record<string, unknown> }).data
+    expect((data.body as { text: string }).text).toBe(raw.body.text)
+    expect(a).not.toHaveProperty('body')
+    expect(a.item).toEqual({ source: raw.item.source, key: 'k' })
+    expect(data.item).toMatchObject({ sender: 'billing@example.com', subject: 'Invoice 42' })
+    expect(thread.every((o) => !('subject' in o) && !('reason' in o))).toBe(true)
+    expect((data.threadOwners as Array<Record<string, unknown>>)[1]!.subject).toContain('quarterly invoice')
     expect(String(a.instructions)).toContain('decision rules in your prompt')
     console.log(`router_context: ${size(raw)} -> ${size(a)} characters`)
   })

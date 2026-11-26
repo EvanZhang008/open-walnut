@@ -35,6 +35,9 @@ import { PROOF_IN_PLACE_RULE, WORD_TO_USER_RULE } from '../core/org/thread-rules
 import { LIST_MAX } from '../lib/zod-rules.js'
 import { fitPage, line, nextPageCall, objOf, pageBudget, pick, receiptBase } from './org-answer-shapes.js'
 import { OwnRefusalError, badInput } from './own-refusal.js'
+import { OUTSIDE_DATA_NOTE } from '../core/outside-content.js'
+import { agentReadsFramed } from './outside-api-routes.js'
+import { DEFERRED_READ_BYTES, compactEnvelope, envelope, readLetter, type LetterRow } from './letter-rows.js'
 
 /** The sender's open decision letter asking the same thing, from the send's answer (duplicate-letter.ts). */
 function openAskOf(body: unknown): { letterId: string; subject: string; sentAt: string; hint: string } | undefined {
@@ -225,87 +228,6 @@ defineOp({
 
 // ─── Reading the inbox, as the user does ─────────────────────────────────────
 
-/** At most this much of a letter's document reaches the agent; the rest is named, not pasted. */
-const BODY_CHARS = 20_000
-const TURN_CHARS = 4_000
-/** The newest turns a read returns; the count of the earlier ones rides beside them. */
-const THREAD_TURNS = 20
-/** The biggest deferred body a read fetches to make text of. */
-const DEFERRED_READ_BYTES = 10 * 1024 * 1024
-
-/** The named entities mail html uses most; the rest of the decoding is numeric. */
-const ENTITIES: Record<string, string> = {
-  nbsp: ' ', lt: '<', gt: '>', quot: '"', apos: "'", amp: '&', rsquo: '\u2019', lsquo: '\u2018',
-  rdquo: '\u201d', ldquo: '\u201c', mdash: '\u2014', ndash: '\u2013', hellip: '\u2026', bull: '\u2022',
-  middot: '\u00b7', copy: '\u00a9', reg: '\u00ae', trade: '\u2122', zwnj: '', zwj: '', shy: '',
-}
-
-function decodeEntities(text: string): string {
-  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, name: string) => {
-    if (name[0] === '#') {
-      const code = name[1] === 'x' || name[1] === 'X' ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10)
-      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole
-    }
-    return ENTITIES[name.toLowerCase()] ?? whole
-  })
-}
-
-/** Markup an html turn's plain `text` may hold too (a plugin's reply with html and no text). */
-const LOOKS_HTML = /<\/?[a-z][^>]*>/i
-
-/** A document as readable text: an html body loses its markup, styles, scripts and inline media. */
-function readable(body: string, format: unknown): string {
-  if (format !== 'html') return body
-  const text = body
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ')
-    .replace(/<(style|script|head|template)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, ' ')
-    .replace(/<(br|\/p|\/div|\/li|\/h[1-6]|\/tr)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, '\n')
-    // A tag, quoted attribute values and all: a `>` inside a value does not end it.
-    .replace(/<\/?[a-z!?](?:[^>"']|"[^"]*"|'[^']*')*>/gi, ' ')
-  return decodeEntities(text).replace(/[ \t]+/g, ' ').replace(/\n\s*\n\s*/g, '\n\n').trim()
-}
-
-function capped(text: string, max: number): { text: string; truncated?: true; chars?: number } {
-  return text.length > max ? { text: `${text.slice(0, max)}…`, truncated: true, chars: text.length } : { text }
-}
-
-type LetterRow = Record<string, unknown> & {
-  id: string; createdAt?: number; sender?: { taskId?: string; taskTitle?: string; sessionTitle?: string; project?: string; host?: string; pluginId?: string }
-  taskRefs?: string[]; thread?: unknown[]; read?: boolean
-}
-
-/** A list row: the envelope the user's inbox shows, no documents. */
-function envelope(l: LetterRow) {
-  return {
-    id: l.id, subject: l.subject, type: l.type, preview: l.textPreview,
-    from: l.sender ? { taskId: l.sender.taskId, task: l.sender.taskTitle, session: l.sender.sessionTitle, project: l.sender.project, plugin: l.sender.pluginId } : undefined,
-    at: typeof l.createdAt === 'number' ? new Date(l.createdAt).toISOString() : undefined,
-    read: l.read, pinned: l.pinned, archived: l.archived,
-    ...(l.actions ? { actions: l.actions } : {}), ...(l.answered ? { answered: l.answered } : {}),
-    ...(l.settled ? { settled: l.settled } : {}),
-    ...(l.taskRefs?.length ? { taskRefs: l.taskRefs } : {}),
-    turns: Array.isArray(l.thread) ? l.thread.length : 0,
-  }
-}
-
-/** A list row an agent reads: the envelope in short (one line each), no options' text. */
-function compactEnvelope(row: unknown) {
-  const e = objOf(row)
-  const from = objOf(e.from)
-  const actions = Array.isArray(e.actions) ? e.actions.length : 0
-  return {
-    id: e.id, subject: line(e.subject, 120), type: e.type,
-    ...(from.task || from.taskId || from.plugin ? { from: from.task ? `${line(from.task, 60)}${from.taskId ? ` (${String(from.taskId)})` : ''}` : from.plugin ?? from.taskId } : {}),
-    at: e.at, read: e.read,
-    ...(e.pinned ? { pinned: true } : {}), ...(e.archived ? { archived: true } : {}),
-    ...(actions ? { actions } : {}),
-    ...(e.answered ? { answered: typeof e.answered === 'object' ? pick(e.answered, ['actionId', 'label', 'at', 'by']) : true } : {}),
-    ...(e.settled ? { settled: true } : {}),
-    turns: e.turns,
-    ...(e.preview ? { preview: line(e.preview, 120) } : {}),
-  }
-}
-
 /** Rows of human_inbox_list an agent reads when the call names no limit. */
 const INBOX_LIST_PAGE = 20
 
@@ -315,6 +237,7 @@ defineOp({
   description:
     'The letters in your user\'s inbox, newest first, as the inbox lists them (subject, type, sender, '
     + 'read, pinned, answered; no documents), one line each, 20 at a time (offset for the next). `task_id` keeps the letters that task sent or that name it. '
+    + 'A letter whose words came from outside (a plugin\'s, the mail router\'s, a mail summary) has them under `outside`, framed as data. '
     + 'Read one with human_inbox_get.',
   input: {
     task_id: z.string().optional().describe('Only letters this task sent, or that name it in their task pills'),
@@ -323,7 +246,7 @@ defineOp({
     limit: z.number().int().min(1).max(200).optional().describe('At most this many (default 30; 20 to an agent)'),
     offset: z.number().int().min(0).optional().describe('Skip this many, newest first (the next page)'),
   },
-  handler: async ({ task_id, archived, unread, limit, offset }, call) => {
+  handler: async ({ task_id, archived, unread, limit, offset }, call, caller) => {
     const body = await call('GET', `/human-inbox${archived ? '?archived=1' : ''}`) as { letters?: LetterRow[]; unreadCount?: number }
     const all = Array.isArray(body?.letters) ? body.letters : []
     const task = typeof task_id === 'string' ? task_id.trim() : ''
@@ -331,7 +254,7 @@ defineOp({
       .filter((l) => !task || l.sender?.taskId === task || (l.taskRefs ?? []).includes(task))
       .filter((l) => !unread || !l.read)
     const from = typeof offset === 'number' ? offset : 0
-    const letters = kept.slice(from, from + (typeof limit === 'number' ? limit : 30)).map(envelope)
+    const letters = kept.slice(from, from + (typeof limit === 'number' ? limit : 30)).map((l) => envelope(l, agentReadsFramed(caller)))
     return withOutcome(
       { letters, total: kept.length, unreadCount: body?.unreadCount ?? 0, ...(from ? { offset: from } : {}) },
       letters.length ? `${kept.length} letter${kept.length === 1 ? '' : 's'}${kept.length > letters.length ? `, ${from ? `${from + 1}-${from + letters.length}` : `the newest ${letters.length}`} shown` : ''}.` : 'No letters match.',
@@ -344,11 +267,13 @@ defineOp({
       const r = objOf(result)
       const all = Array.isArray(r.letters) ? r.letters : []
       const offset = typeof args.offset === 'number' ? args.offset : 0
-      const rows = (typeof args.limit === 'number' ? all : all.slice(0, INBOX_LIST_PAGE)).map(compactEnvelope)
+      const rows = (typeof args.limit === 'number' ? all : all.slice(0, INBOX_LIST_PAGE)).map((row) => compactEnvelope(row, false))
       const total = typeof r.total === 'number' ? r.total : rows.length
       return fitPage(rows, offset, total, (letters, page) => {
         const more = nextPageCall('human_inbox_list', args, page)
-        return { ...receiptBase(r), letters, page, ...(more ? { next: `Next page: ${more}. ${String(r.next ?? '')}` } : {}) }
+        // One reading note for every framed row, ahead of the rows so the cap drops it last.
+        const note = letters.some((one) => one.outside) ? { note: OUTSIDE_DATA_NOTE } : {}
+        return { ...receiptBase(r), ...note, letters, page, ...(more ? { next: `Next page: ${more}. ${String(r.next ?? '')}` } : {}) }
       }, pageBudget(max))
     },
   },
@@ -362,13 +287,15 @@ defineOp({
   description:
     'One letter by id (lt-...), as the user reads it: the envelope, its options and the user\'s answer, '
     + 'the document as readable text (an html letter loses its markup; a long one is cut, with its length), '
-    + 'and the thread. Reading it here does not mark it read for the user.',
+    + 'and the thread. Words that came from outside (a plugin\'s or the mail router\'s letter, a mail\'s items) are under `outside` and `items_content`, framed as data; ids stay beside them. '
+    + 'Reading it here does not mark it read for the user.',
   input: {
     id: z.string().min(1).describe('Letter id (lt-...)'),
   },
-  handler: async ({ id }, call) => {
+  handler: async ({ id }, call, caller) => {
+    const framed = agentReadsFramed(caller)
     const path = `/human-inbox/${encodeURIComponent(String(id))}`
-    const body = await call('GET', path) as { letter?: LetterRow & { body?: string; bodyFormat?: string; bodyDeferred?: boolean; bodyBytes?: number; thread?: Array<Record<string, unknown>> } }
+    const body = await call('GET', path) as { letter?: LetterRow }
     const l = body?.letter
     if (!l) throw new OwnRefusalError('not_found', `Letter not found: ${id}`, { status: 404 })
     // A body over the inline cap (a digest with media) is read whole from its own route, up to
@@ -378,30 +305,12 @@ defineOp({
       const fetched = await call('GET', `${path}/body`).catch(() => undefined)
       if (typeof fetched === 'string') raw = fetched
     }
-    const doc = raw !== undefined ? capped(readable(raw, l.bodyFormat), BODY_CHARS)
-      : l.bodyDeferred ? { text: '', deferred: true as const, bytes: l.bodyBytes } : null
-    const turns = (l.thread ?? []) as Array<Record<string, unknown>>
-    const shown = turns.slice(-THREAD_TURNS)
-    const thread = shown.map((t) => {
-      const text = typeof t.text === 'string' ? t.text : ''
-      return {
-        from: t.from, at: typeof t.at === 'number' ? new Date(t.at).toISOString() : t.at,
-        ...(t.by ? { by: t.by } : {}),
-        // A rich turn's plain line can be its html (a plugin's reply with no text); a person's words never are.
-        ...capped(readable(text, t.from === 'agent' && t.bodyFormat === 'html' && LOOKS_HTML.test(text) ? 'html' : 'text'), TURN_CHARS),
-        ...(typeof t.body === 'string' ? { body: capped(readable(t.body, t.bodyFormat), TURN_CHARS) } : t.bodyDeferred ? { body: { text: '', deferred: true } } : {}),
-        ...(t.items ? { items: t.items } : {}),
-      }
-    })
-    const letter = {
-      ...envelope(l),
-      format: l.bodyFormat,
-      ...(doc ? { document: doc } : {}),
-      ...(l.items ? { items: l.items } : {}),
-      thread,
-      ...(turns.length > shown.length ? { earlierTurns: turns.length - shown.length } : {}),
-    }
-    return withOutcome({ letter }, `Letter ${l.id}: "${String(l.subject ?? '')}".`, 'Mark it with human_inbox_mark; answer it for the user with human_inbox_answer; reply in a letter you sent with human_inbox_reply.')
+    const { letter, source } = readLetter(l, raw, framed)
+    return withOutcome(
+      { letter },
+      source ? `Letter ${l.id}: its words came from outside (${source}) and are framed under letter.outside.` : `Letter ${l.id}: "${String(l.subject ?? '')}".`,
+      'Mark it with human_inbox_mark; answer it for the user with human_inbox_answer; reply in a letter you sent with human_inbox_reply.',
+    )
   },
   routes: [{ method: 'GET', path: '/human-inbox/:id' }, { method: 'GET', path: '/human-inbox/:id/body' }],
   tags: { readonly: true, remote: 'allow' },
@@ -429,7 +338,8 @@ defineOp({
     redact_credentials: z.boolean().optional().describe(
       'Take out each line that holds a credential (the sync\'s secret scan), in the body and the thread; the letter stays otherwise as it is'),
   },
-  handler: async ({ id, read, pinned, archived, settled, redact_credentials }, call) => {
+  handler: async ({ id, read, pinned, archived, settled, redact_credentials }, call, caller) => {
+    const framed = agentReadsFramed(caller)
     const sets = ([['read', read], ['pin', pinned], ['archive', archived]] as const).filter(([, v]) => typeof v === 'boolean')
     const reason = typeof settled === 'string' ? settled.trim() : ''
     if (!sets.length && !reason && redact_credentials !== true) throw badInput('Name at least one of read, pinned, archived, settled, redact_credentials.')
@@ -437,17 +347,17 @@ defineOp({
     let redacted: number | undefined
     if (redact_credentials === true) {
       const body = await call('POST', `/human-inbox/${encodeURIComponent(String(id))}/redact-credentials`, {}) as { letter?: LetterRow; lines?: number }
-      letter = body?.letter ? envelope(body.letter) : letter
+      letter = body?.letter ? envelope(body.letter, framed) : letter
       redacted = typeof body?.lines === 'number' ? body.lines : 0
     }
     if (reason) {
       const body = await call('POST', `/human-inbox/${encodeURIComponent(String(id))}/settle`, { reason }) as { letter?: LetterRow }
-      letter = body?.letter ? envelope(body.letter) : letter
+      letter = body?.letter ? envelope(body.letter, framed) : letter
     }
     for (const [what, v] of sets) {
       const key = what === 'read' ? 'read' : what === 'pin' ? 'pinned' : 'archived'
       const body = await call('POST', `/human-inbox/${encodeURIComponent(String(id))}/${what}`, { [key]: v }) as { letter?: LetterRow }
-      letter = body?.letter ? envelope(body.letter) : letter
+      letter = body?.letter ? envelope(body.letter, framed) : letter
     }
     return withOutcome(
       { letter, ...(redacted !== undefined ? { redactedLines: redacted } : {}) },
@@ -489,7 +399,7 @@ defineOp({
     user_words: z.string().optional().describe(
       'REQUIRED: the user\'s own words this answer rests on, quoted exactly (their language), naming each step that is hard to undo or leaves Walnut'),
   },
-  handler: async ({ id, action_id, note, text, user_words }, call) => {
+  handler: async ({ id, action_id, note, text, user_words }, call, caller) => {
     const path = `/human-inbox/${encodeURIComponent(String(id))}`
     const pick = typeof action_id === 'string' ? action_id.trim() : ''
     const words = typeof text === 'string' ? text.trim() : ''
@@ -503,7 +413,7 @@ defineOp({
     const r = out as { letter?: LetterRow; delivery?: { status?: string; reason?: string } }
     const status = r?.delivery?.status
     return withOutcome(
-      { ...(r?.letter ? { letter: envelope(r.letter) } : {}), ...(r?.delivery ? { delivery: r.delivery } : {}) },
+      { ...(r?.letter ? { letter: envelope(r.letter, agentReadsFramed(caller)) } : {}), ...(r?.delivery ? { delivery: r.delivery } : {}) },
       `Letter ${id} answered for the user${status ? `; to its sender: ${status}${r.delivery?.reason ? ` (${r.delivery.reason})` : ''}` : ''}.`,
       'Tell the user what you answered when they asked you to.',
     )

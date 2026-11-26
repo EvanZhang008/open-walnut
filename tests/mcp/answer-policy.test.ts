@@ -22,6 +22,7 @@ import {
 import { PAGE_MARK } from '../../src/ops/doc-page.js'
 import { cliAnswerText } from '../../src/lib/tool-answer-size.js'
 import { LOCAL_ORIGIN } from '../../src/lib/caller-origin.js'
+import { outsideDataOf } from '../../src/core/outside-content.js'
 
 /**
  * The writes whose answer is what they ran or fetched, not the object they changed.
@@ -239,7 +240,8 @@ describe('reading a stored document never loses text silently, on every surface'
     {
       label: 'MCP text answer', op: 'mcp_read', args: { server: 'docs', tool: 'read_doc', arguments: {} },
       routes: (t) => ({ '*': { isError: false, text: t } }),
-      text: (r) => String(r.text),
+      // An agent reads a tool's answer framed (ops/outside-answer.ts MCP_ANSWER_OUTSIDE): its text pages inside the frame.
+      text: (r) => { expect(r.isError).toBe(false); return String((outsideDataOf(r) as { text: string }).text) },
     },
   ]
 

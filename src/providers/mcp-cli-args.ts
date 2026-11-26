@@ -27,7 +27,10 @@ export const MCP_CLI_HELP = `walnut mcp: the MCP servers Walnut runs for its plu
 
 A server answers outside callers with its read-only tools unless its plugin opened all of them
 (sessions: all, this Mac only). Writes a plugin keeps behind an approval go through that plugin's
-own ops.`
+own ops.
+
+A tool's answer is outside text: to an agent or a script outside a trigger check it prints under
+external_content.data, framed; a trigger check reads it as the tool answered.`
 
 export function parseMcpCliArgs(args: string[]): McpCliParsed {
   const [first, sub, verb, tool, ...rest] = args

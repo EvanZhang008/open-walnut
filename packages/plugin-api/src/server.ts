@@ -1279,6 +1279,12 @@ export interface PluginToolSpec {
   name: string
   description: string
   inputSchema?: Record<string, unknown>
+  /**
+   * Your result already frames the outside text it carries (an `<external-content
+   * trust="untrusted">` block, as the mail plugin's reads do). Left out, the host frames the
+   * whole result as outside data before a model reads it. Ignored by a host older than 2026-11-26.
+   */
+  framesOwnAnswer?: boolean
   execute(input: Record<string, unknown>, meta?: { toolUseId?: string; source?: string; callerSid?: string; callerKind?: 'person' | 'agent' }): unknown | Promise<unknown>
 }
 
@@ -1322,6 +1328,16 @@ export interface PluginOpDefinition {
   destructive?: boolean
   /** Deadline for EACH `ctx.call` request, not for the handler as a whole. */
   timeoutMs?: number
+  /**
+   * A plugin's data comes from outside Walnut (an event an organizer wrote, a ticket a colleague
+   * wrote), so a caller a model may read for (a session, `walnut tools call` in a script, your op's
+   * route `POST /api/plugin-runtime/<id>/ops/<op>` with a session's or a script's headers) reads
+   * your answer inside an envelope `{ external_content: { source, trust: 'untrusted', data }, note }`,
+   * your value under `external_content.data`. A person (your App), your own code (`walnut.ops.call`)
+   * and a trigger check script read it as it is. Set this when your answer already frames its
+   * outside text itself, so it is not framed twice. Ignored by a host older than 2026-11-26.
+   */
+  framesOwnAnswer?: boolean
   /**
    * Return a value (object or array). A string holding JSON (a tool's text result reused
    * here) is parsed by the host, so every surface shows the object, not escaped text.
