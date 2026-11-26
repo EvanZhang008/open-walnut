@@ -436,7 +436,7 @@ export async function patchThread(taskId: string, id: string, patch: ThreadPatch
   // close, and only then do they move under it (a thanks about another answer, quoted, did both).
   const seenCheck = by !== 'human' && !placing && (rest.known !== undefined || rest.close) ? await import('./thread-seen-check.js') : null;
   const unseen = seenCheck ? await seenCheck.unseenClaims(taskId, [id]) : undefined;
-  const closeAsked = seenCheck && unseen?.has(id) && rest.close && rest.user_words ? (await seenCheck.closeAsked(taskId, rest.user_words)) === true : undefined;
+  const closeAsked = seenCheck && unseen?.has(id) && rest.close && rest.user_words ? (await seenCheck.closeAsked(taskId, rest.user_words, id)) === true : undefined;
   const thread = await mutateThreads(taskId, (cur) => {
     const before = cur.threads.find((t) => t.id === id);
     // He knows where it stands: it goes to Acknowledged and the node decides where it goes (thread-known.ts).

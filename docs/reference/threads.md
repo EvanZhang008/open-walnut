@@ -670,7 +670,10 @@ after the answer (`reactedSince`, per node by design: a remark seldom sits in th
   answer, quoted, does not close it and is not moved under it (`carryHisWords` is skipped), and
   the refusal no longer tells the node to retry with `user_words`. No answer on the quote leaves
   the thread open. The call reads whether the words ask for a close, not which thread they mean:
-  "the first one is done, close it", quoted to close another thread, still closes that one (open).
+  "the first one is done, close it", quoted to close another thread, still closes that one. Kept
+  so on purpose: which thread a close ask means is the node's reading, and a rule that refused
+  every quote the small model could not place would also refuse his "ok, close it" that names
+  nothing. The log row names the thread, so real use shows whether a node ever does it.
 - Measured with a real small model on the trial's recorded turns (three answered threads, 23 later
   messages, five runs each, twice: 690 verdicts): no answer he had not reacted to was marked; the
   recorded remark marked only the thread it names in 100 runs of 100 (50 more runs of it alone);
@@ -682,7 +685,7 @@ after the answer (`reactedSince`, per node by design: a remark seldom sits in th
   right (five close asks, seven thanks, questions and remarks). A miss keeps a card he may have
   read, which he acknowledges; before, every such claim went through.
 - Log rows: `org threads: seen claims read against his words` (claimed, unseen, unread, ms) and
-  `org threads: quoted words read as a close ask or not` (asks).
+  `org threads: quoted words read as a close ask or not` (threadId, asks).
 - Off: time alone, as before. Guards: `tests/core/org/thread-seen-check.test.ts`,
   `tests/core/org/thread-seen-claims-guard.test.ts` (every use of the time rule and every write
   through `updateThread`, listed from the source), `tests/e2e/thread-seen-check.test.ts`.

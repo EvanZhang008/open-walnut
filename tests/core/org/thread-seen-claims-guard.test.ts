@@ -84,7 +84,7 @@ describe('a node\'s claim that he reacted is read against his words, wherever it
     expect(patch).toMatch(/by !== 'human' && !placing && \(rest\.known !== undefined \|\| rest\.close\) \? await import\('\.\/thread-seen-check\.js'\)/)
     expect(patch).not.toMatch(/!rest\.user_words/)
     // On a refused claim his quoted words move under the thread, and close it, only when they ask for a close.
-    expect(patch).toMatch(/unseen\?\.has\(id\) && rest\.close && rest\.user_words \? \(await seenCheck\.closeAsked\(taskId, rest\.user_words\)\) === true/)
+    expect(patch).toMatch(/unseen\?\.has\(id\) && rest\.close && rest\.user_words \? \(await seenCheck\.closeAsked\(taskId, rest\.user_words, id\)\) === true/)
     expect(patch).toMatch(/if \(carryLang && closeAsked !== false\) cur = carryHisWords\(/)
     const lines = fs.readFileSync(path.join(SRC, 'core/sessions/status-threads.ts'), 'utf8')
     const apply = lines.slice(lines.indexOf('export async function applyThreadLines('))

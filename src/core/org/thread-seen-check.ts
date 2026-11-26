@@ -281,10 +281,12 @@ export async function unseenClaims(taskId: string, ids: readonly string[]): Prom
  * or drop something, or that it is done or no longer wanted. Asked only for a thread whose claim
  * was just refused (unseenClaims): there the quote is the one thing that could still close it, and
  * a thanks about another answer, quoted, closed the thread his words were not about (review
- * 2026-11-26: the refusal itself told the node to retry with user_words). True only for a YES;
+ * 2026-11-26: the refusal itself told the node to retry with user_words). It reads whether the
+ * words ask for a close, not which thread they mean: that stays the node's reading, since a
+ * "close it" that names nothing is one the small model cannot place either. True only for a YES;
  * false for a NO; null when the judge gave no answer. Never throws.
  */
-export async function closeAsked(taskId: string, words: string): Promise<boolean | null> {
+export async function closeAsked(taskId: string, words: string, threadId?: string): Promise<boolean | null> {
   const marker = `<<${randomBytes(8).toString('hex')}>>`;
   const text = words.split(marker).join('').replace(/\s+/g, ' ').trim().slice(0, 500);
   if (!text) return false;
@@ -296,7 +298,8 @@ export async function closeAsked(taskId: string, words: string): Promise<boolean
     })).text;
     const word = verdictWord(answer, /\b(YES|NO)\b/g, 'NO');
     const verdict = word === null ? null : word === 'YES';
-    log.task.info('org threads: quoted words read as a close ask or not', { taskId, asks: verdict });
+    // The thread is named so real use shows how often a quote closes a thread his words were read as not being about.
+    log.task.info('org threads: quoted words read as a close ask or not', { taskId, threadId, asks: verdict });
     return verdict;
   } catch (err) {
     log.task.debug('org threads: quoted words got no answer', { taskId, error: err instanceof Error ? err.message : String(err) });
