@@ -411,8 +411,12 @@ describe('specs that open a gated Settings pane', () => {
   const FACT_OF_GATE: Record<string, string | null> = { 'mac-access': 'macAccess', primary: null, 'focus-workspace': 'focus_workspace' }
   /** A shared helper that sets the gate's fact for the spec that calls it. */
   const HELPER_OF_GATE: Record<string, string> = { 'mac-access': 'routeMacConsole(' }
+  // 2026-11-26: settings-panes-addons walked a list of pane ids (`for (const id of OWNED_PANES)
+  // clickNav(page, id)`) that named macOS Access, and timed out on every Linux run: a spec that
+  // opens panes by a variable and names the pane's id opens it too.
   const opens = (text: string, id: string) => text.includes(`settings-nav-${id}'`)
     || new RegExp(`clickNav\\(\\s*page\\s*,\\s*['"]${id}['"]`).test(text)
+    || (/clickNav\(\s*page\s*,\s*[A-Za-z_$][\w$.]*\s*\)/.test(text) && new RegExp(`['"]${id}['"]`).test(text))
   const registry = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/settings/core-settings-registry.tsx'), 'utf8')
   const gated = [...registry.matchAll(/\bid: '([\w-]+)'[^{}]*?\brequires: '([\w-]+)'/g)].map((m) => ({ id: m[1]!, gate: m[2]! }))
 
@@ -433,6 +437,8 @@ describe('specs that open a gated Settings pane', () => {
     expect(opens("await clickNav(page, 'permissions')", 'permissions')).toBe(true)
     expect(opens("page.getByTestId('settings-nav-permissions')", 'permissions')).toBe(true)
     expect(opens("await clickNav(page, 'general')", 'permissions')).toBe(false)
+    expect(opens("const PANES = ['calendar', 'permissions']\nfor (const id of PANES) await clickNav(page, id)", 'permissions')).toBe(true)
+    expect(opens("const PANES = ['calendar']\nfor (const id of PANES) await clickNav(page, id)", 'permissions')).toBe(false)
   })
 })
 

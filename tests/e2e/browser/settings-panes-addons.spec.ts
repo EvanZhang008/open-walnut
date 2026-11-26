@@ -14,6 +14,7 @@ import { devices, test, expect, type Page, type Route } from '@playwright/test'
 import { backToApps, openApps, openPluginDetail } from './apps-store-helpers'
 import { dropFakes } from './route-teardown'
 import { backToDevices, openWay } from './devices-ways-helpers'
+import { routeMacConsole } from './mac-console-route'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
@@ -763,6 +764,9 @@ function auditPane(root: Element, provided: string[]): PaneAudit {
 
 test('C8 C10 C14 C19 C20 C80: owned panes are sentence case, glyph free, switches only', async ({ page }) => {
   test.setTimeout(180_000)
+  // OWNED_PANES walks macOS Access, whose nav entry is drawn only where the server reports
+  // macOS permissions (5ebe427b21): answer as a Mac console, so a Linux runner audits it too.
+  await routeMacConsole(page)
   await mockCalendar(page)
   const { rows } = await mockPlugins(page)
   const provided = rows.flatMap((r) => [String(r.name), String(r.description)])
