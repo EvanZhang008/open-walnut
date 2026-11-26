@@ -67,11 +67,11 @@ rm -rf "$HOME_DIR"; mkdir -p "$HOME_DIR/fake-home" "$HOME_DIR/.open-walnut"
 log "starting isolated server on :$PORT (home: $HOME_DIR)"
 env -i \
   HOME="$HOME_DIR/fake-home" \
-  PATH="/usr/bin:/bin:/usr/sbin:/sbin:$(dirname "$(command -v node)")" \
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin:$(dirname "$(command -v bun)")$(command -v node >/dev/null 2>&1 && printf ':%s' "$(dirname "$(command -v node)")")" \
   NODE_ENV=production \
   WALNUT_DISABLE_SEARCH=1 \
   OPEN_WALNUT_HOME="$HOME_DIR/.open-walnut" \
-  node "$REPO/dist/cli.js" web --port $PORT > "$WORK/server.log" 2>&1 &
+  bun "$REPO/dist/cli.js" web --port $PORT > "$WORK/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 60); do
   curl -sf "http://localhost:$PORT/api/v1/status" >/dev/null 2>&1 && break

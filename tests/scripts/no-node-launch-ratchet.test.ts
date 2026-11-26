@@ -3,7 +3,9 @@
  * bun alone; Node remains only where a user or a tool brings it.
  *
  * Scanned: package.json scripts, the Playwright configs, every workflow's run
- * lines, the shell scripts in scripts/ and desktop/, the JS/TS launchers in
+ * lines, the shell scripts in scripts/, desktop/ and ios-native/ (the phone's test
+ * harnesses start a Walnut too: 2026-11-25, seven of them still started it on Node,
+ * which Walnut no longer runs on), the JS/TS launchers in
  * scripts/ and bin/ (a spawn of node or tsx, a `#!/usr/bin/env node`), and the
  * Mac app's Swift. A start is `node <x>` or `tsx <x>` where a command starts
  * (a probe like `node --version` starts nothing), `npx tsx`, `--import tsx`,
@@ -85,7 +87,7 @@ function starts(): Array<{ file: string; text: string; at: string }> {
   const shell = (t: string) => !/^(?:echo|printf|log|warn|die|fail|info)\b/.test(t) && (SHELL_START.test(t) || TSX_LOADER.test(t))
   // A step's one-line `run: node x` starts where its value does.
   for (const f of walk('.github/workflows', (n) => /\.ya?ml$/.test(n))) lines(f, (t) => shell(t.replace(/^(?:-\s+)?run:\s*/, '')), /^#/)
-  for (const f of [...walk('scripts', (n) => n.endsWith('.sh')), ...walk('desktop', (n) => n.endsWith('.sh'))]) lines(f, (t, i) => (i === 0 ? SHEBANG_NODE.test(t) : shell(t)), /^#/)
+  for (const f of [...walk('scripts', (n) => n.endsWith('.sh')), ...walk('desktop', (n) => n.endsWith('.sh')), ...walk('ios-native', (n) => n.endsWith('.sh'))]) lines(f, (t, i) => (i === 0 ? SHEBANG_NODE.test(t) : shell(t)), /^#/)
   for (const f of [...walk('scripts', (n) => /\.(?:mjs|cjs|js|ts|mts)$/.test(n)), ...walk('bin', () => true)]) {
     lines(f, (t, i) => (i === 0 && SHEBANG_NODE.test(t)) || JS_SPAWN.test(t) || TSX_LOADER.test(t), /^(?:\/\/|\*|\/\*)/)
   }

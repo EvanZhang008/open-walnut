@@ -12,7 +12,7 @@ case "$OUT" in /tmp/phone-media/*) ;; *) exit 2 ;; esac
 [ ! -e "$OUT/ready.json" ] || { printf '%s\n' 'Use a fresh evidence directory' >&2; exit 2; }
 mkdir -p "$OUT"
 bash "$WALNUT_HEAVY_SLOT_SCRIPT" bash -c '
-  node --import tsx "$1/ios-native/tests/ui/media-server.ts" "$2" > "$2/server.log" 2>&1 &
+  bun "$1/ios-native/tests/ui/media-server.ts" "$2" > "$2/server.log" 2>&1 &
   printf "%s\n" "$!" > "$2/fixture.pid"
 ' _ "$ROOT" "$OUT"
 FIXTURE_PID="$(python3 -c 'import pathlib,sys; print(int(pathlib.Path(sys.argv[1]).read_text()))' "$OUT/fixture.pid")"

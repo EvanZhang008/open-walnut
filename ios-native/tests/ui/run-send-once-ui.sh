@@ -31,20 +31,19 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 PORT="${SEND_ONCE_UI_PORT:-38831}"
 OUT="${SEND_ONCE_UI_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/walnut-send-once-ui.XXXXXX")}"
-TSX="$ROOT/node_modules/.bin/tsx"
 
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '\n!! %s\n' "$*" >&2; exit 1; }
 
 [ "$PORT" != 3456 ] || die "3456 is the production port"
-[ -x "$TSX" ] || die "no $TSX (run npm install in $ROOT)"
+command -v bun >/dev/null || die "no bun on PATH (https://bun.sh)"
 if [ "${1:-}" != "--serve" ] && [ -z "${WALNUT_UITEST_UDID:-}" ]; then
   die "name the simulator: WALNUT_UITEST_UDID=<udid> (xcrun simctl list devices)"
 fi
 mkdir -p "$OUT" || die "cannot create $OUT"
 rm -f "$OUT/ready.json" "$OUT/done"
 
-"$TSX" "$ROOT/ios-native/tests/ui/send-once-server.ts" "$PORT" "$OUT" > "$OUT/server.log" 2>&1 &
+bun "$ROOT/ios-native/tests/ui/send-once-server.ts" "$PORT" "$OUT" > "$OUT/server.log" 2>&1 &
 HPID=$!
 stop_harness() {
   kill -TERM "$HPID" 2>/dev/null || return 0

@@ -14,7 +14,7 @@ case "$OUT" in /tmp/inbox-item-actions/*) ;; *) exit 2 ;; esac
 mkdir -p "$OUT"
 # Admission covers startup, not the time a verifier spends reading the UI.
 bash "$WALNUT_HEAVY_SLOT_SCRIPT" bash -c '
-  "$1/node_modules/.bin/tsx" "$1/ios-native/tests/ui/inbox-items-server.ts" "$2" > "$2/server.log" 2>&1 &
+  bun "$1/ios-native/tests/ui/inbox-items-server.ts" "$2" > "$2/server.log" 2>&1 &
   printf "%s\n" "$!" > "$2/fixture.pid"
 ' _ "$ROOT" "$OUT"
 FIXTURE_PID="$(python3 -c 'import pathlib,sys; print(int(pathlib.Path(sys.argv[1]).read_text()))' "$OUT/fixture.pid")"

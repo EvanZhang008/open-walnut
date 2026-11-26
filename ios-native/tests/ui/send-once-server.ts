@@ -11,7 +11,7 @@
  * Run it through ios-native/tests/ui/run-send-once-ui.sh, which starts it, hands the
  * proxy's address to the UI test runner, and stops it:
  *
- *   ./node_modules/.bin/tsx ios-native/tests/ui/send-once-server.ts <proxyPort> <outDir>
+ *   bun ios-native/tests/ui/send-once-server.ts <proxyPort> <outDir>
  *
  * Nothing here reaches a real Walnut: HOME, the data dir and the daemon dir are temp
  * dirs, every session runs the mock CLI through the mock daemon, the port 3456 is
