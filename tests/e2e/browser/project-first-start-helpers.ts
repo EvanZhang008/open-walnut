@@ -25,8 +25,8 @@ export async function makeProject(request: APIRequestContext, name: string, meta
 
 /** The experiment on or off; `more`: other experiments in the same write (isolated_workspace_by_default). */
 export async function setFlag(request: APIRequestContext, on: boolean, more: Record<string, boolean> = {}): Promise<void> {
-  const cfg = await (await request.get('/api/config')).json() as { experimental?: Record<string, boolean> }
-  const res = await request.put('/api/config', { data: { experimental: { ...(cfg.experimental ?? {}), ...more, project_first_start: on } } })
+  // The write merges flag by flag (server-flags.ts): only the flags named here move.
+  const res = await request.put('/api/config', { data: { experimental: { ...more, project_first_start: on } } })
   expect(res.ok()).toBe(true)
 }
 

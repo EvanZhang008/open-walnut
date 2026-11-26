@@ -28,6 +28,7 @@ import { REAL_PANEL, draftComposer, draftPanel, draftTaskMenu, openDraft, openDr
 import { selectSection } from './todo-panel-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
 import { expectPanelRunning } from './session-header-labels-helpers'
+import { setServerFlags, type RestoreServerFlags } from './server-flags'
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SHOTS = process.env.PW_SCREENSHOT_DIR ?? '/tmp/task-workspaces'
@@ -479,13 +480,9 @@ test('a bound draft (▶ Start of an existing task) offers the option inline fro
 // The experiment is a server-wide setting: a test turns it on and puts it back in `finally`.
 // This file's tests run one after another (configure above), so no other test of the file sees it on.
 
-/** The experiment, as Settings > Experimental writes it. Returns the previous flags to restore. */
-async function setDefault(request: APIRequestContext, on: boolean): Promise<Record<string, boolean>> {
-  const cfg = await (await request.get('/api/config')).json() as { experimental?: Record<string, boolean> }
-  const before = { ...(cfg.experimental ?? {}) }
-  const res = await request.put('/api/config', { data: { experimental: { ...before, isolated_workspace_by_default: on } } })
-  expect(res.ok()).toBe(true)
-  return before
+/** The experiment on or off; returns the write that puts it back as it was (server-flags.ts). */
+function setDefault(request: APIRequestContext, on: boolean): Promise<RestoreServerFlags> {
+  return setServerFlags(request, { isolated_workspace_by_default: on })
 }
 
 async function newTask(request: APIRequestContext, title: string, project: string): Promise<string> {
@@ -525,7 +522,7 @@ test('an agent\'s task_start: a repository folder gets a worktree by default, a 
   const worktrees = path.join(home, '.open-walnut-worktrees', 'app')
   const project = `PW default iso ${proj}`
   const offProject = `PW default iso off ${proj}`
-  const before = await setDefault(request, true)
+  const restoreFlags = await setDefault(request, true)
   try {
     // ── A repository folder: git-worktree, by default ──
     const a = await newTask(request, `Fix the parser ${proj}`, project)
@@ -580,7 +577,7 @@ test('an agent\'s task_start: a repository folder gets a worktree by default, a 
     expect((await request.patch(`/api/tasks/${d}`, { data: { phase: 'COMPLETE' } })).ok()).toBe(true)
     await waitWs(request, d, 'removed', 90_000)
   } finally {
-    await request.put('/api/config', { data: { experimental: before } })
+    await restoreFlags(request)
   }
 })
 
@@ -592,7 +589,7 @@ test('a person\'s draft: on by default as one chip on the folder row, × works i
   fs.mkdirSync(plain, { recursive: true })
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
-  const before = await setDefault(request, true)
+  const restoreFlags = await setDefault(request, true)
   try {
     await openHome(page)
 
@@ -669,6 +666,6 @@ test('a person\'s draft: on by default as one chip on the folder row, × works i
     await expect.poll(() => sessionCwd(request, String(body3.taskId)), { timeout: 30_000 }).toBe(plain)
     expect(errors).toEqual([])
   } finally {
-    await request.put('/api/config', { data: { experimental: before } })
+    await restoreFlags(request)
   }
 })
