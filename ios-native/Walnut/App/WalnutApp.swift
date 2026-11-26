@@ -22,6 +22,10 @@ struct WalnutApp: App {
         _ = LaunchGate.shared
         // A UI test starts from no kept view choices (UITestLaunch), whatever the run before left.
         ViewMemory.eraseWhenAsked()
+        #if DEBUG
+        // Nor from an earlier test's copies of the server's data, before any store reads one.
+        LocalDataReset.eraseCachesForNewUITest()
+        #endif
         LaunchTrace.mark(
             LaunchGate.shared.launchedInBackground
                 ? "app init (BACKGROUND launch — prewarm/push)"

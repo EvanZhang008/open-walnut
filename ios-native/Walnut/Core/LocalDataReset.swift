@@ -109,7 +109,12 @@ enum LocalDataReset {
     /// saved logins, `InstallMarker`), and the saved logins' own copy on a build whose Keychain
     /// is unavailable (`KeychainHelper` falls back to preferences).
     static var keptAcrossErase: [String] {
-        [InstallMarker.key, KeychainHelper.fallbackPrefix + SavedLogins.key]
+        var kept = [InstallMarker.key, KeychainHelper.fallbackPrefix + SavedLogins.key]
+        #if DEBUG
+        // A disconnect inside a UI test leaves the test's generation (`eraseCachesForNewUITest`).
+        kept.append(uiTestGenerationSeenKey)
+        #endif
+        return kept
     }
 
     /// Erase it all. Returns the top-level names the sweep removed (tests, log).
@@ -146,6 +151,31 @@ enum LocalDataReset {
         AppLog.info("reset", "demo state erased at launch", ["removed": String(removed.count)])
         return removed
     }
+
+    #if DEBUG
+    /// The launch argument every UI test passes (`UITestLaunch.cacheGenerationArgument`): one
+    /// value per test case.
+    static let uiTestGenerationArgument = "walnut.uiTestCacheGeneration"
+    /// The generation the caches on disk belong to (the persistent domain, never the argument's).
+    static let uiTestGenerationSeenKey = "walnut.uiTestCacheGenerationSeen"
+
+    /// A UI test's first launch drops the copies of a server's data an earlier test left, before
+    /// any store reads one: Caches is swept as a disconnect sweeps it (the list copies behind
+    /// every store, letter bodies, session media, attachments, and whatever a later cache adds).
+    /// A relaunch in the same test keeps its own. UI tests share one simulator and the same
+    /// fixture ids, and a launch paints each store's copy before it asks the server, so a test of
+    /// a leader with Threads off opened the Threads sheet from the copies the test before it had
+    /// read with them on (2026-11-26, CI run 45784774186, TaskThreadsUITests). Returns what it
+    /// removed, nil when the launch is not a new test's.
+    @discardableResult
+    static func eraseCachesForNewUITest(defaults: UserDefaults = .standard, locations explicit: Locations? = nil) -> [String]? {
+        guard let generation = defaults.string(forKey: uiTestGenerationArgument), !generation.isEmpty,
+              defaults.string(forKey: uiTestGenerationSeenKey) != generation else { return nil }
+        let removed = sweep((explicit ?? defaultLocations).caches, keep: keepsCacheEntry)
+        defaults.set(generation, forKey: uiTestGenerationSeenKey)
+        return removed
+    }
+    #endif
 
     private static func erase(reason: String, scope: AppPrefs.Scope, locations: Locations) -> [String] {
         let started = Date()

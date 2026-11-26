@@ -17,26 +17,9 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { code } from './ios-timed-hide-scan'
+import { body, awaits } from './ios-swift-source'
 
 const APP = path.resolve(import.meta.dirname, '../../ios-native/Walnut')
-
-/** The body of the first `func <name>(...)` in `src`, braces matched; null when there is none. */
-export function body(src: string, name: string): string | null {
-  const m = new RegExp(`func\\s+${name}\\s*\\(`).exec(src)
-  if (!m) return null
-  const open = src.indexOf('{', m.index)
-  let depth = 0
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === '{') depth++
-    else if (src[i] === '}' && --depth === 0) return src.slice(open + 1, i)
-  }
-  return src.slice(open + 1)
-}
-
-/** The awaited calls of a body, in order (`await x.y()` gives `x.y`). */
-export function awaits(src: string): string[] {
-  return [...src.matchAll(/\bawait\s+([\w.]+)\s*\(/g)].map((m) => m[1])
-}
 
 const stores = fs
   .readdirSync(path.join(APP, 'Stores'))

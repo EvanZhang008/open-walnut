@@ -67,10 +67,10 @@
 # error is inconclusive to ConnectionStore, so the app stays paired and simply
 # reads as offline. Measured on that default: all 3 VoiceQuickActionUITests pass
 # (they assert UI facts — tab bar, tab switch, mic open, which callback delivered
-# the shortcut — and already accept the offline caption), and 3 of the 4
-# BoardRingTapUITests pass too, because the board renders disk-cached rows offline.
-# The one that does not is the tap test, which needs `WALNUT_UITEST_ROW_ID` for a
-# throwaway task the run owns — it refuses to complete somebody's real task.
+# the shortcut — and already accept the offline caption). BoardRingTapUITests' three
+# geometry tests measure a fixture board of their own; its tap test needs
+# `WALNUT_UITEST_ROW_ID` for a throwaway task the run owns — it refuses to complete
+# somebody's real task.
 set -uo pipefail
 
 IOS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

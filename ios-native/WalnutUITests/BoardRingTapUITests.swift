@@ -20,9 +20,66 @@ import XCTest
 /// use it.
 final class BoardRingTapUITests: XCTestCase {
 
+    /// The geometry tests' own board (`ownBoard`).
+    private var fixture: ChatPlaceFixtureServer?
+
     override func setUp() {
         super.setUp()
         continueAfterFailure = false
+    }
+
+    override func tearDown() {
+        fixture?.stop()
+        fixture = nil
+        super.tearDown()
+    }
+
+    /// The two rows the geometry tests measure, pinned in Focus: the first one's title wraps
+    /// onto a second line, the row whose lower half the old 34x30 ring left dead.
+    private static let rows = [
+        (id: "task-fixture-ring-long", title: "Fixture row whose title is long enough to wrap onto a second line of the board"),
+        (id: "task-fixture-ring-short", title: "Fixture short row"),
+    ]
+
+    /// The geometry tests' board: their own fixture server's two pinned rows. They measured
+    /// whatever rows the simulator had cached from an earlier test or run until each test began
+    /// with no copy of another's (`UITestLaunch.cacheGenerationArgument`, 2026-11-26), and they
+    /// skipped when it had none.
+    private func ownBoard() throws -> XCUIApplication {
+        var options = ChatPlaceFixtureServer.Options()
+        options.tasks = Self.rows.map { row -> [String: Any] in
+            var task = ChatPlaceFixtureServer.taskRow(id: row.id, title: row.title, phase: "IN_PROGRESS")
+            task["status"] = "in_progress"
+            task["project"] = "Fixture"
+            task["pinned"] = true
+            return task
+        }
+        let server = try ChatPlaceFixtureServer(options: options)
+        server.extraRoute = { method, path in
+            guard method == "GET" else { return nil }
+            switch path {
+            case "/api/v1/focus/tasks":
+                return (200, [
+                    "pinned_tasks": Self.rows.map { $0.id }, "focus_tasks": Self.rows.map { $0.id },
+                    "satellite_tasks": [] as [Any], "wait_tasks": [] as [Any], "custom_tier_tasks": [:] as [String: Any],
+                ])
+            case "/api/v1/focus/tiers":
+                return (200, ["tiers": [] as [Any]])
+            default:
+                return nil
+            }
+        }
+        try server.start()
+        fixture = server
+        let token = "chat-place-fixture"
+        let app = UITestLaunch.launch(["-walnut.serverUrl", server.url, "-walnut.deviceToken", token])
+        let tokenField = app.secureTextFields["setup.token"]
+        if tokenField.waitForExistence(timeout: 5) {
+            tokenField.tap()
+            tokenField.typeText(token)
+            app.buttons["setup.connect"].tap()
+        }
+        return app
     }
 
     /// The live app, paired through launch arguments only (nothing is persisted).
@@ -42,10 +99,10 @@ final class BoardRingTapUITests: XCTestCase {
     /// not land even when given to `build-for-testing`, so the script verifies the
     /// `.xctestrun` and writes the variables in itself.
     ///
-    /// Measured on the script's offline default (a dead port): the three geometry tests
-    /// here PASS, because the board renders disk-cached rows with no server. The tap test
-    /// still skips until `WALNUT_UITEST_ROW_ID` names a throwaway task the run owns —
-    /// which is the point, since a stray tap there completes somebody's real task.
+    /// Only the tap test pairs this way; the three geometry tests measure their own fixture
+    /// board (`ownBoard`). The tap test skips until `WALNUT_UITEST_ROW_ID` names a throwaway
+    /// task the run owns, which is the point, since a stray tap there completes somebody's
+    /// real task.
     private func launchPaired() throws -> XCUIApplication {
         guard
             let server = ProcessInfo.processInfo.environment["WALNUT_UITEST_SERVER"],
@@ -95,7 +152,7 @@ final class BoardRingTapUITests: XCTestCase {
     // MARK: - The target
 
     func testTheRingsTapAreaIsAtLeastFortyFourPointsWide() throws {
-        let app = try launchPaired()
+        let app = try ownBoard()
         let ring = try board(app)
         XCTAssertGreaterThanOrEqual(
             ring.frame.width, 44,
@@ -104,7 +161,7 @@ final class BoardRingTapUITests: XCTestCase {
     }
 
     func testTheRingOwnsItsWholeColumnAndNotJustTheTopOfIt() throws {
-        let app = try launchPaired()
+        let app = try ownBoard()
         let ring = try board(app)
         // The ROW is the text column (`board.row.<id>` is deliberately a sibling of the
         // ring, so automation cannot tap one and get the other). Its height is the row's,
@@ -121,7 +178,7 @@ final class BoardRingTapUITests: XCTestCase {
     }
 
     func testTheBiggerTargetDidNotPushTheTitleSideways() throws {
-        let app = try launchPaired()
+        let app = try ownBoard()
         let ring = try board(app)
         let rowId = ring.identifier.replacingOccurrences(of: "board.ring.", with: "board.row.")
         let row = app.descendants(matching: .any)

@@ -59,6 +59,14 @@ enum UITestLaunch {
     static let freshSavedLoginsArguments = ["-walnut.uiTestFreshSavedLogins", "YES"]
     static let keepSavedLoginsArgument = "-walnut.uiTestKeepSavedLogins"
 
+    /// Every test starts with no copy of the server's data an earlier test left (the app's
+    /// Caches, `LocalDataReset.eraseCachesForNewUITest`; every store paints its copy before it
+    /// asks the server): tests share one simulator and the same fixture ids, and a Threads-off
+    /// test opened the Threads an earlier test had read on (2026-11-26, CI run 45784774186).
+    /// The value is this test's own (`TestCacheGeneration`), so a relaunch within the test keeps
+    /// its copies (the cold offline tests read them there).
+    static let cacheGenerationArgument = "-walnut.uiTestCacheGeneration"
+
     /// An app configured to reach nothing, plus whatever this test asked for.
     ///
     /// Not launched yet: a caller may still want to set `launchEnvironment` or take a
@@ -71,9 +79,10 @@ enum UITestLaunch {
         let pinsItsOwnServer = arguments.contains(serverURLArgument)
         let keepsViews = arguments.contains(keepViewsArgument)
         let keepsLogins = arguments.contains(keepSavedLoginsArgument)
+        let generation: [String] = [cacheGenerationArgument, TestCacheGeneration.current]
         app.launchArguments =
             (pinsItsOwnServer ? [] : [serverURLArgument, blackholeURL]) + (keepsViews ? [] : freshViewsArguments)
-            + (keepsLogins ? [] : freshSavedLoginsArguments)
+            + (keepsLogins ? [] : freshSavedLoginsArguments) + generation
             + freshDraftArguments + keychainArguments + silentAudioArguments + arguments
         return app
     }
@@ -104,6 +113,27 @@ enum UITestLaunch {
     static func terminate() {
         XCUIApplication().terminate()
     }
+}
+
+/// One id per test case, for `UITestLaunch.cacheGenerationArgument`: every launch of one test
+/// passes the same id, and the app drops its disk copies when the id is new to it. Installed by
+/// the first launch; that test's start came before the install, so a missing id is made then.
+final class TestCacheGeneration: NSObject, XCTestObservation {
+    private static let shared: TestCacheGeneration = {
+        let observer = TestCacheGeneration()
+        XCTestObservationCenter.shared.addTestObserver(observer)
+        return observer
+    }()
+    private var id: String?
+
+    static var current: String {
+        if let id = shared.id { return id }
+        let id = UUID().uuidString
+        shared.id = id
+        return id
+    }
+
+    func testCaseWillStart(_ testCase: XCTestCase) { id = nil }
 }
 
 /// On a test's first failure (not a warning), attach what the screen showed and the app's element tree, so a
