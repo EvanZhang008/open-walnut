@@ -133,7 +133,7 @@ jobs:
       # Records the runner's desktop: a GitHub Windows runner signs its user in, so it has one.
       - name: ffmpeg, to record the screen
         shell: pwsh
-        run: choco install ffmpeg --no-progress -y | Select-Object -Last 3
+        run: '& "$env:GITHUB_WORKSPACE\scripts\ci\install-ffmpeg.ps1"'
 
       - name: Paste the PowerShell line in a PowerShell window, recorded
         shell: pwsh
@@ -171,9 +171,13 @@ jobs:
             '"JOIN_EXIT=$LASTEXITCODE" | Set-Content ' + (& $q "$env:OUT\join.done")
             'Start-Sleep 8'
           ) | Set-Content "$env:OUT\paste.ps1" -Encoding UTF8
-          $psi = New-Object Diagnostics.ProcessStartInfo 'ffmpeg.exe', ('-loglevel error -y -f gdigrab -framerate 8 -i desktop -vf scale=1280:-2 -c:v libx264 -preset veryfast -pix_fmt yuv420p -movflags +frag_keyframe+empty_moov "' + "$env:OUT\screen.mp4" + '"')
-          $psi.UseShellExecute = $false; $psi.RedirectStandardInput = $true; $psi.CreateNoWindow = $true
-          $ff = [Diagnostics.Process]::Start($psi)
+          # Only when it is there (scripts/ci/install-ffmpeg.ps1): the join is checked either way.
+          $ff = $null
+          if (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) {
+            $psi = New-Object Diagnostics.ProcessStartInfo 'ffmpeg.exe', ('-loglevel error -y -f gdigrab -framerate 8 -i desktop -vf scale=1280:-2 -c:v libx264 -preset veryfast -pix_fmt yuv420p -movflags +frag_keyframe+empty_moov "' + "$env:OUT\screen.mp4" + '"')
+            $psi.UseShellExecute = $false; $psi.RedirectStandardInput = $true; $psi.CreateNoWindow = $true
+            $ff = [Diagnostics.Process]::Start($psi)
+          }
           try {
             Start-Sleep 3
             # A window as the user opens it: without this step's PowerShell 7 module path, which a
@@ -182,8 +186,10 @@ jobs:
             try { $win = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$env:OUT\paste.ps1" -WindowStyle Maximized -PassThru } finally { $env:PSModulePath = $pm }
             if (-not $win.WaitForExit(40 * 60 * 1000)) { throw 'the join did not finish in 40 minutes' }
           } finally {
-            $ff.StandardInput.Write('q'); $ff.StandardInput.Close()
-            if (-not $ff.WaitForExit(60000)) { $ff.Kill() }
+            if ($ff) {
+              $ff.StandardInput.Write('q'); $ff.StandardInput.Close()
+              if (-not $ff.WaitForExit(60000)) { $ff.Kill() }
+            }
           }
           Get-Content "$env:OUT\join.log" -ErrorAction SilentlyContinue
           $done = Get-Content "$env:OUT\join.done" -Raw -ErrorAction SilentlyContinue

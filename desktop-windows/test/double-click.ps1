@@ -122,11 +122,15 @@ function Window-Url($w) {
 }
 
 # The screen, from here to the end.
-$psi = New-Object Diagnostics.ProcessStartInfo 'ffmpeg.exe', ('-loglevel error -y -f gdigrab -framerate 8 -i desktop -vf scale=1280:-2 -c:v libx264 -preset veryfast -pix_fmt yuv420p -movflags +frag_keyframe+empty_moov "' + (Join-Path $Out 'screen.mp4') + '"')
-# Its output drained here, never the step's: a child holding the step's output keeps the step open.
-$psi.UseShellExecute = $false; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
-$ff = [Diagnostics.Process]::Start($psi)
-$ff.BeginOutputReadLine(); $ff.BeginErrorReadLine()
+# Only when it is there (scripts/ci/install-ffmpeg.ps1): the install is checked either way.
+$ff = $null
+if (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) {
+  $psi = New-Object Diagnostics.ProcessStartInfo 'ffmpeg.exe', ('-loglevel error -y -f gdigrab -framerate 8 -i desktop -vf scale=1280:-2 -c:v libx264 -preset veryfast -pix_fmt yuv420p -movflags +frag_keyframe+empty_moov "' + (Join-Path $Out 'screen.mp4') + '"')
+  # Its output drained here, never the step's: a child holding the step's output keeps the step open.
+  $psi.UseShellExecute = $false; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+  $ff = [Diagnostics.Process]::Start($psi)
+  $ff.BeginOutputReadLine(); $ff.BeginErrorReadLine()
+}
 try {
   Start-Sleep 2
   # 1. The download, as a browser leaves it: in Downloads, marked as from the internet.
@@ -282,8 +286,10 @@ try {
   Done 'ok' $true
 } finally {
   try { Shot 'last.png' } catch { Write-Host ('last screenshot: ' + $_.Exception.Message) }
-  try { $ff.StandardInput.Write('q'); $ff.StandardInput.Close() } catch { }
-  if (-not $ff.WaitForExit(60000)) { try { $ff.Kill() } catch { } }
+  if ($ff) {
+    try { $ff.StandardInput.Write('q'); $ff.StandardInput.Close() } catch { }
+    if (-not $ff.WaitForExit(60000)) { try { $ff.Kill() } catch { } }
+  }
   $appLog = Join-Path $env:LOCALAPPDATA 'OpenWalnut\app.log'
   if (Test-Path $appLog) { Copy-Item $appLog (Join-Path $Out 'app.log') }
 }

@@ -100,7 +100,7 @@ jobs:
       - name: ffmpeg, to record the screen
         if: steps.has.outputs.app == 'true'
         shell: pwsh
-        run: choco install ffmpeg --no-progress -y | Select-Object -Last 3
+        run: '& "$env:GITHUB_WORKSPACE\scripts\ci\install-ffmpeg.ps1"'
 
       - name: The PC before
         if: steps.has.outputs.app == 'true'
