@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { walk } from './css-scan';
+import { scanCss, walk } from './css-scan';
 
 const WEB_SRC = path.join(__dirname, '../../web/src');
 const FAMILY_CSS = fs.readFileSync(path.join(WEB_SRC, 'styles/overlay-family.css'), 'utf8');
@@ -61,7 +61,7 @@ describe('one row height for every menu', () => {
     const off: string[] = [];
     for (const f of tsx) {
       const src = fs.readFileSync(f, 'utf8');
-      if (!/className=\{?[`"'][^`"']*\bwn-menu\b/.test(src)) continue;
+      if (!/className=\{?[`"'][^`"']*\bwn-menu(?![\w-])/.test(src)) continue;
       for (const m of src.matchAll(TAG)) {
         const tag = m[0];
         const classes = staticClasses(tag);
@@ -83,6 +83,38 @@ describe('one row height for every menu', () => {
   it('a row of the family is 30 px: 6 px above and below an 18 px line', () => {
     expect(FAMILY_CSS).toMatch(/--overlay-row-height: 30px;/);
     expect(FAMILY_CSS).toMatch(/--overlay-row-pad-y: 6px;/);
+    // Its words are one size in every menu, and on a phone every row is finger-sized.
+    expect(FAMILY_CSS).toMatch(/--overlay-row-font: var\(--font-size-sm\);/);
+    expect(FAMILY_CSS).toMatch(/font-size: var\(--overlay-row-font\);/);
+    expect(FAMILY_CSS).toMatch(/@media \(max-width: 768px\)[^{]*\{\s*:root \{ --overlay-row-height: 44px; \}/);
+  });
+
+  // 2026-11-26, the UI audit at 390 wide: the phone's stylesheet gave the ⋮ menus' rows 44 px and
+  // their chips 14 px words, so those menus' rows were 44 px and every other menu's 30 px. A phone's
+  // row height comes from the family's one variable, so no phone stylesheet sets a menu row's
+  // height or the size of its words.
+  it('no phone stylesheet sizes a menu row of its own', () => {
+    const rows = familyRows();
+    // The Pin row's chips and its Others key, and the rows of its Others flyout.
+    for (const c of ['task-kebab-tier-btn', 'task-pin-more', 'task-pin-opt']) rows.add(c);
+    const off: string[] = [];
+    for (const f of walk(WEB_SRC, ['.css'])) {
+      const phoneSheet = /\/phone[^/]*\.css$/.test(f);
+      for (const d of scanCss(f, fs.readFileSync(f, 'utf8'))) {
+        if (!/^(?:min-height|height|font-size)$/.test(d.prop)) continue;
+        // A phone's rule: in a phone stylesheet, or under the phone's own condition anywhere.
+        if (!phoneSheet && !d.atRules.some((a) => /max-width: ?768px/.test(a))) continue;
+        for (const sel of d.selectors) {
+          const last = sel.trim().split(/\s+/).pop() ?? '';
+          // The Pin row's chips stay finger-sized keys; only the size of their words is the menu's.
+          const sized = new Set(rows);
+          if (d.prop !== 'font-size') { sized.delete('task-kebab-tier-btn'); sized.delete('task-pin-more'); }
+          const menuRow = [...last.matchAll(/\.([\w-]+)/g)].some((c) => sized.has(c[1])) || (/\[role=['"]?menuitem/.test(last) && /menu/.test(sel));
+          if (menuRow) off.push(`${rel(f)}:${d.line} ${sel} { ${d.prop}: ${d.value} }`);
+        }
+      }
+    }
+    expect(off, 'a menu row is sized by --overlay-row-height and --overlay-row-font (overlay-family.css)').toEqual([]);
   });
 });
 

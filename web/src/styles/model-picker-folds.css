@@ -113,8 +113,6 @@
   font-weight: 400;
   line-height: 16px;
   color: var(--fg-notice);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .model-picker-fold-speed:empty::before {

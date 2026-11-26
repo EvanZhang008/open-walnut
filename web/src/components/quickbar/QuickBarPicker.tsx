@@ -137,7 +137,7 @@ export function QuickBarPicker({ sections, current, onPick, onClose, modes: mode
           : <LoadingState size="row" role="presentation" testId="qb-picker-empty" title="Loading people and tasks…" />)}
         {shownModes.length > 0 && (
           <div className="qb-section qb-section-modes">
-            <div className="qb-section-label">Search and ask</div>
+            <div className="qb-section-label wn-menu-heading">Search and ask</div>
             {shownModes.map((m) => {
               const at = n++;
               return (
@@ -165,7 +165,7 @@ export function QuickBarPicker({ sections, current, onPick, onClose, modes: mode
         )}
         {shown.map((section) => (
           <div key={section.label} className="qb-section">
-            <div className="qb-section-label">{section.label}</div>
+            <div className="qb-section-label wn-menu-heading">{section.label}</div>
             {section.people.map((p) => {
               const at = n++;
               const num = person++;

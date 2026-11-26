@@ -92,7 +92,7 @@ export function PermissionModeMenu({ mode, onPick, title, heading = 'Permission 
         onKeyDown={onMenuKey}
         style={{ ...menuPlacementStyle(placement), bottom: 'auto', ...(placement ? { left: 'auto' } : {}), zIndex: 'var(--z-menu)' }}
       >
-        <div className="model-picker-col-title">{heading}</div>
+        <div className="model-picker-col-title wn-menu-heading">{heading}</div>
         {SESSION_MODES.map((option) => {
           const active = option.id === mode;
           return (

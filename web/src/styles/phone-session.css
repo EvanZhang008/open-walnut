@@ -82,11 +82,6 @@
     opacity: 1;
   }
 
-  html body .task-kebab-menu .task-kebab-item,
-  html body .task-kebab-menu [role='menuitem'] {
-    min-height: 44px;
-  }
-
   /* The tier picker: finger-sized chips that wrap instead of one tight row. */
   html body .task-kebab-menu .task-kebab-tier {
     flex-wrap: wrap;
@@ -102,7 +97,6 @@
     min-height: 44px;
     justify-content: center;
     padding: 0 10px;
-    font-size: 14px;
   }
 
   .phone-session-row.task-kebab-item-active {
@@ -477,11 +471,11 @@
 }
 
 /* Composer popovers (C81): finger-sized rows; useMenuPlacement keeps them in
-   the space between the top bar and the keyboard. */
+   the space between the top bar and the keyboard. The model picker's rows are the menu family's,
+   finger-sized on a phone by --overlay-row-height (overlay-family.css). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   html body .command-palette-item,
   html body .mention-row,
-  html body .model-picker-row,
   html body .provider-rail-item,
   html body .model-picker-close {
     min-height: 44px;

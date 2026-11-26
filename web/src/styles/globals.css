@@ -6359,12 +6359,12 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   gap: 8px;
   padding: 6px 10px 2px;
 }
+/* The group's name beside its hint: the words of the shared .wn-menu-heading (overlay-family.css). */
 .mention-group-name {
   font-size: var(--font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--fg-secondary);
 }
 .mention-group-verb {
   font-size: var(--font-size-xs);
@@ -7076,13 +7076,8 @@ a.task-link[data-user-state='done']::before { background: var(--accent); }
   animation: mic-chevron-pop 0.15s ease-out;
 }
 
-.mic-retry-header {
+html .mic-retry-header.wn-menu-heading {
   padding: 6px 12px 4px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 .mic-retry-item {
@@ -12593,13 +12588,8 @@ a.task-kebab-info:hover {
 
 /* Section header inside the kebab dropdown (e.g. the "Session" half appended
    below the task actions via TaskQuickActions extraSection). */
-.task-kebab-section-label {
+html .task-kebab-section-label.wn-menu-heading {
   padding: 4px 12px 2px;
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
 }
 
 .task-kebab-priority {
@@ -14663,14 +14653,8 @@ a.task-kebab-info:hover {
 /* Section labels — "📁 subdirectories" / "🕘 history" / per-host groups.
    Live and history results must be visually distinct: history can never
    impersonate a live listing. */
-.sps-section-label {
+html .sps-section-label.wn-menu-heading {
   padding: 6px 10px 2px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-  opacity: 0.8;
   position: sticky;
   top: 0;
   background: var(--card-bg);
@@ -15421,11 +15405,7 @@ a.task-kebab-info:hover {
   overflow-y: auto;
 }
 
-.model-picker-col-title {
-  font-size: var(--font-size-xs);
-  color: var(--fg-notice);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+html .model-picker-col-title.wn-menu-heading {
   padding: 4px 8px 3px;
 }
 
@@ -18982,17 +18962,16 @@ a.tag-chip:hover .tag-chip-value,
 }
 /* Labeled group headers — the kind of chat (Walnut Agent / Claude Code) is
    stated outright, never implied by an icon or a bare divider. */
-.notes-chat-switcher-group {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--fg-muted);
+html .notes-chat-switcher-group.wn-menu-heading {
   padding: 7px 8px 3px;
   border-top: 1px solid var(--border);
   margin-top: 4px;
 }
-.notes-chat-switcher-group-first { border-top: none; margin-top: 0; padding-top: 4px; }
+html .notes-chat-switcher-group-first.wn-menu-heading {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 4px;
+}
 /* Trigger badge — explicit "this pane is a Claude Code session" marker. */
 .notes-chat-switcher-badge {
   flex: 0 0 auto;

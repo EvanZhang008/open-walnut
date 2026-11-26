@@ -124,14 +124,8 @@
 }
 
 /* ── Slash menu: group headers (new) ───────────────────────────────────── */
-.notes-slash-group {
+html .notes-slash-group.wn-menu-heading {
   padding: 6px 12px 2px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-  user-select: none;
 }
 
 /* ── Tables ────────────────────────────────────────────────────────────── */

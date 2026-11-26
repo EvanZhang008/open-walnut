@@ -23,7 +23,7 @@ export function SnoozeRows({ onSnooze, onPickDate, onClear, soon }: {
 }) {
   return (
     <div className="snooze-rows" role="group" aria-label="Snooze until">
-      <div className="snooze-rows-head">Snooze until</div>
+      <div className="snooze-rows-head wn-menu-heading">Snooze until</div>
       {[...(soon ? soonSnoozePresets() : []), ...snoozePresets()].map(p => (
         <button key={p.id} type="button" className="task-kebab-project-opt snooze-row" data-snooze={p.id}
           onClick={e => { e.stopPropagation(); onSnooze(p.date); }}>
@@ -93,7 +93,7 @@ export function SnoozeDateFlyout({ point, anchorRef, date, onPick, onClose }: {
   onPick: (date: string | null) => void; onClose: () => void;
 }) {
   return <PointFlyout point={point} anchorRef={anchorRef} label="Snooze until a date" className="snooze-date-flyout" onClose={onClose}>
-    <div className="snooze-rows-head">Snooze until</div>
+    <div className="snooze-rows-head wn-menu-heading">Snooze until</div>
     <DatePicker inline withTime date={date} minDate={todayIso()} onChange={d => { onPick(d); onClose(); }} />
   </PointFlyout>;
 }

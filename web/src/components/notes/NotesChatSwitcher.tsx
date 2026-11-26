@@ -90,7 +90,7 @@ export function NotesChatSwitcher({ sessions, agentChats = [], active, onSelect,
       {open && (
         <div className="notes-chat-switcher-menu wn-overlay wn-menu" role="listbox">
           {/* Two labeled groups — the kind of chat is stated, never implied. */}
-          <div className="notes-chat-switcher-group notes-chat-switcher-group-first">Walnut Agent</div>
+          <div className="notes-chat-switcher-group notes-chat-switcher-group-first wn-menu-heading">Walnut Agent</div>
           <button
             role="option"
             aria-selected={active === 'assistant'}
@@ -124,7 +124,7 @@ export function NotesChatSwitcher({ sessions, agentChats = [], active, onSelect,
           ))}
 
           {sessions.length > 0 && (
-            <div className="notes-chat-switcher-group">Claude Code</div>
+            <div className="notes-chat-switcher-group wn-menu-heading">Claude Code</div>
           )}
           {sessions.map((s) => (
             <div

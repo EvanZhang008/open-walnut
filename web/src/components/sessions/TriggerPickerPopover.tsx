@@ -168,7 +168,7 @@ function TriggerList({ loaded, onRetry, onPick, onDescribe, onIdea }: {
   return (
     <>
       <section className="trigger-picker-section" aria-label="From your plugins">
-        <h3 className="trigger-picker-section-title">From your plugins</h3>
+        <h3 className="trigger-picker-section-title wn-menu-heading">From your plugins</h3>
         {loaded.state === 'loading' && <LoadingState size="row" role="presentation" title="Looking for plugin triggers…" />}
         {loaded.state === 'error' && (
           <UnavailableState size="row" role="presentation" title="Could not list plugin triggers" detail={loaded.message} onRetry={onRetry} retryLabel="Try again" />
@@ -187,7 +187,7 @@ function TriggerList({ loaded, onRetry, onPick, onDescribe, onIdea }: {
         ))}
       </section>
       <section className="trigger-picker-section" aria-label="Describe it">
-        <h3 className="trigger-picker-section-title">Anything else</h3>
+        <h3 className="trigger-picker-section-title wn-menu-heading">Anything else</h3>
         <button type="button" className="trigger-picker-row" data-describe="words" onClick={onDescribe}>
           <span className="trigger-picker-row-plugin" aria-hidden>AI</span>
           <span className="trigger-picker-row-text">

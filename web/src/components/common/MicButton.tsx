@@ -603,7 +603,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, onTake, controlRef,
       {dropdownOpen && (
         <MicPopover anchor={wrapperRef} owner={popupOwner} className="mic-retry-dropdown" onClose={() => setDropdownOpen(false)}>
           {/* Model retry */}
-          <div className="mic-retry-header">Retry with model</div>
+          <div className="mic-retry-header wn-menu-heading">Retry with model</div>
           {modelsLoading && <LoadingState size="row" title="Loading models…" />}
           {downloadedModels.map(m => {
             const name = MODEL_CATALOG.find(c => c.filename === m.name)?.name ?? m.name;
@@ -620,7 +620,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, onTake, controlRef,
 
           {/* Vocabulary */}
           <div className="mic-retry-divider" />
-          <div className="mic-retry-header">Vocabulary</div>
+          <div className="mic-retry-header wn-menu-heading">Vocabulary</div>
           {vocabWords.length > 0 && (
             <div className="mic-vocab-tags">
               {vocabWords.map(w => (
@@ -658,7 +658,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, onTake, controlRef,
           {recordings.length > 0 && (
             <>
               <div className="mic-retry-divider" />
-              <div className="mic-retry-header">Recent voice input</div>
+              <div className="mic-retry-header wn-menu-heading">Recent voice input</div>
               {recordings.map(rec => {
                 const time = rec.timestamp ? new Date(rec.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
                 const text = rec.result?.text ?? '';

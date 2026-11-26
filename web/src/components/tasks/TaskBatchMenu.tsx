@@ -128,7 +128,7 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
           style={menuPlacementStyle(menuPos)}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div className="task-kebab-section-label">
+          <div className="task-kebab-section-label wn-menu-heading">
             {count} task{count === 1 ? '' : 's'} selected
           </div>
 

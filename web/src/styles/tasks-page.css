@@ -400,12 +400,7 @@
   min-width: 180px;
   overflow-y: auto;
 }
-.tp-cols-head {
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+html .tp-cols-head.wn-menu-heading {
   padding: 6px 10px 4px;
 }
 .tp-cols-opt {

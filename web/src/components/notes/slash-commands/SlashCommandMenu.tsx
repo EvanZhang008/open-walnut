@@ -134,7 +134,7 @@ export function SlashCommandMenu({ query, atBlockStart, onSelect, onClose }: Sla
     <div className="notes-slash-panel wn-menu" ref={listRef}>
       {filtered.map((cmd, i) => {
         const header = showGroups && cmd.group !== lastGroup
-          ? <div key={`g-${cmd.group}`} className="notes-slash-group">{GROUP_LABELS[cmd.group]}</div>
+          ? <div key={`g-${cmd.group}`} className="notes-slash-group wn-menu-heading">{GROUP_LABELS[cmd.group]}</div>
           : null;
         lastGroup = cmd.group;
         return (

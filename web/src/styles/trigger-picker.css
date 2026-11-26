@@ -75,13 +75,9 @@
   border-top: 1px solid var(--border);
 }
 
-.trigger-picker-section-title {
+html .trigger-picker-section-title.wn-menu-heading {
   margin: 4px 6px 4px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--fg-muted);
+  padding: 0;
 }
 
 .trigger-picker-note {

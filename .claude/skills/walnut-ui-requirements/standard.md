@@ -393,7 +393,10 @@ menu, a long right-click menu) has one shape (`web/src/utils/menu-shape.ts`):
 2. **The rest is named**: collapsed groups (`KebabGroup`: icon, name, a short hint of what it holds,
    the chevron) or a section under a heading (`MenuHeading`, `.wn-menu-heading`: sentence case,
    11 px weight 600, `--fg-secondary`, the one heading look of every menu; a ContextMenu `section`
-   row draws it too). A heading names its section, so there is no rule right above it. A menu that
+   row draws it too). Every menu's section name is it, small menus and pickers too, never a class
+   of its own in capitals (2026-11-26: the mode and model pickers said PERMISSION MODE, MODEL and
+   EFFORT; `tests/web/menu-heading-look.test.ts`). A heading names its section, so there is no rule
+   right above it. A menu that
    acts on two objects heads each one's section with its name (the session menu: Session, Task).
 3. **Rare rows sink** into the group they belong to (Move to Background and Add to topic in Move &
    transfer), and the group's hint names them in two to four words, since it sets the menu's width.
@@ -404,7 +407,10 @@ menu, a long right-click menu) has one shape (`web/src/utils/menu-shape.ts`):
    `DisclosureChevron` at its right edge; no drawn arrow glyph (▶︎, ▸, ▾, ›). A setting row's value
    chip (`ContextMenuItem.value`) keeps its caret (a `MenuCaret`).
 7. Rows are the one menu row (6 px 12 px, icon and words 8 px apart, 12 px words, the accent tint on
-   hover). **Every row is one drawn icon and one line of words** (the user, 2026-11-23, on the +
+   hover). Its height and words size come from the family (`--overlay-row-height`,
+   `--overlay-row-font`), the same in every menu: 30 px, and 44 px for a finger on a phone, never a
+   menu's own (2026-11-26: at 390 wide the ⋮ menus' rows were 44 px and the others 30 px, and the
+   Display, mode and model menus drew 13 px words; `tests/web/menu-row-family.test.ts`). **Every row is one drawn icon and one line of words** (the user, 2026-11-23, on the +
    menu's boxed @, / and ···: one icon, one text, no box): the icon slot holds an icon from
    `Icons.tsx` ("Menu row icons"), never a typed character (@, /, arrows, quote marks, #) and never
    an outlined cap. No action row goes without its icon either (2026-11-26: the phone's session

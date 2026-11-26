@@ -279,13 +279,8 @@
 
 .qb-picker-empty { padding: 16px; color: var(--qb-muted); font-size: var(--font-size-md); }
 
-.qb-section-label {
+html .qb-section-label.wn-menu-heading {
   padding: 8px 10px 4px;
-  font-size: var(--font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--qb-muted);
 }
 
 .qb-person {

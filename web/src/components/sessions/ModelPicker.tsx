@@ -1084,7 +1084,7 @@ export function ModelPicker({
       <div className="model-picker-columns">
         {onAcpSwitch && acpGrouped && (
           <div className="model-picker-col model-picker-col-groups" role="listbox" aria-label="Provider">
-            <div className="model-picker-col-title">Provider</div>
+            <div className="model-picker-col-title wn-menu-heading">Provider</div>
             {acpGroups.map((group) => {
               const isSelected = group.id === acpSelectedGroup?.id;
               const holdsActive = group.id === acpActiveGroupId && !!acpActive;
@@ -1106,7 +1106,7 @@ export function ModelPicker({
           </div>
         )}
         <div className="model-picker-col model-picker-col-models" role="listbox" aria-label="Model">
-          <div className="model-picker-col-title">Model</div>
+          <div className="model-picker-col-title wn-menu-heading">Model</div>
           {onAcpSwitch ? (
             <>
               {acpFilterable && !acpLoading && (
@@ -1194,7 +1194,7 @@ export function ModelPicker({
         </div>
         {onAcpSwitch && acpHasEfforts && (
           <div className="model-picker-col model-picker-col-effort" role="listbox" aria-label="Reasoning effort">
-            <div className="model-picker-col-title">Effort</div>
+            <div className="model-picker-col-title wn-menu-heading">Effort</div>
             {acpEffortLevels.map((e) => {
               const variant = acpActiveFamily?.byEffort.get(e.id);
               const disabled = !variant;
@@ -1219,7 +1219,7 @@ export function ModelPicker({
         )}
         {acpControlEfforts && (
           <div className="model-picker-col model-picker-col-effort" role="listbox" aria-label="Reasoning effort">
-            <div className="model-picker-col-title">Effort</div>
+            <div className="model-picker-col-title wn-menu-heading">Effort</div>
             {acpControlEfforts.options.map((option) => {
               const active = option.value === acpControlEfforts.currentValue;
               return (
@@ -1285,7 +1285,7 @@ export function ModelPicker({
           settings decide at spawn). */}
       <div className="model-picker-columns">
         <div className="model-picker-col model-picker-col-models" role="listbox" aria-label="Model">
-          <div className="model-picker-col-title">Model</div>
+          <div className="model-picker-col-title wn-menu-heading">Model</div>
           {claudeModelRows.map((row) => {
             if (row.kind === 'current') {
               return (
@@ -1343,7 +1343,7 @@ export function ModelPicker({
         </div>
         {onEffortSwitch && (
           <div className="model-picker-col model-picker-col-effort" role="listbox" aria-label="Reasoning effort">
-            <div className="model-picker-col-title">Effort</div>
+            <div className="model-picker-col-title wn-menu-heading">Effort</div>
             {onEffortDefault && (
               <PickerRow
                 picked={currentEffort === undefined}

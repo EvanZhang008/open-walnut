@@ -66,11 +66,15 @@ button.quick-sort-card-title:hover { color: var(--accent); }
 /* Snooze rows in a flyout (the board's Move menu, a Sort card's Snooze). */
 .task-kebab-flyout-footer { display: flex; flex-direction: column; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
 .snooze-rows { display: flex; flex-direction: column; }
-.snooze-rows-head { padding: 6px 10px 2px 28px; color: var(--fg-muted); font-size: var(--font-size-xs); font-weight: 600; letter-spacing: .03em; text-transform: uppercase; }
+html .snooze-rows-head.wn-menu-heading {
+  padding: 6px 10px 2px 28px;
+}
 .snooze-row-hint { margin-left: auto; padding-left: 12px; flex: none; color: var(--fg-muted); font-size: var(--font-size-xs); white-space: nowrap; }
 .board-move-done { margin-top: 4px; border-top: 1px solid var(--border); padding-top: 7px; color: var(--success); }
 .snooze-date-flyout { min-width: 260px; max-width: 320px; padding: 4px 8px 8px; }
-.snooze-date-flyout .snooze-rows-head { padding-left: 4px; }
+html .snooze-date-flyout .snooze-rows-head.wn-menu-heading {
+  padding-left: 4px;
+}
 @media (max-width: 700px) {
   .quick-sort { padding: 10px; }
   .quick-sort-cards { grid-template-columns: 1fr; }

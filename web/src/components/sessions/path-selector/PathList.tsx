@@ -175,7 +175,7 @@ export const PathList = forwardRef<HTMLDivElement, Props>(function PathList(
 
       {sections.map(section => (
         <div className="sps-section" key={section.id} data-section-id={section.id}>
-          <div className="sps-section-label">{section.label}</div>
+          <div className="sps-section-label wn-menu-heading">{section.label}</div>
           {section.items.map(item => {
             flatIdx++;
             const idx = flatIdx;

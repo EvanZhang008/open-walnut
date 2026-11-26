@@ -39,6 +39,9 @@
   --overlay-row-radius: var(--radius-sm);
   /* A menu's one-line row: 6 px above and below an 18 px line. */
   --overlay-row-height: 30px;
+  /* A row's words: one size in every menu (standard.md, Big menus: 12 px words; 2026-11-26, the UI
+     audit: the Display, mode and model menus drew theirs at 13 px beside menus at 12 px). */
+  --overlay-row-font: var(--font-size-sm);
   --overlay-row-pad-y: 6px;
   --overlay-row-pad-x: 12px;
   --dialog-radius: var(--radius-lg);
@@ -141,6 +144,7 @@ html :is(.wn-menu, .wn-overlay) :is(
 html .wn-menu:is(.notes-context-menu, .cal-ctx-menu) > button {
   min-height: var(--overlay-row-height);
   height: auto;
+  font-size: var(--overlay-row-font);
   padding-top: var(--overlay-row-pad-y);
   padding-bottom: var(--overlay-row-pad-y);
   line-height: 18px;
@@ -158,6 +162,13 @@ html :is(.wn-menu, .wn-overlay) :is(
 html .wn-menu:is(.notes-context-menu, .cal-ctx-menu) > button {
   padding-left: var(--overlay-row-pad-x);
   padding-right: var(--overlay-row-pad-x);
+}
+
+/* On a phone every menu's row is finger-sized, the same in each menu (2026-11-26, the UI audit at
+   390 wide: the ⋮ menus drew 44 px rows, the Display, tab bar, + and mode menus 30 px). The words
+   stay their one size; only the row's height grows. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  :root { --overlay-row-height: 44px; }
 }
 
 html .wn-dialog {

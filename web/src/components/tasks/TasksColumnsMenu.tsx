@@ -60,7 +60,7 @@ export function TasksColumnsMenu({ columns, scope, onChange }: TasksColumnsMenuP
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div className="tp-cols-head">Columns</div>
+          <div className="tp-cols-head wn-menu-heading">Columns</div>
           {offers.map(({ def, checked, disabledReason }) => (
             <label
               key={def.id}

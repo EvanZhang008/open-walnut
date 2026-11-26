@@ -100,11 +100,11 @@
    44px from phone-session.css (.task-kebab-menu .task-kebab-tier-btn). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* Icon-sized More (the caret and the dot), so the default Focus and Satellite chips, 44px
-     tall at 14px, both fit whole: 340 - 24 padding - 16 gaps - ~33 label - 44 More leaves ~223
-     for ~198 of chips. The button keeps its aria-label and title. */
-  .task-pin-more { min-height: 44px; min-width: 44px; padding: 0 6px; justify-content: center; font-size: var(--font-size-md); }
+     tall, both fit whole: 340 - 24 padding - 16 gaps - ~33 label - 44 More leaves ~223 for the
+     chips. The button keeps its aria-label and title. Its words, and the flyout's rows, are the
+     menu's one size; the flyout's rows are finger-sized by --overlay-row-height (overlay-family.css). */
+  .task-pin-more { min-height: 44px; min-width: 44px; padding: 0 6px; justify-content: center; }
   .task-pin-more-text { display: none; }
-  .task-pin-opt { min-height: 44px; font-size: 14px; }
   .task-pin-shortcuts { min-width: 340px; }
   .task-pin-strip .task-kebab-tier-btn { max-width: 160px; }
   /* phone-session.css wraps .task-kebab-tier-options on a phone; the strip stays one line. */
