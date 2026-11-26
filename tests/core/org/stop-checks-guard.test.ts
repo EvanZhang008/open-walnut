@@ -20,7 +20,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
-import { CARD_STOP_CALLS, CARD_STOP_LINES, cardStopEnd, cardStopReason } from '../../../src/core/org/reply-card-stop.js'
+import { CARD_STOP_CALLS, CARD_STOP_LINES, CARD_STOP_NO_HOLD, cardStopEnd, cardStopReason } from '../../../src/core/org/reply-card-stop.js'
 import { answeredBeforeHimReason, staleSummaryReason } from '../../../src/core/org/thread-summary-stop.js'
 import type { OrgThread } from '../../../src/core/org/threads-model.js'
 
@@ -153,6 +153,7 @@ describe('the card line check sends back only lines to write', () => {
     const texts: Record<keyof typeof CARD_STOP_LINES, string> = {
       unread: CARD_STOP_LINES.unread(`${t.id}: state is working, waiting, answered, done, needs, not "finished"`),
       gone: CARD_STOP_LINES.gone(`${t.id} is closed: a new ask about it is a new thread, which Walnut files and names to you`),
+      unnamed: CARD_STOP_LINES.unnamed('th-placeholder'),
       merge: CARD_STOP_LINES.merge(t.id, 'A thread cannot be merged into itself'),
       needs: CARD_STOP_LINES.needs(t.id, 'A question reaches the user only when it is theirs: name its user_kind'),
       missing: CARD_STOP_LINES.missing(t),
@@ -164,7 +165,11 @@ describe('the card line check sends back only lines to write', () => {
     expect(texts.missing).toContain(`<walnut-card thread="${t.id}" state="answered"/>`)
   })
 
-  it('a line that names no open thread holds no turn by itself: there is nothing to write in its place', () => {
-    expect(src).toContain("open.some((x) => x.kind !== 'gone') ? open : []")
+  it('a line that names no open thread, or no thread at all, holds no turn by itself: there is nothing to write in its place', () => {
+    expect(src).toContain('open.some((x) => !CARD_STOP_NO_HOLD.includes(x.kind)) ? open : []')
+    expect([...CARD_STOP_NO_HOLD].sort()).toEqual(['gone', 'unnamed'])
+    // Each of them says so: no line is asked for in its place.
+    const said: Record<string, string> = { gone: CARD_STOP_LINES.gone('th-0000000000a1 is closed'), unnamed: CARD_STOP_LINES.unnamed('none') }
+    for (const kind of CARD_STOP_NO_HOLD) expect(said[kind], kind).toMatch(/That line is not written; give no line for it\.$/)
   })
 })

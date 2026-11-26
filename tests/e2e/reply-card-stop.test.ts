@@ -216,6 +216,24 @@ describe('the card lines at a turn\'s end', () => {
     resetHeldCards()
   })
 
+  // 2026-11-26, real use: sessions with no thread id at hand wrote thread="none" or a placeholder,
+  // and were held for a line they had no id to write.
+  it('a line that names no thread at all holds no turn by itself; it is named beside a line that is missing', async () => {
+    fresh()
+    const alone = await stop(`x\n${cardTagLine(FENCE, 'working')}\n<walnut-card thread="none" state="answered"/>\n<walnut-card thread="th-placeholder" state="done"/>`)
+    expect(JSON.stringify(alone)).not.toContain('card line')
+    resetHeldCards()
+    fresh()
+    const held = await stop('x\n<walnut-card thread="none" state="answered"/>')
+    expect(held.decision).toBe('block')
+    expect(held.reason).toContain('- a card line named no thread (thread="none"): a line is only for a thread whose id you were given, in the note on his message or here. That line is not written; give no line for it.')
+    expect(held.reason).toContain(`- your reply holds no card line for thread ${FENCE} `)
+    expect(held.reason).not.toContain('was not read')
+    // Nothing was written from it.
+    expect((await threadOf(FENCE)).state).toBe((fixture().find((t) => t.id === FENCE)!).state)
+    resetHeldCards()
+  })
+
   it('a message of his still waiting in the session\'s queue owes no line yet', async () => {
     fresh()
     const record = await getSessionByClaudeId(SID)

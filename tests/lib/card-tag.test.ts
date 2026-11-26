@@ -23,7 +23,7 @@ describe('the forms a card line takes', () => {
 
   it.each(['working', 'waiting', 'answered', 'done'] as const)('a state alone: %s', (state) => {
     const read = readCardTags(`${WORDS}\n\n${cardTagLine(FENCE, state)}`)
-    expect(read).toEqual({ text: WORDS, cards: [{ thread: FENCE, state }], errors: [], unread: [], tagged: true })
+    expect(read).toEqual({ text: WORDS, cards: [{ thread: FENCE, state }], errors: [], unread: [], unnamed: [], tagged: true })
   })
 
   it('a title, a summary and a reaction ride the line; entities and spaces read as written', () => {
@@ -83,9 +83,7 @@ describe('a wrong line is not read, and says why in one line', () => {
     ['an unknown attribute', `<walnut-card thread="${FENCE}" state="answered" colour="red"/>`, /"colour" is no attribute/],
     ['a state that is none', `<walnut-card thread="${FENCE}" state="finished"/>`, /state is working, waiting, answered, done, needs, not "finished"/],
     ['no state', `<walnut-card thread="${FENCE}"/>`, /state is .* not ""/],
-    ['an id that is not th- and hex', '<walnut-card thread="fence" state="answered"/>', /thread is a thread id .* not "fence"/],
-    ['a ref of the status question in place of an id', '<walnut-card thread="t1" state="answered"/>', /not "t1"/],
-    ['no thread', '<walnut-card state="answered"/>', /thread is a thread id/],
+    ['a decision with no thread id: it would be lost', '<walnut-card thread="none" state="needs" ask="Larch or oak?" options="Larch; Oak" kind="user_own" why="his fence"/>', /a decision line names its thread by id .* not "none": .* thread_create/],
     ['an attribute named twice', `<walnut-card thread="${FENCE}" state="working" state="done"/>`, /names state once/],
     ['a tag left open', `<walnut-card thread="${FENCE}" state="answered">`, /one self-closing tag/],
     ['a tag with a closing tag', `<walnut-card thread="${FENCE}" state="answered"></walnut-card>`, /one self-closing tag/],
@@ -99,6 +97,25 @@ describe('a wrong line is not read, and says why in one line', () => {
     ['a merge into no thread', `<walnut-card thread="${FENCE}" merge="the fence one"/>`, /merge names another open thread/],
   ])('%s', (_label, line, reason) => {
     expect(reasonOf(line)).toMatch(reason)
+  })
+
+  // 2026-11-26, the first hours of real use: 6 of 17 replies with a line named no thread, in turns
+  // no message of his started (no note gave the session an id).
+  it.each([
+    ['the word none', '<walnut-card thread="none" state="answered"/>', 'none'],
+    ['a placeholder', '<walnut-card thread="th-placeholder" state="working" summary="The report is updated."/>', 'th-placeholder'],
+    ['a made-up id', '<walnut-card thread="th-p572934668" state="done"/>', 'th-p572934668'],
+    ['the form copied as it is', '<walnut-card thread="th-..." state="answered"/>', 'th-...'],
+    ['a ref of the status question in place of an id', '<walnut-card thread="t1" state="answered"/>', 't1'],
+    ['no thread at all', '<walnut-card state="answered"/>', ''],
+  ])('a state line with no thread id names no thread, and is no error: %s', (_label, line, value) => {
+    const read = readCardTags(`${WORDS}\n${line}\n${cardTagLine(SEEDS, 'working')}`)
+    expect(read.unnamed).toEqual([value])
+    expect(read.errors).toEqual([])
+    expect(read.unread).toEqual([])
+    // The other lines still read, and the line leaves his screen like any card line.
+    expect(read.cards).toEqual([{ thread: SEEDS, state: 'working' }])
+    expect(read.text).toBe(WORDS)
   })
 
   it('a thread named twice gives no card for it and one reason; the others still read', () => {
@@ -202,7 +219,7 @@ describe('where a card line counts', () => {
       // A fence still open at the reply's end: what follows it is code.
       `Here:\n\`\`\`\ncode\n${cardTagLine(FENCE)}`,
     ]) {
-      expect(readCardTags(text), text).toEqual({ text, cards: [], errors: [], unread: [], tagged: false })
+      expect(readCardTags(text), text).toEqual({ text, cards: [], errors: [], unread: [], unnamed: [], tagged: false })
       expect(stripInternalLines(text), text).toBe(text)
     }
   })

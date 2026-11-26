@@ -27,8 +27,9 @@
  * are ..."). Every text is in CARD_STOP_LINES and names the line to write, never a thread_update
  * for what a line can say, and the reason ends by asking for the lines and no other words
  * (cardStopEnd): whatever else the session adds after a hook is a chat message to him. A line that
- * names no open thread has nothing to write in its place, so it never holds a turn by itself; it is
- * named beside another thing that does. This is the only check of the Stop hook that asks a session
+ * names no open thread, or no thread at all (a placeholder where the id belongs), has nothing to
+ * write in its place, so it never holds a turn by itself (CARD_STOP_NO_HOLD); it is named beside
+ * another thing that does. This is the only check of the Stop hook that asks a session
  * that writes card lines about its threads (thread-summary-stop.ts is off for it);
  * tests/core/org/stop-checks-guard.test.ts lists every check and every text.
  */
@@ -95,6 +96,8 @@ export const CARD_STOP_LINES = {
   unread: (error: string) => `a card line of your reply was not read: ${period(error)} Its form: ${CARD_TAG_FORM}`,
   /** A line that names no open thread of the task (reply-card.ts notOpenReason). */
   gone: (why: string) => `${clause(why)}. That line is not written; give no line for it.`,
+  /** A state line with no thread id where one belongs (lib/card-tag.ts `unnamed`): a placeholder, "none", a made-up id. */
+  unnamed: (value: string) => `a card line named no thread (thread=${JSON.stringify(value)}): a line is only for a thread whose id you were given, in the note on his message or here. That line is not written; give no line for it.`,
   merge: (thread: string, why: string) => `${thread} was not merged: ${period(why)} Give it a line with its own state, or merge it into a thread that takes it.`,
   needs: (thread: string, why: string) => `the decision on ${thread} was not put to him. ${period(why)}${/\buser_kind\b/.test(why) ? ' In a card line user_kind is kind="..." and user_kind_why is why="...".' : ''} Its card line again, with that fixed.`,
   /** A decision the store would refuse because he wrote on the thread since it last waited, or it asked before (reply-card-decision.ts CardLineLacks): every attribute it lacks. */
@@ -105,6 +108,9 @@ export const CARD_STOP_LINES = {
   missing: (t: Pick<OrgThread, 'id' | 'title'>) => `your reply holds no card line for thread ${t.id} ${JSON.stringify(t.title)}, where his message went: ${cardTagLine(t.id)}, with its state (working, waiting, answered or done).`,
 } as const;
 export type CardStopKind = keyof typeof CARD_STOP_LINES;
+
+/** The kinds with nothing to write in their place: named beside another thing, never holding a turn by themselves. */
+export const CARD_STOP_NO_HOLD: readonly CardStopKind[] = ['gone', 'unnamed'];
 
 /** The kinds that ask for a call, not a line: what a line cannot carry (the end of a decision he was asked). */
 export const CARD_STOP_CALLS: readonly CardStopKind[] = ['waits'];
@@ -141,6 +147,7 @@ async function check(sid: string, tail: string, nowMs: number, turn: { gaveUp: b
   const file = await readThreads(taskId);
   noteUnreadDecisions(taskId, file, read.unread);
   const things: Array<{ key: string; kind: CardStopKind; line: string; thread?: string }> = read.errors.map((e) => ({ key: `unread:${e}`, kind: 'unread', line: CARD_STOP_LINES.unread(e) }));
+  for (const value of new Set(read.unnamed)) things.push({ key: `unnamed:${value}`, kind: 'unnamed', line: CARD_STOP_LINES.unnamed(value) });
   const good: CardTag[] = [];
   const asked: string[] = [];
   const named = new Set<string>();
@@ -188,8 +195,8 @@ async function check(sid: string, tail: string, nowMs: number, turn: { gaveUp: b
   // Nobody waits for this answer any more, so nothing goes back: nothing counts as named.
   if (turn.gaveUp) return null;
   const open = things.filter((x) => (nudged.get(`${taskId}:${x.key}`) ?? 0) < MAX_CARD_NUDGES).slice(0, 8);
-  // A line for no open thread has nothing to write in its place: it holds no turn by itself.
-  const due = open.some((x) => x.kind !== 'gone') ? open : [];
+  // A line for no open thread, or for no thread at all, has nothing to write in its place: it holds no turn by itself.
+  const due = open.some((x) => !CARD_STOP_NO_HOLD.includes(x.kind)) ? open : [];
   for (const x of due) nudged.set(`${taskId}:${x.key}`, (nudged.get(`${taskId}:${x.key}`) ?? 0) + 1);
   // A long-running server: forget the oldest names.
   while (nudged.size > 2000) nudged.delete(nudged.keys().next().value as string);

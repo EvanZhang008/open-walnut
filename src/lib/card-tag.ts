@@ -97,6 +97,14 @@ export interface CardRead {
   errors: string[];
   /** The threads of the lines not read (one unreadable, or one of two naming a thread), where the line names one. */
   unread: CardUnread[];
+  /**
+   * What stood where a thread id belongs, in the state lines that named no thread ("none", a
+   * placeholder, a made-up id): such a line has no thread to write and is no error to send back
+   * (2026-11-26, the first hours of real use: 6 of 17 replies with a line named none, all in turns
+   * no message of his started, where no note gave the session an id). A decision without a thread
+   * id is still an error: it would be lost.
+   */
+  unnamed: string[];
   /** The reply held a card line, read or not. */
   tagged: boolean;
 }
@@ -123,7 +131,7 @@ function unreadOf(raw: string): CardUnread | null {
 }
 
 /** One card line as its tag, or why it is none. Pure. */
-function parseCardLine(raw: string): { card: CardTag } | { error: string } {
+function parseCardLine(raw: string): { card: CardTag } | { error: string; unnamed?: string } {
   const line = raw.trim();
   if (!line.endsWith('/>')) return { error: `a card line is one self-closing tag, written ${CARD_TAG_FORM}` };
   const body = line.slice(HEAD.length, -2);
@@ -142,7 +150,11 @@ function parseCardLine(raw: string): { card: CardTag } | { error: string } {
   const rest = body.slice(at).trim();
   if (rest) return { error: `the card line could not be read from "${rest.slice(0, 40)}": each attribute is name="value", and a quote inside a value is &quot;` };
   const thread = got.get('thread') ?? '';
-  if (!THREAD_ID.test(thread)) return { error: `thread is a thread id (th- and hex digits), not "${thread}"` };
+  if (!THREAD_ID.test(thread)) {
+    // A decision must reach him: without a thread of his it is a thread of its own, which a line cannot open.
+    if (got.get('state') === 'needs') return { error: `a decision line names its thread by id (th- and hex digits), not "${thread}": with no thread of his for it, open one with thread_create` };
+    return { error: `thread is a thread id (th- and hex digits), not "${thread}"`, unnamed: thread };
+  }
   const merge = got.get('merge');
   if (merge !== undefined) {
     if (!THREAD_ID.test(merge) || merge === thread) return { error: `${thread}: merge names another open thread (th-...), not "${merge}"` };
@@ -199,10 +211,10 @@ function withoutCards(lines: readonly string[], card: readonly boolean[]): strin
  */
 export function readCardTags(text: string | undefined): CardRead {
   const src = text ?? '';
-  if (!src.includes(HEAD)) return { text: src, cards: [], errors: [], unread: [], tagged: false };
+  if (!src.includes(HEAD)) return { text: src, cards: [], errors: [], unread: [], unnamed: [], tagged: false };
   const lines = src.split('\n');
   const card = cardLinesOf(lines);
-  if (!card.includes(true)) return { text: src, cards: [], errors: [], unread: [], tagged: false };
+  if (!card.includes(true)) return { text: src, cards: [], errors: [], unread: [], unnamed: [], tagged: false };
   const tail: number[] = [];
   let others = 0;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -212,10 +224,12 @@ export function readCardTags(text: string | undefined): CardRead {
   }
   const errors: string[] = [];
   const unread: CardUnread[] = [];
+  const unnamed: string[] = [];
   const read: CardTag[] = [];
   for (const i of tail) {
     const r = parseCardLine(lines[i]);
     if ('card' in r) { read.push(r.card); continue; }
+    if (r.unnamed !== undefined) { unnamed.push(r.unnamed); continue; }
     errors.push(r.error);
     const u = unreadOf(lines[i]);
     if (u) unread.push(u);
@@ -243,7 +257,7 @@ export function readCardTags(text: string | undefined): CardRead {
       errors.push(`the card line for ${r.card.thread} is not among the reply's last lines: move it to the end`);
     }
   });
-  return { text: withoutCards(lines, card), cards, errors, unread, tagged: true };
+  return { text: withoutCards(lines, card), cards, errors, unread, unnamed, tagged: true };
 }
 
 /** Which of these lines are card lines: a line of its own outside a code fence (the one rule, for a reader that goes line by line too: the Brief). Pure. */

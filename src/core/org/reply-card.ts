@@ -245,7 +245,9 @@ export async function applyReplyCards(input: { task: Task; sessionId: string; re
     if (read.unread.length) noteUnreadDecisions(task.id, await store.readThreads(task.id), read.unread, new Set(cards.map((c) => c.thread)));
     if (!cards.length) {
       if (!input.wordless) noteCarded(task.id, []);
-      if (read.errors.length) log.task.info('reply card lines: not read', { taskId: task.id, sessionId, errors: read.errors });
+      if (read.errors.length) log.task.info('reply card lines: not read', { taskId: task.id, sessionId, errors: read.errors, unnamed: read.unnamed });
+      // A line with no thread id has nothing to write: the status question asks about the open threads, as with no line.
+      else if (read.unnamed.length) log.task.info('reply card lines: no thread named', { taskId: task.id, sessionId, unnamed: read.unnamed });
       return none;
     }
     const by = `task:${task.id}` as const;
@@ -291,7 +293,7 @@ export async function applyReplyCards(input: { task: Task; sessionId: string; re
     const after = lines.spoke.length ? (await store.readThreads(task.id)).threads : [];
     const named = (id: string) => { const t = after.find((x) => x.id === id); return !!t && !!t.titled && !staleAskTitle(t); };
     noteCarded(task.id, lines.spoke.filter((s) => !asked.has(s.id) && named(s.id)));
-    log.task.info('reply card lines applied', { taskId: task.id, sessionId, lines: cards.length, applied, refused, opened, errors: read.errors });
+    log.task.info('reply card lines applied', { taskId: task.id, sessionId, lines: cards.length, applied, refused, opened, errors: read.errors, unnamed: read.unnamed });
     return { applied, refused, opened };
   } catch (err) {
     log.task.warn('reply card lines: not applied', { taskId: task.id, sessionId, error: err instanceof Error ? err.message : String(err) });

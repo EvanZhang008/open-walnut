@@ -198,7 +198,14 @@ line of its own outside a code block with at most 3 other lines after it; a quot
   word, and the card stayed Needs you). Working or waiting on such a thread changes nothing he
   sees and stays quiet. A line that names a thread that is
   not an open thread of the task has nothing to write in its place, so it holds no turn by itself
-  and is named beside another thing that does. Each thing is named at most twice. A message this turn read is one filed after the
+  and is named beside another thing that does. So does a state line with no thread id where one
+  belongs (`thread="none"`, a placeholder, a made-up id: `unnamed` in `lib/card-tag.ts`,
+  `CARD_STOP_NO_HOLD`): the session was given no id in that turn, so there is nothing to send back
+  for; the line leaves his screen like any card line, nothing is written, the turn's end logs
+  `reply card lines: no thread named`, and the status question asks about the open threads as it
+  does with no line. A decision line with no thread id is still sent back (it would be lost): a
+  decision with no thread of his is opened with `thread_create`. The rule in the prompt says the
+  id is the one the note on his message gives, and that no id means no line. Each thing is named at most twice. A message this turn read is one filed after the
   newest of his messages that an earlier turn's end saw (kept in memory per session), so a thread
   the session answered in before is not asked for a line again while nothing keeps the answer under
   that message (an isolated server, a slow read); after a restart, the task's stored report says
@@ -701,6 +708,7 @@ Newest first. State: fixed (with where), open (with who owns it next).
 
 | Date | What the user saw | Cause | State |
 |---|---|---|---|
+| 11-26 | Not seen by him (the first two hours of `threads_reply_tag` in real use): 6 of 17 replies with a card line named no thread (`thread="none"`, a placeholder, a made-up id), from three sessions; no card was wrong, the status question kept them | those turns were started by a notice, a trigger or another task, where no note gives the session a thread id, and the rule did not say a line needs one; each such line was sent back as unreadable, which the session had no id to fix | fixed: a state line with no thread id is read as naming no thread (`unnamed`), holds no turn (`CARD_STOP_NO_HOLD`) and is logged apart; the rule says no id means no line; a decision line with no id is still sent back. Guards: `tests/lib/card-tag.test.ts`, `tests/e2e/reply-card-stop.test.ts`, `tests/core/org/stop-checks-guard.test.ts` |
 | 11-26 | Not seen by him (a trial with a real session, 7 runs of 7): he said "that first one is done, close it"; the thread closed, and his message stayed as a Done card of its own waiting for his Acknowledge | the message was filed right after another one, then taken out as a subject of its own; the close moved nothing | fixed: the message that holds the words a close or a merge quotes moves under that thread (`carryHisWords`); guard in `tests/core/org/thread-close-words.test.ts` |
 | 11-26 | Not seen by him (the same trial, 2 runs): every answered card read Needs you with the session's standing "send me the next one" on it | a task's ask with no thread named went on the thread of his newest message, even when the ask was older than that message | fixed: only what he wrote before the decision began counts for its place, so a thread he opened after it takes it only by name (`askThreadFor` in `thread-report-ask.ts`, the ask's `since`); guard in `tests/core/org/thread-report-ask.test.ts` |
 | 11-26 | Not seen by him (the same trial, `threads_reply_tag` on, 2 runs of 3): a background job had two threads | the reply's card line kept the job's thread, the status question left that thread out and offered a new subject "none of these threads covers" | fixed: the question names the threads the reply already keeps (`spokenPart`); guard in `tests/core/sessions/status-thread-carded.test.ts` |
