@@ -2,7 +2,9 @@
  * Every state two machines and three witnesses can reach in a few steps, with the witnesses' real rules
  * (permit/rules.ts judge) and the runtime's real decision (runtime.ts wantFor and the split records rule):
  *
- *   moves      the leader renews or hands over to the other machine; the handover's writer cancels it; the
+ *   moves      the leader renews or hands over to the other machine; the leader sends a grant once a witness of its
+ *              list holds nothing live (client.ts renew: a witness behind is taken back by a grant, which the others
+ *              take as a renew on its own live record); the handover's writer cancels it; the
  *              handover's target commits on it (a renew); the leader gives the permission back for its restart
  *              (a release: its next process has a new incarnation); the leader changes the witness list (a
  *              members record, its joint step and then its final one, to the same three witnesses: a new
@@ -21,7 +23,8 @@
  *              other): there the switch's target finishing it is the answer both allow.
  *
  * Red controls: the rule as it was before the cancel case leaves a state where nobody can lead again; a loose
- * rule (a grant whenever no record has a majority) takes over.
+ * rule (a grant whenever no record has a majority) takes over; so does the leader's grant to a witness behind sent by
+ * a machine that does not hold a lease (the client sends it only while it may act).
  *
  * The retake after a failed trial (last describe): the old leader's handover stood, the trial failed, the failed
  * machine's witness is out of reach, and the two others hold the handover or an earlier record of the old leader's,
@@ -185,7 +188,10 @@ function freezes(s: State, r: PermitRecord): State {
   return s
 }
 
-function moves(s: State, split: Split, found: Found, listChange: boolean): State[] {
+/** Who sends the grant for a witness behind: the leader only (as the client), anyone (the red control), or nobody (as before). */
+type Repair = 'leader' | 'any' | 'none'
+
+function moves(s: State, split: Split, found: Found, listChange: boolean, repair: Repair): State[] {
   const out: State[] = []
   const n = maxNumber(s) + 1
   for (const m of MACHINES) {
@@ -195,6 +201,10 @@ function moves(s: State, split: Split, found: Found, listChange: boolean): State
       if (d && !sends.some((x) => x.kind === d.kind)) sends.push(d)
     }
     const leads = liveLeases(s).some((l) => l.who === m)
+    // A witness of its list holds nothing live (it answers grantable): the leader's grant for it (client.ts renew).
+    const list = viewOf(s, m).list
+    const behind = s.w.some((x, i) => list.includes(SLOTS[i]!) && !!x.list && !holdsForHolder(x, s.t, P))
+    if (behind && (repair === 'any' || (repair === 'leader' && leads))) sends.push(record(s, 'grant', m, n))
     // The leader hands over to the other machine, once per run.
     if (s.handovers === 0 && leads) sends.push(record(s, 'handover', m, n, { holder: other(m), from: m, to: other(m) }))
     // The writer of a handover takes it back (its stop wait, a cancel by hand).
@@ -215,6 +225,9 @@ function moves(s: State, split: Split, found: Found, listChange: boolean): State
   }
   if (s.ticks < 2) {
     out.push({ ...s, t: s.t + 20_000, ticks: s.ticks + 1 })
+    // Two of these: a witness that missed a renew holds a record that ran out while the leader's lease still lives (a
+    // witness behind, the leader's grant's case).
+    out.push({ ...s, t: s.t + 40_000, ticks: s.ticks + 1 })
     out.push({ ...s, t: s.t + EXPIRE, ticks: s.ticks + 1 })
   }
   return out
@@ -259,7 +272,7 @@ function recover(s0: State, split: Split, found: Found): M | null {
 /** The walk yields to the event loop every so many states, so the test worker's calls home (its RPC) are answered during it. */
 const YIELD_EVERY = 2_000
 
-async function explore(split: Split, depth: number, listChange = false): Promise<{ states: number; held: Set<string>; twoLeaders: State[]; takeovers: string[]; stuck: Array<{ s: State; led: M | null }> }> {
+async function explore(split: Split, depth: number, listChange = false, repair: Repair = 'leader'): Promise<{ states: number; held: Set<string>; twoLeaders: State[]; takeovers: string[]; stuck: Array<{ s: State; led: M | null }> }> {
   const found: Found = { twoLeaders: [], takeovers: [] }
   // w4 is set up and waits to join (no list, no configuration): it takes only the change that brings it in.
   const witness = (joining: boolean): WitnessState => ({ held: null, acceptedAt: 0, list: joining ? null : LIST, joint: null, cfg: joining ? null : 'c', epoch: 0, progress: null, ops: [] })
@@ -274,7 +287,7 @@ async function explore(split: Split, depth: number, listChange = false): Promise
     const next: State[] = []
     for (const [i, s] of frontier.entries()) {
       if (i % YIELD_EVERY === YIELD_EVERY - 1) await new Promise((r) => setImmediate(r))
-      for (const n of moves(s, split, found, listChange)) {
+      for (const n of moves(s, split, found, listChange, repair)) {
         const k = key(n)
         if (seen.has(k)) continue
         seen.add(k)
@@ -331,6 +344,17 @@ describe('the split records rule over every short history of two machines and th
     expect(r.twoLeaders.length).toBe(0)
     expect(r.stuck.length).toBeGreaterThan(0)
     expect(r.stuck.some((x) => x.s.w.some((w) => w.held?.kind === 'cancel'))).toBe(true)
+  }, 300_000)
+
+  it('red control: the grant for a witness behind sent by a machine that holds no lease takes over', async () => {
+    const r = await explore(realSplit, 5, false, 'any')
+    expect(r.takeovers.length).toBeGreaterThan(0)
+  }, 300_000)
+
+  it('the leader\'s grant for a witness behind is reached in the walk (it lands where nothing is live)', async () => {
+    // The move adds states the walk would not reach without it, so the main walks above cover it.
+    const [withIt, without] = await Promise.all([explore(realSplit, 5), explore(realSplit, 5, false, 'none')])
+    expect(withIt.states).toBeGreaterThan(without.states)
   }, 300_000)
 
   it('red control: a grant whenever no record has a majority takes over', async () => {

@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { setUpLocalWitnesses, forgetLocalWitnesses } from '../../../../src/core/leader/switch/local-witnesses.js'
-import { lagRoundsOf, startPermitRuntime, type PermitRuntime, type WitnessHealth } from '../../../../src/core/leader/switch/runtime.js'
+import { lagWindowMsOf, startPermitRuntime, type PermitRuntime, type WitnessHealth } from '../../../../src/core/leader/switch/runtime.js'
 import { leaderPermitAtBoot, LeaderBootRefused } from '../../../../src/core/leader/switch/boot.js'
 import { assertOutwardDoor, leaderPermitActive, outwardDoorsOpen, setOutwardDoorChecker } from '../../../../src/core/leader/switch/doors.js'
 import { openPermitClient, proposeAndWait, readStanding } from '../../../../src/core/leader/switch/permit-ops.js'
@@ -309,23 +309,32 @@ describe('boot decisions', () => {
 })
 
 describe('a witness that takes none of the leader\'s renewals', () => {
-  it('is said once (a log line, a Health item) after a lease of renewals, brought back by a grant once its record ran out, and recovers', async () => {
+  const recorder = () => {
     const told: string[] = []
+    const health: WitnessHealth = { behind: (w, ms, why) => told.push(`behind ${w} ${ms} ${why}`), back: (w) => told.push(`back ${w}`), stale: () => told.push('stale') }
+    return { told, health }
+  }
+
+  it('is said once (a log line, a Health item) after a lease without its answer, brought back by a grant once its record ran out, and recovers', async () => {
+    const { told, health } = recorder()
     const lines: Array<{ msg: string; data?: Record<string, unknown> }> = []
-    const witnessHealth: WitnessHealth = { behind: (w, n, why) => told.push(`behind ${w} ${n} ${why}`), back: (w) => told.push(`back ${w}`) }
-    const r = await start('machine-a', false, { witnessHealth, log: (_l, msg, data) => lines.push({ msg, data }) })
+    const r = await start('machine-a', false, { witnessHealth: health, log: (_l, msg, data) => lines.push({ msg, data }) })
     expect(r.mayAct()).toBe(true)
+    // Its first lead recovers what an earlier process or the old leader left (the items travel with the home).
+    await until('the stale sweep', () => told.includes('stale'))
     const w3 = settings.witnesses[2]!
+    const t0 = Date.now()
     fs.renameSync(w3.dir, `${w3.dir}.off`)
-    const rounds = lagRoundsOf(settings.params)
-    // A lease of renewals with no answer from w3: said once, and once only however long it lasts.
-    await until('w3 reported behind', () => told.length > 0, 15_000)
-    expect(told).toEqual([`behind w3 ${rounds} no answer`])
-    expect(lines.filter((l) => /took none of this leader's last renewals/.test(l.msg)).map((l) => l.data?.witness)).toEqual(['w3'])
+    const window = lagWindowMsOf(settings.params)
+    // A lease without an answer from w3: said once, and once only however long it lasts; not before a lease went by.
+    await until('w3 reported behind', () => told.some((t) => t.startsWith('behind')), 15_000)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(window)
+    expect(told).toEqual(['stale', `behind w3 ${window} no answer`])
+    expect(lines.filter((l) => /took none of this leader's renewals for a lease/.test(l.msg)).map((l) => l.data?.witness)).toEqual(['w3'])
     // Back once A's record there ran out (well past a record's length): it holds nothing live, so it takes no renew,
     // only A's grant (client.ts behind); then it is not behind any more.
     await new Promise((res) => setTimeout(res, 4_000))
-    expect(told).toHaveLength(1)
+    expect(told).toHaveLength(2)
     fs.renameSync(`${w3.dir}.off`, w3.dir)
     await until('w3 back', () => told.includes('back w3'), 15_000)
     expect(r.mayAct()).toBe(true)
@@ -334,7 +343,48 @@ describe('a witness that takes none of the leader\'s renewals', () => {
     const at3 = read.replies.find((x) => x.witness === 'w3')
     expect(at3?.held?.by).toBe('machine-a')
     expect(at3?.grantable).toBe(false)
-    expect(told).toEqual([`behind w3 ${rounds} no answer`, 'back w3'])
+    expect(told).toEqual(['stale', `behind w3 ${window} no answer`, 'back w3'])
+    expect(lines.filter((l) => /takes this leader's renewals again/.test(l.msg)).map((l) => l.data?.witness)).toEqual(['w3'])
+  }, 40_000)
+
+  it('a handover while a witness lags: the old leader writes nothing more of it, and the new leader\'s first lead sweeps what came with the home', async () => {
+    // The review's probe (round 1, M-1): A said w3 behind, handed over, and never said it back, so the item, lead data
+    // that travels with the home, stayed open at B for good.
+    const a = recorder()
+    const r = await start('machine-a', false, { witnessHealth: a.health })
+    const w3 = settings.witnesses[2]!
+    fs.renameSync(w3.dir, `${w3.dir}.off`)
+    await until('w3 reported behind', () => a.told.some((t) => t.startsWith('behind')), 15_000)
+    const h = await r.handover('machine-b')
+    expect(h.ok).toBe(true)
+    const b = recorder()
+    const rb = await start('machine-b', false, { commitHandover: h.record!.number, witnessHealth: b.health })
+    expect(rb.decision.kind).toBe('lead')
+    await until('B\'s stale sweep', () => b.told.includes('stale'))
+    fs.renameSync(`${w3.dir}.off`, w3.dir)
+    await new Promise((res) => setTimeout(res, 6_000))
+    // A: nothing after its handover (no back, no second behind): its home is handed over and stays as it was.
+    expect(a.told).toEqual(['stale', `behind w3 ${lagWindowMsOf(settings.params)} no answer`])
+    // B: its sweep, and w3 brought back without ever being reported (it answered B within a lease).
+    expect(b.told).toEqual(['stale'])
+    const read = await readStanding(openPermitClient('reader', settings.witnesses, settings.params, () => true))
+    expect(read.replies.find((x) => x.witness === 'w3')?.held?.by).toBe('machine-b')
+  }, 40_000)
+
+  it('a restart: the next process sweeps at its first lead, the stopped one writes nothing at its stop', async () => {
+    const a = recorder()
+    const first = await start('machine-a', false, { witnessHealth: a.health })
+    const w3 = settings.witnesses[2]!
+    fs.renameSync(w3.dir, `${w3.dir}.off`)
+    await until('w3 reported behind', () => a.told.some((t) => t.startsWith('behind')), 15_000)
+    await first.stop()
+    expect(a.told).toEqual(['stale', `behind w3 ${lagWindowMsOf(settings.params)} no answer`])
+    forgetLocalWitnesses()
+    const b = recorder()
+    const again = await start('machine-a', false, { witnessHealth: b.health })
+    expect(again.decision.kind).toBe('lead')
+    await until('the next process\'s sweep', () => b.told.includes('stale'))
+    fs.renameSync(`${w3.dir}.off`, w3.dir)
   }, 40_000)
 })
 

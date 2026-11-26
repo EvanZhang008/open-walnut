@@ -99,8 +99,8 @@ export class PermitClient {
   private behind = new Set<string>()
   /** The last proposal was renew()'s grant for the witnesses behind: the next one is a plain renew. */
   private repairedLast = false
-  /** The numbers of this process's renews (and renew()'s grants) sent while it held, newest last: at most 64. */
-  private ownRounds: number[] = []
+  /** This process's renews (and renew()'s grants) sent while it held, with when (its clock), newest last: at most 64. */
+  private ownRounds: Array<{ number: number; at: number }> = []
   /** Per witness: the highest number of a record of this very process it was seen holding. */
   private ownSeen = new Map<string, number>()
   /** Per witness: why it refused this process's last proposal it answered ('no answer' when it never did). */
@@ -256,23 +256,32 @@ export class PermitClient {
     const holding = this.mayAct()
     const repair = !mustRide && this.witnessesBehind().length > 0 && !this.repairedLast && holding
     this.repairedLast = repair
+    // One grant per answer that showed a witness behind: one that is down (no answer since) gets no grant every other
+    // round for ever, and one that refuses it (still holding a live record) is behind again only once it says so.
+    if (repair) this.behind.clear()
     const r = repair
       ? this.propose({ kind: 'grant', holder: this.id, ...(progress ? { progress } : {}) })
       : this.propose({ kind: 'renew', holder: this.id, ...(progress ? { progress } : {}), ...(ops ? { ops } : {}) })
-    if (holding) this.ownRounds = [...this.ownRounds, r.number].slice(-64)
+    if (holding) this.ownRounds = [...this.ownRounds, { number: r.number, at: this.opts.clock.now() }].slice(-64)
     return r
   }
 
   /**
-   * The witnesses of the list that hold none of this process's last `rounds` renewals (the newest one, whose answers
-   * may still be on their way, not counted): the permission stands on the others alone. With the reason each last
-   * gave ('no answer' when it gave none). Empty until this process sent that many while it held.
+   * The witnesses of the list that held none of this process's renewals sent over the last `windowMs` (on its clock;
+   * the newest one, whose answers may still be on their way, not counted): the permission stands on the others alone.
+   * With the reason each last gave ('no answer' when it gave none). Empty until this process sent for that long.
    */
-  witnessesLagging(rounds: number): Array<{ witness: string; why: string }> {
-    const counted = this.ownRounds.slice(0, -1).slice(-rounds)
-    if (rounds < 1 || counted.length < rounds) return []
+  witnessesLagging(windowMs: number): Array<{ witness: string; why: string }> {
+    const counted = this.ownRounds.slice(0, -1)
+    if (!counted.length) return []
+    const now = this.opts.clock.now()
     const members = [...new Set([...this.list, ...(this.joint ?? [])])].sort()
-    return members.filter((w) => counted.every((n) => n > (this.ownSeen.get(w) ?? 0))).map((w) => ({ witness: w, why: this.refusedWhy.get(w) ?? 'no answer' }))
+    return members.filter((w) => {
+      // The first renewal it missed since the last one it was seen holding (the oldest kept, when it held none of them).
+      const seen = this.ownSeen.get(w) ?? 0
+      const firstMissed = counted.find((x) => x.number > seen)
+      return !!firstMissed && now - firstMissed.at >= windowMs
+    }).map((w) => ({ witness: w, why: this.refusedWhy.get(w) ?? 'no answer' }))
   }
 
   /** The witnesses of the list (or of the pair's new list) that last answered holding nothing live for anyone (see `behind`). */

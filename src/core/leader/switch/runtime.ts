@@ -151,22 +151,30 @@ export interface RuntimeOptions {
   witnessHealth?: WitnessHealth
 }
 
-/** A witness that took none of the leader's last renewals for a lease (`behind`), and the same one taking them again. */
+/**
+ * A witness that took none of the leader's renewals for a lease (`behind`); the same one taking them again, or gone from
+ * the list (`back`); and, at this process's first lead, every such item it did not raise itself (`stale`: one left by an
+ * earlier process of this home, or by the old leader whose home this is a copy of: the items are lead data and travel
+ * with the home). A server that stops leading writes nothing for them: a handed-over home stays as it was.
+ */
 export interface WitnessHealth {
-  behind(witness: string, rounds: number, why: string): void
+  behind(witness: string, forMs: number, why: string): void
   back(witness: string): void
+  stale(): void
 }
 
 const healthOfWitnesses: WitnessHealth = {
-  behind: (witness, rounds, why) => { void import('../home-busy-health.js').then((m) => m.noteWitnessBehind(witness, rounds, why)).catch(() => {}) },
+  behind: (witness, forMs, why) => { void import('../home-busy-health.js').then((m) => m.noteWitnessBehind(witness, forMs, why)).catch(() => {}) },
   back: (witness) => { void import('../home-busy-health.js').then((m) => m.noteWitnessBack(witness)).catch(() => {}) },
+  stale: () => { void import('../home-busy-health.js').then((m) => m.recoverStaleWitnessItems()).catch(() => {}) },
 }
 
 /**
- * How many renewals in a row a witness may miss before the leader says so: a lease's worth (validMs / renewEveryMs,
- * 4 with the defaults), so a witness that misses one round or two (a slow link, a restart) is never reported.
+ * How long a witness may take none of the leader's renewals before the leader says so: a lease (validMs), counted on
+ * the clock from the first renewal it missed (not in rounds: a renew that did not stand is tried again 1.5 s later),
+ * so a witness that misses a round or two (a slow link, a restart) is never reported.
  */
-export const lagRoundsOf = (p: PermitParams): number => Math.max(2, Math.ceil(p.validMs / p.renewEveryMs))
+export const lagWindowMsOf = (p: PermitParams): number => p.validMs
 
 type Want = 'renew' | 'grant' | 'none'
 
@@ -467,10 +475,15 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     timer = setTimeout(() => { void serial(round, 'round') }, ms)
     timer.unref?.()
   }
+  const lagWindowMs = lagWindowMsOf(settings.params)
+  const lagging = new Set<string>()
+  const witnessHealth = opts.witnessHealth ?? healthOfWitnesses
   // The first lead of this process (at boot or from waiting) tells onFirstLead, once.
   const ledNow = () => {
     if (everLed) return
     everLed = true
+    // A witness-behind item no process of this one raised is stale: recovered now, raised again if it still holds.
+    witnessHealth.stale()
     if (opts.onFirstLead) setImmediate(() => { try { opts.onFirstLead!() } catch (err) { log('warn', 'leader permit: the first lead\'s step failed', { error: (err as Error).message }) } })
   }
   const lead = (record: PermitRecord, msg: string) => {
@@ -491,30 +504,34 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       schedule(waitingRoundMs(settings.params))
     }
   }
-  // Witnesses that took none of this leader's last renewals for a lease: said once each (a log line and a Health item)
+  // Witnesses that took none of this leader's renewals for a lease: said once each (a log line and a Health item)
   // until one takes them again. The permission stands on the others; one more of them lost and nobody leads.
-  const lagRounds = lagRoundsOf(settings.params)
-  const lagging = new Set<string>()
-  const witnessHealth = opts.witnessHealth ?? healthOfWitnesses
   const checkLag = () => {
-    const now = new Map(h.client.witnessesLagging(lagRounds).map((l) => [l.witness, l.why]))
+    const now = new Map(h.client.witnessesLagging(lagWindowMs).map((l) => [l.witness, l.why]))
     for (const [witness, lagWhy] of now) {
       if (lagging.has(witness)) continue
       lagging.add(witness)
-      log('warn', 'leader permit: a witness took none of this leader\'s last renewals; the permission stands on the other witnesses alone', { witness, rounds: lagRounds, answer: lagWhy })
-      witnessHealth.behind(witness, lagRounds, lagWhy)
+      log('warn', 'leader permit: a witness took none of this leader\'s renewals for a lease; the permission stands on the other witnesses alone', { witness, forMs: lagWindowMs, answer: lagWhy })
+      witnessHealth.behind(witness, lagWindowMs, lagWhy)
     }
+    const members = new Set([...h.client.witnessList(), ...(h.client.jointList() ?? [])])
     for (const witness of [...lagging]) {
       if (now.has(witness)) continue
       lagging.delete(witness)
-      log('info', 'leader permit: the witness takes this leader\'s renewals again', { witness })
+      log('info', members.has(witness) ? 'leader permit: the witness takes this leader\'s renewals again' : 'leader permit: the witness left the witness list', { witness })
       witnessHealth.back(witness)
     }
   }
+  /**
+   * This server no longer leads (a handover, another holder, a lease that ran out, its stop): it forgets which
+   * witnesses lagged and writes nothing (its home may be handed over by now). The next process that leads with this
+   * home's data recovers the items (WitnessHealth.stale).
+   */
+  const forgetLag = () => { lagging.clear() }
   const loop = async () => {
     if (stopped) return
     observe()
-    if (h.client.stoppedReason()) { state = 'lost'; return }
+    if (h.client.stoppedReason()) { state = 'lost'; forgetLag(); return }
     if (state === 'leading') {
       const r = await proposeAndWait(h, (c) => c.renew(), Math.min(5_000, settings.params.renewEveryMs))
       if (stopped || state !== 'leading') return
@@ -525,6 +542,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
         const w = wantFor(read.standing, me, h.client.incarnation(), commitOn())
         if (w.refuse) {
           state = 'lost'
+          forgetLag()
           why = w.why
           note('lost', { why: w.why })
           log('warn', 'leader permit: another machine holds the permission; this server no longer acts as the leader', { why: w.why })
@@ -534,6 +552,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
         if (!h.client.mayAct()) {
           // The lease ran out without a renew standing: ask again as at boot, doors closed.
           state = 'waiting'
+          forgetLag()
           why = 'the permission ran out before a renew stood'
           note('lost', { why })
           schedule(1_000)
@@ -590,6 +609,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
     if (handoverRecord && handoverRecord.to === to) return { ok: true, record: handoverRecord }
     if (state !== 'leading' || !h.client.mayAct()) return { ok: false, why: `this server does not lead now (${state}${why ? `: ${why}` : ''})` }
     state = 'handing-over'
+    forgetLag()
     why = `handing over to ${to}`
     // No new send begins, and those on their way end first (up to a second): their outcomes ride the renew below.
     closing = true
@@ -683,6 +703,7 @@ export async function startPermitRuntime(opts: RuntimeOptions): Promise<PermitRu
       const wasLeading = state === 'leading' && h.client.mayAct()
       stopped = true
       state = 'stopped'
+      forgetLag()
       if (timer) clearTimeout(timer)
       // Closed, not removed: a door reached while the server stops must not pass unchecked.
       setOutwardDoorChecker((_kind, opId) => { throw new PermitNotHeld(opId, 'the server is stopping') }, () => false)

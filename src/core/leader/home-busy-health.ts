@@ -28,6 +28,7 @@ import { healthConditions, hostLabel } from '../notifications/health-items.js'
 import { inProcessDaemonWantedNow } from '../../providers/in-process-daemon.js'
 
 const conditions = healthConditions('home-move')
+const permitConditions = healthConditions('leader-permit')
 
 export type HomeRefusalKind = 'busy' | 'contested' | 'taken'
 
@@ -147,21 +148,24 @@ export function noteSwitchConfirmed(): void {
 /** Tests only. */
 export function _resetHomeBusyHealthForTesting(): void {
   conditions.reset()
+  permitConditions.reset()
 }
 
-const permitConditions = healthConditions('leader-permit')
 
 export function witnessBehindKey(witness: string): string {
-  return `leader-witness-behind:${witness}`
+  return `${WITNESS_BEHIND_PREFIX}${witness}`
 }
 
-export function witnessBehindItem(witness: string, rounds: number, why: string): NewNotification {
+export const WITNESS_BEHIND_PREFIX = 'leader-witness-behind:'
+
+export function witnessBehindItem(witness: string, forMs: number, why: string): NewNotification {
+  const secs = Math.round(forMs / 1000)
   return {
     kind: 'operation-error',
     severity: 'warning',
     title: `Leader witness ${witness} is not taking this leader's renewals`,
-    body: `Witness ${witness} took none of this leader's last ${rounds} renewals, so the leader's permission stands on its other witnesses alone: if one more of them stops answering, no machine may act as the leader until it is back. It recovers on its own once ${witness} answers again; if it does not, check that ${witness}'s machine and its link are up.`,
-    detail: `witness ${witness}: none of the last ${rounds} renewals taken (its last answer: ${why})`,
+    body: `Witness ${witness} took none of this leader's renewals for ${secs} seconds, so the leader's permission stands on its other witnesses alone: if one more of them stops answering, no machine may act as the leader until it is back. It recovers on its own once ${witness} answers again; if it does not, check that ${witness}'s machine and its link are up.`,
+    detail: `witness ${witness}: no renewal taken for ${secs} s (its last answer: ${why})`,
     dedupKey: witnessBehindKey(witness),
     recoveryKey: witnessBehindKey(witness),
     category: 'Sessions',
@@ -169,12 +173,31 @@ export function witnessBehindItem(witness: string, rounds: number, why: string):
 }
 
 /** A witness took none of the leader's renewals for a lease: raise (or count again) its item. */
-export function noteWitnessBehind(witness: string, rounds: number, why: string): void {
-  void permitConditions.raise(witnessBehindKey(witness), async () => witnessBehindItem(witness, rounds, why))
+export function noteWitnessBehind(witness: string, forMs: number, why: string): void {
+  void permitConditions.raise(witnessBehindKey(witness), async () => witnessBehindItem(witness, forMs, why))
 }
 
 /** The witness takes the leader's renewals again: its item, if any, recovers. */
 export function noteWitnessBack(witness: string): void {
   if (permitConditions.toldOf(witnessBehindKey(witness)) === 'clear') return
   void permitConditions.recover(witnessBehindKey(witness))
+}
+
+/**
+ * At a process's first lead: every open witness-behind item it did not raise itself recovers (one an earlier process of
+ * this home raised, or the old leader before a switch: notifications.json is lead data, the copy brings it along). A
+ * witness still behind is raised again a lease later. Returns the keys it recovered.
+ */
+export async function recoverStaleWitnessItems(): Promise<string[]> {
+  try {
+    // Read only: a first lead with no such item writes nothing.
+    const { listNotifications } = await import('../notifications/store.js')
+    const { feed } = await listNotifications()
+    const keys = [...new Set(feed.filter((n) => !n.resolved && typeof n.dedupKey === 'string' && n.dedupKey.startsWith(WITNESS_BEHIND_PREFIX)).map((n) => n.dedupKey as string))]
+    const stale = keys.filter((k) => permitConditions.toldOf(k) !== 'raised')
+    for (const k of stale) await permitConditions.recover(k)
+    return stale
+  } catch {
+    return []
+  }
 }

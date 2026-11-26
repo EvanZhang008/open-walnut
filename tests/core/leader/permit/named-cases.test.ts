@@ -778,26 +778,120 @@ describe('a witness that missed the holder\'s first record (the remote rehearsal
     expect(a.c.renew()!.kind).toBe('renew')
   })
 
-  it('witnessesLagging: a witness that holds none of the holder\'s last N renewals, with its last answer, until it holds one', () => {
+  it('witnessesLagging: a witness that held none of the holder\'s renewals for the window, by the clock, with its last answer', () => {
     const w = world()
     const a = w.addMachine('A', W)
     a.c.requestGrant()
     w.run(1_000)
     w.partition('A', 'w3')
     let now = 1_000
-    const renewRound = () => { a.c.renew(); now += 1_000; w.run(now) }
-    for (let i = 0; i < 4; i++) renewRound()
-    // Four renewals sent, the newest not counted (its answers may be on their way): three missed so far.
-    expect(a.c.witnessesLagging(4)).toEqual([])
-    expect(a.c.witnessesLagging(3)).toEqual([{ witness: 'w3', why: 'no answer' }])
+    // Renewals 1.5 s apart (a renew that did not stand is tried again that soon): counted by time, not by rounds.
+    const renewRound = () => { a.c.renew(); now += 1_500; w.run(now) }
+    for (let i = 0; i < 6; i++) renewRound()
+    // Six renewals, at 1 s to 8.5 s, the newest not counted: the first one w3 missed went 9 s ago.
+    expect(a.c.witnessesLagging(9_500)).toEqual([])
+    expect(a.c.witnessesLagging(9_000)).toEqual([{ witness: 'w3', why: 'no answer' }])
     renewRound()
-    expect(a.c.witnessesLagging(4)).toEqual([{ witness: 'w3', why: 'no answer' }])
+    expect(a.c.witnessesLagging(9_500)).toEqual([{ witness: 'w3', why: 'no answer' }])
     // Back while A's record there is still live: it takes the next renew, and is not lagging after the one after it.
     w.partition('A', 'w3', false)
     renewRound()
     renewRound()
-    expect(a.c.witnessesLagging(4)).toEqual([])
+    expect(a.c.witnessesLagging(9_500)).toEqual([])
     expect(w.violations).toEqual([])
+  })
+
+  it('back-off: a witness behind that goes down gets one grant, then none until it says again that it is behind', () => {
+    const { w, a, step } = behindW3()
+    w.partition('A', 'w3')
+    const kinds: string[] = []
+    for (let i = 0; i < 8; i++) { kinds.push(a.c.renew()!.kind); step() }
+    expect(kinds).toEqual(['grant', 'renew', 'renew', 'renew', 'renew', 'renew', 'renew', 'renew'])
+    // Back, and its answer (to a renew it refuses) says it is behind again: one more grant brings it back.
+    w.partition('A', 'w3', false)
+    a.c.renew()
+    step()
+    expect(a.c.witnessesBehind()).toEqual(['w3'])
+    expect(a.c.renew()!.kind).toBe('grant')
+    step()
+    expect(a.c.witnessesBehind()).toEqual([])
+    expect(w.violations).toEqual([])
+  })
+
+  it('frozen: no grant while a handover is open (it would put the grant in place of the handover the client waits on)', () => {
+    function run(guard: boolean) {
+      const { w, a, step } = behindW3()
+      const h = a.c.handover('B')
+      expect(a.c.isFrozen()).toBe(true)
+      expect(a.c.witnessesBehind()).toEqual(['w3'])
+      const c = a.c as unknown as { frozen: boolean }
+      // Negative control: the frozen guard taken away for the one call.
+      if (!guard) c.frozen = false
+      const sent = a.c.renew()
+      if (!guard) c.frozen = true
+      step()
+      return { w, a, h, sent }
+    }
+    const kept = run(true)
+    expect(kept.sent).toBeNull()
+    expect(kept.a.c.pendingRecord()).toBeNull()
+    // The handover stood and the client knows it: it no longer acts, nothing of A's own is open.
+    expect(kept.a.c.isFrozen()).toBe(false)
+    expect(kept.a.c.mayAct()).toBe(false)
+    expect(kept.w.violations).toEqual([])
+    const control = run(false)
+    expect(control.sent?.kind).toBe('grant')
+    // The grant took the handover's place as the open proposal: its answers are lost to the client, which stays
+    // frozen with an outcome that is the grant's (refused 'held' where the handover is live), not the handover's.
+    expect(control.a.c.isFrozen()).toBe(true)
+    expect(control.a.c.pendingRecord()?.kind).toBe('grant')
+    expect(control.a.c.outcome()).toBe('short')
+  })
+
+  it('alternation: a witness that takes the renew and not the grant (a live handover to this machine) is never left out twice in a row', () => {
+    // Five witnesses. B hands over to A; A commits on it at w1 to w3; w4 missed the commit and still holds the
+    // handover to A (live: it takes A's renew, refuses its grant 'held'); w5 holds nothing live (behind).
+    const W5 = ['w1', 'w2', 'w3', 'w4', 'w5']
+    function run(alternate: boolean) {
+      const w = new World({ ...DEFAULT_PERMIT_PARAMS }, { ...CALM, delayMs: [5, 5] }, 7)
+      for (const id of W5) w.addWitness(id, { store: new SimStore('durable'), bootstrap: W5 })
+      const b = w.addMachine('B', W5)
+      w.partition('B', 'w5')
+      b.c.requestGrant()
+      w.run(1_000)
+      b.c.handover('A')
+      w.run(2_000)
+      const a = w.addMachine('A', W5)
+      w.partition('A', 'w4')
+      w.partition('A', 'w5')
+      a.c.read()
+      w.run(2_500)
+      a.c.renew()
+      w.run(3_000)
+      expect(a.c.mayAct()).toBe(true)
+      w.partition('A', 'w4', false)
+      w.partition('A', 'w5', false)
+      a.c.read()
+      w.run(3_500)
+      expect(a.c.witnessesBehind()).toEqual(['w5'])
+      const c = a.c as unknown as { repairedLast: boolean; behind: Set<string> }
+      let now = 3_500
+      for (let i = 0; i < 3; i++) {
+        // Negative control: a grant every round while w5 is behind (kept behind: it is the case the rule is for).
+        if (!alternate) { c.repairedLast = false; c.behind.add('w5') }
+        a.c.renew()
+        now += 1_000
+        w.run(now)
+      }
+      const held = (id: string) => w.witnesses.get(id)!.w!.handle({ type: 'read' }).held
+      return { w4: held('w4'), a }
+    }
+    const kept = run(true)
+    expect(kept.w4?.by).toBe('A')
+    expect(kept.w4?.nonce).toBe(kept.a.c.incarnation())
+    const control = run(false)
+    // Grants only: w4 refuses each ('held', the handover to A still live there) and stays out until it runs out.
+    expect(control.w4?.kind).toBe('handover')
   })
 
   it('a witness of another list answering grantable is not behind (it takes no grant of this list)', () => {

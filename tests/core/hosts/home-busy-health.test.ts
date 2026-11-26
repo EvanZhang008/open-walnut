@@ -14,7 +14,8 @@ import { audienceOf } from '../../../src/core/notifications/audience.js'
 import { findNotification, mutateNotificationStore } from '../../../src/core/notifications/store.js'
 import path from 'node:path'
 import { createWalnutScope } from '../../../src/providers/walnut-scope-core.js'
-import { homeBusyItem, homeBusyKey, homeMoveItem, homeMoveKey, noteHomeBusy, noteHomeServed, noteMoveNotTaken, noteMoveTaken, _resetHomeBusyHealthForTesting } from '../../../src/core/leader/home-busy-health.js'
+import { homeBusyItem, homeBusyKey, homeMoveItem, homeMoveKey, noteHomeBusy, noteHomeServed, noteMoveNotTaken, noteMoveTaken, noteWitnessBack, noteWitnessBehind, recoverStaleWitnessItems, witnessBehindItem, witnessBehindKey, _resetHomeBusyHealthForTesting } from '../../../src/core/leader/home-busy-health.js'
+import { raiseHealthItem } from '../../../src/core/notifications/health-items.js'
 
 afterEach(() => _resetHomeBusyHealthForTesting())
 
@@ -70,5 +71,36 @@ describe('a host that refused this copy of the Walnut', () => {
     await vi.waitFor(async () => expect(await findNotification(homeMoveKey('devbox'))).toMatchObject({ kind: 'operation-error', host: 'devbox' }), { timeout: 5_000 })
     noteMoveTaken('devbox')
     await vi.waitFor(async () => expect((await findNotification(homeMoveKey('devbox')))?.resolved).toBeTruthy(), { timeout: 5_000 })
+  })
+})
+
+describe('a leader witness that takes none of the renewals (switch/runtime.ts checkLag)', () => {
+  it('one plain Health item per witness, counted again on repeat, recovered when it takes them again', async () => {
+    const item = witnessBehindItem('w-b', 60_000, 'no answer')
+    expect(item.title).toBe('Leader witness w-b is not taking this leader\'s renewals')
+    expect(item.body).toBe('Witness w-b took none of this leader\'s renewals for 60 seconds, so the leader\'s permission stands on its other witnesses alone: if one more of them stops answering, no machine may act as the leader until it is back. It recovers on its own once w-b answers again; if it does not, check that w-b\'s machine and its link are up.')
+    expect(item.detail).toBe('witness w-b: no renewal taken for 60 s (its last answer: no answer)')
+    expect([item.dedupKey, item.recoveryKey]).toEqual([witnessBehindKey('w-b'), witnessBehindKey('w-b')])
+    expect(audienceOf(item)).toBe('health')
+    noteWitnessBehind('w-b', 60_000, 'no answer')
+    noteWitnessBehind('w-b', 60_000, 'not-holder')
+    await vi.waitFor(async () => expect(await findNotification(witnessBehindKey('w-b'))).toMatchObject({ kind: 'operation-error', severity: 'warning' }), { timeout: 5_000 })
+    expect(await mutateNotificationStore((store) => store.notifications.filter((n) => n.dedupKey === witnessBehindKey('w-b')).length)).toBe(1)
+    noteWitnessBack('w-b')
+    await vi.waitFor(async () => expect((await findNotification(witnessBehindKey('w-b')))?.resolved).toBeTruthy(), { timeout: 5_000 })
+  })
+
+  it('an item that came with the home (an earlier process, the old leader) is recovered at the first lead; one this process raised is not', async () => {
+    // As if written by another process: straight into the store, nothing told in this one.
+    await raiseHealthItem(witnessBehindItem('w-k', 60_000, 'no answer'), 'leader-permit')
+    noteWitnessBehind('w-a', 60_000, 'no answer')
+    await vi.waitFor(async () => expect(await findNotification(witnessBehindKey('w-a'))).toBeTruthy(), { timeout: 5_000 })
+    expect(await recoverStaleWitnessItems()).toEqual([witnessBehindKey('w-k')])
+    expect((await findNotification(witnessBehindKey('w-k')))?.resolved).toBeTruthy()
+    expect((await findNotification(witnessBehindKey('w-a')))?.resolved).toBeFalsy()
+    // Nothing open of that kind: the sweep finds nothing and writes nothing.
+    noteWitnessBack('w-a')
+    await vi.waitFor(async () => expect((await findNotification(witnessBehindKey('w-a')))?.resolved).toBeTruthy(), { timeout: 5_000 })
+    expect(await recoverStaleWitnessItems()).toEqual([])
   })
 })
