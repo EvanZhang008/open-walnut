@@ -1425,6 +1425,10 @@ async function homeSessions(x: Ctx): Promise<void> {
   await oneLeader(x, `${label}: after the rollback`, L)
   const stopRb = await homeStopLines(L, back.state?.id)
   c.add(`${label}: the rolled-back switch's stop ended both sessions' CLIs in the data home first (a turn and an idle one)`, (stopRb.stop?.stopped?.turn ?? 0) >= 1 && (stopRb.stop?.stopped?.idle ?? 0) >= 1, JSON.stringify(stopRb.stop ?? null)?.slice(0, 300))
+  // The line the stop interrupted goes out once more where the session goes on (its gate opens now): its turn ends.
+  await write(turn.gate, 'go')
+  const resumedA = await waitFor('the interrupted turn to end on A', async () => (await echoesWith(w, L, turn.sid, `released ${turn.gate}`)).length > 0, 120_000).then(() => true).catch(() => false)
+  c.add(`${label}: after the rollback the turn the stop interrupted runs again on ${L.id} and ends`, resumedA, turn.gate)
   for (const [sid, taskId, name] of [[idle.sid, tIdle, 'the idle one'], [turn.sid, tTurn, 'the one mid-turn']] as const) {
     const a = await turnAnswered(w, L, taskId, sid, `ROUND home after rollback ${name === 'the idle one' ? 'idle' : 'turn'}`)
     const row = await sessionOn(w, L, sid)
@@ -1466,6 +1470,10 @@ async function homeSessions(x: Ctx): Promise<void> {
   c.add(`${label}: no process works in ${L.id}'s old home after the switch (not even the switch's own job, which the session's command started there)`, left.length === 0 && (lines.stop?.others ?? []).length === 0,
     `now ${JSON.stringify(left.slice(0, 5))}; at the stop ${JSON.stringify(lines.stop?.others ?? null)}`)
   const kept0 = await snapshot(L.home)
+  // The turn the stop interrupted: its line goes out once more on the new leader (its gate, on that machine, opens now).
+  await w.io(O).op('write', again.gate, 'go')
+  const resumedB = await waitFor(`the interrupted turn to end on ${O.id}`, async () => (await echoesWith(w, O, turn.sid, `released ${again.gate}`)).length > 0, 180_000).then(() => true).catch(() => false)
+  c.add(`${label}: the turn the switch stop interrupted runs again on ${O.id}, the same session, and ends`, resumedB, again.gate)
   for (const [sid, taskId, name, said] of [[idle.sid, tIdle, 'idle', 'ROUND home idle on A'], [turn.sid, tTurn, 'turn', 'ROUND home after rollback turn'], [cmd.sid, tCmd, 'cmd', 'please hold until']] as const) {
     const row = await waitFor(`the ${name} session on ${O.id}`, async () => {
       const r = await sessionOn(w, O, sid)
