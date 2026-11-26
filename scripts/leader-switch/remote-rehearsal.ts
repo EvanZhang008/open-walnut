@@ -1458,7 +1458,11 @@ async function homeSessions(x: Ctx): Promise<void> {
   const watcher = (async () => {
     while (watching && !atMark) {
       const now = (await w.io(O).op('ls', markDir).catch(() => null)) ?? []
-      if (now.some((n) => n.endsWith('.final.json') && !marksBefore.has(n))) { atMark = await snapshot(L.home); break }
+      if (now.some((n) => n.endsWith('.final.json') && !marksBefore.has(n))) {
+        // A file a stopping process removes while the walk reads (a database's -wal): read it again.
+        for (let i = 0; i < 5 && !atMark; i++) atMark = await snapshot(L.home).catch(() => null)
+        break
+      }
       await sleep(100)
     }
   })()
@@ -1485,7 +1489,7 @@ async function homeSessions(x: Ctx): Promise<void> {
   c.add(`${label}: no process works in ${L.id}'s old home after the switch (not even the switch's own job, which the session's command started there)`, left.length === 0 && (lines.stop?.others ?? []).length === 0,
     `now ${JSON.stringify(left.slice(0, 5))}; at the stop ${JSON.stringify(lines.stop?.others ?? null)}`)
   c.add(`${label}: the old home was read at the final mark (the mark reached ${O.id})`, atMark !== null)
-  const kept0 = atMark ?? await snapshot(L.home)
+  const kept0 = await snapshot(L.home)
   // The turn the stop interrupted goes on as after a restart (its line once more, or a restart note): its gate, on
   // that machine, opens now, so a line sent again ends there instead of holding the session.
   await w.io(O).op('write', again.gate, 'go')
@@ -1515,8 +1519,18 @@ async function homeSessions(x: Ctx): Promise<void> {
     const told = a.echo.includes(`moved from ${L.id} to ${O.id}`) && a.echo.includes(`${L.home} on ${L.id} is now ${O.home} on ${O.id}`)
     c.add(`${label}: the ${name} session's first message on ${O.id} tells it its folder moved from ${L.id}'s ${L.home} to ${O.id}'s ${O.home}`, told, a.echo.slice(0, 400))
   }
-  const kept = compareKept(kept0, await snapshot(L.home))
+  const keptEnd = await snapshot(L.home)
+  const kept = compareKept(kept0, keptEnd)
   c.add(`${label}: the old home stays as it was while the moved sessions work on ${O.id}`, kept.ok, describeKept(kept, 8, L.home))
+  // From the final mark on: nothing but the switch's own records (its marker, state and lock in local/leader-switch,
+  // which the switch job writes as it ends) may change. A CLI the stop did not end would show here (it writes on).
+  if (atMark) {
+    const fromMark = compareKept(atMark, keptEnd)
+    const own = (p: string) => p.startsWith('local/leader-switch/')
+    const other = fromMark.changed.filter((ch) => !own(ch.path))
+    c.add(`${label}: from the final mark on, the old home changed only in the switch's own records`, other.length === 0,
+      other.length ? describeKept({ ...fromMark, ok: false, changed: other }, 8, L.home) : `the switch's own: ${fromMark.changed.map((ch) => ch.path).join(', ') || 'none'}`)
+  }
 
   // ---- 3. back: they move again, and go on where they started ----
   await writeAndBatch(x, 'home-sessions-back')
