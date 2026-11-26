@@ -166,7 +166,7 @@
   "web/src/components/sessions/SessionServersChip.tsx": [1, 0],
   "web/src/components/sessions/SessionSupervisionBar.tsx": [2, 0],
   "web/src/components/sessions/SessionTaskbar.tsx": [1, 0],
-  "web/src/components/sessions/SessionTerminal.tsx": [18, 0],
+  "web/src/components/sessions/SessionTerminal.tsx": [17, 0],
   "web/src/components/sessions/SessionTerminalPane.tsx": [5, 0],
   "web/src/components/sessions/SessionTurnsView.tsx": [7, 0],
   "web/src/components/sessions/SessionUsageDialog.tsx": [2, 0],
