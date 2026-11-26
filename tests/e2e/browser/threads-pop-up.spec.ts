@@ -88,7 +88,11 @@ async function openInProgress(page: Page, timeout = 1_000): Promise<void> {
 
 async function shot(page: Page, name: string, scope = page.getByTestId('org-rail')): Promise<void> {
   fs.mkdirSync(SHOTS, { recursive: true })
-  await scope.screenshot({ path: `${SHOTS}/threads-pop-up-${name}-${test.info().project.name}.png` })
+  const path = `${SHOTS}/threads-pop-up-${name}-${test.info().project.name}.png`
+  // Proof only, never an assertion: a card that leaves while it is drawn (his reply got through, so
+  // it is out of his sight) failed the test here on "not attached to the DOM", or waited for the
+  // card until the test's own timeout. The page is shot instead.
+  await scope.screenshot({ path, timeout: 5_000 }).catch(() => page.screenshot({ path }))
 }
 
 /** Ends of the long turns still held (busyUntilEnded); every test ends what it left. */
