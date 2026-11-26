@@ -22,6 +22,7 @@
 
 import { nearestToOthers } from './find-near-words';
 import { liveRange, rangeViewPosition, revealRange, type OverflowCache } from './page-find-geometry';
+import { isWebKitEngine } from './webkit-engine';
 
 export { liveRange } from './page-find-geometry';
 
@@ -786,8 +787,7 @@ function copiesBefore(block: Node, query: string, context: string, caseSensitive
 const BOX_LAYER_CLASS = 'find-box-layer';
 
 export function prefersBoxPaint(): boolean {
-  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
-  return /AppleWebKit/.test(ua) && !/Chrome|Chromium|CriOS|Edg|Android/.test(ua);
+  return isWebKitEngine();
 }
 
 /** A change BoxPaint made itself, which a find's MutationObserver must not recount on. */

@@ -2140,6 +2140,15 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   --timeline-gap: 4px;
   gap: var(--timeline-gap);
 }
+/* A row that left the view, for one frame after a reply settles in WebKit: it keeps its height
+   while its content is out of the layout, so WebKit builds its layers again and drops the old
+   surfaces it kept (components/sessions/release-offscreen-layers.ts). */
+.session-history > [data-layer-release] {
+  height: var(--layer-release-h) !important;
+  min-height: var(--layer-release-h) !important;
+  flex-shrink: 0 !important;
+}
+.session-history > [data-layer-release] > * { display: none !important; }
 
 /* The jump-to-latest button: common/ScrollToBottomButton.tsx, styles/scroll-jump.css. */
 

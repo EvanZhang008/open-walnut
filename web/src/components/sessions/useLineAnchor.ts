@@ -37,15 +37,12 @@
 import { useEffect, useRef, type MutableRefObject, type RefObject } from 'react';
 import { applyLineAnchor, followsAtResize, lineAnchorDrift, readLineAnchor, type LineAnchor } from './line-anchor';
 import { READER_SCROLL_EVENT } from './phone-session-layer';
+import { isTimelineRow } from './timeline-rows';
 
 /** Frames the anchor is applied again after a resize (WebKit's revert). */
 const CHASE_FRAMES = 4;
 const INPUTS = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
 
-/** A timeline row (or a block holding rows): not the arrow pill or a hover strip. */
-function isRow(n: Node): boolean {
-  return n instanceof HTMLElement && (n.matches('[data-message-id]') || !!n.querySelector('[data-message-id]'));
-}
 
 export interface UseLineAnchorArgs {
   containerRef: RefObject<HTMLDivElement | null>;
@@ -190,7 +187,7 @@ export function useLineAnchor({ containerRef, isAtBottom, shown, selectionActive
     // Rows change (a stream, a row opening, older rows above): the anchor is read again.
     // A new row lets go of a kept line: the box shows what came since.
     const mo = new MutationObserver((records) => {
-      if (held && records.some((r) => r.type === 'childList' && Array.from(r.addedNodes).some(isRow))) held = null;
+      if (held && records.some((r) => r.type === 'childList' && Array.from(r.addedNodes).some(isTimelineRow))) held = null;
       readSoon();
     });
     mo.observe(el, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'open', 'hidden'] });

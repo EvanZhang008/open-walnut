@@ -165,6 +165,8 @@ import { registerSessionFind } from '@/utils/session-find';
 import { planSkipsForReveal, resolveSkips, turnStart, type RenderSkip, type ResolvedSkip } from './render-skips';
 import { foldKey, openMessageFolds } from './message-fold';
 import { RenderSkipDivider } from './RenderSkipDivider';
+import { useReleaseOffscreenLayers } from './release-offscreen-layers';
+import { selectionInside } from './timeline-rows';
 import { publishRecallRows } from '@/components/chat/prompt-recall';
 import { Tab, TabList } from '@/components/controls';
 
@@ -651,13 +653,6 @@ function placeIn(el: HTMLElement): { row: Element | null; top: number; dist: num
     if (hit && el.contains(hit) && hit !== el) { row = hit.closest('[data-msg-index], [data-turn-fold-index]'); if (row) break; }
   }
   return { row, top: row ? row.getBoundingClientRect().top - box.top : 0, dist: el.scrollHeight - el.scrollTop };
-}
-/** The reader has text selected in this box (a cut would drop what they hold). */
-function selectionInside(el: HTMLElement | null): boolean {
-  if (!el || typeof document === 'undefined') return false;
-  const sel = document.getSelection();
-  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
-  return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
 }
 /**
  * Every row above `tailStart` is above the box's top edge, so a cut removes nothing the
@@ -1538,6 +1533,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // never at the bottom, so new rows below leave what the reader reads in place.
   const ownAtBottom = useRef(true);
   const isAtBottom = readerPane ? NEVER_AT_BOTTOM : ownAtBottom;
+  // WebKit keeps old layer surfaces for rows that scroll away while replies stream in: drop them
+  // after each reply settles (release-offscreen-layers.ts).
+  useReleaseOffscreenLayers(containerRef, isStreaming, isAtBottom);
   // Selection guard: every auto-scroll write shifts content under the cursor,
   // which mid-drag makes the browser extend the selection to the bottom (the
   // "select lines 2-10 but get 2-to-bottom" bug). All scroll paths consult
