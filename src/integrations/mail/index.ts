@@ -42,6 +42,7 @@ import { createTopicMailTransport, tapTopicMailArrivals } from './topic-transpor
 import { registerTopicMailTransport } from '../../core/topics/topic-mail-port.js'
 import { MailUnsubscribe } from './unsubscribe.js'
 import { asksPerson, recordUnasked } from '../../core/approvals/ask-me.js'
+import { mailStepRequester, withMailCaller } from './caller-scope.js'
 import { sensitiveHold } from '../../core/outbound/sensitive-hold.js'
 
 /**
@@ -226,7 +227,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   const sends = new MailSends({ store, service, drafts, letters: walnut.letters, events, log: walnut.log })
   const approvals = new MailApprovals({
     store, service, drafts, sends, letters: walnut.letters, events, log: walnut.log, asksPerson,
-    recordUnasked: (what) => recordUnasked('mailSend', { what }),
+    recordUnasked: async (what) => recordUnasked('mailSend', { what, requester: await mailStepRequester() }),
     sensitiveHold,
   })
   // Leaving a mailing list. Its own module because it is the one part of this plugin that opens a url
@@ -237,7 +238,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // every other outgoing mail goes through. Nothing else about this module can send.
   const unsubscribe = new MailUnsubscribe({
     store, service, events, drafts, approvals, letters: walnut.letters, log: walnut.log, asksPerson,
-    recordUnasked: (what) => recordUnasked('mailUnsubscribe', { what }),
+    recordUnasked: async (what) => recordUnasked('mailUnsubscribe', { what, requester: await mailStepRequester() }),
   })
   // An unsubscribe mail's ledger row settles with its send, however late that is (a send queued at
   // its door goes out through the reconcile).
@@ -437,7 +438,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   registerMailRoutes(walnut, {
     store, service, accounts, providers, sync, drafts, approvals, sends, digest,
     unsubscribe, sort, events, filters,
-    approvalsSwitch: { asksPerson: () => asksPerson(), recordUnasked: (gate, what) => recordUnasked(gate, { what }) },
+    approvalsSwitch: { asksPerson: () => asksPerson(), recordUnasked: async (gate, what) => recordUnasked(gate, { what, requester: await mailStepRequester() }) },
   })
 
   // The phantom-provider sweep. A provider plugin normally disposes its own registration, and
@@ -491,8 +492,13 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     // would register a second copy on top.
     const fresh: Array<{ dispose(): void | Promise<void> }> = []
     try {
-      for (const tool of createMailTools(agentDeps)) fresh.push(walnut.registry.tool(tool))
-      for (const op of createMailOps(agentDeps)) fresh.push(walnut.registry.op(op))
+      // Each call runs as its session's, so a step that goes ahead with approvals off names it (caller-scope.ts).
+      for (const tool of createMailTools(agentDeps)) {
+        fresh.push(walnut.registry.tool({ ...tool, execute: (input, meta) => withMailCaller(meta?.callerSid, () => tool.execute(input)) }))
+      }
+      for (const op of createMailOps(agentDeps)) {
+        fresh.push(walnut.registry.op({ ...op, handler: (args, ctx) => withMailCaller(ctx?.callerSid, () => op.handler(args)) }))
+      }
       fresh.push(walnut.registry.skill({ id: 'walnut-mail', directory: SKILL_DIR }))
       fresh.push(walnut.registry.triggerTemplate(createMailTriggerTemplate({
         store, listAccounts: () => service.listAccounts({ capabilities: false }),

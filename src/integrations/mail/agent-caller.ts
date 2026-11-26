@@ -31,14 +31,9 @@ import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
 import type { PluginRouteHandler, PluginRouteReply, PluginRouteRequest } from '../../core/plugins/plugin-route-adapter.js'
 import { automatedClientIsAgent, automatedClientOf } from '../../core/sessions/automated-client.js'
 import { LOCAL_ORIGIN, ORIGIN_HEADER, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
-import {
-  AGENT_READ_MAX_BYTES,
-  escapeExternalContentTags,
-  normalizeAngles,
-  stripControls,
-  truncateUtf8,
-  UNTRUSTED_REMINDER,
-} from './untrusted.js'
+import { withMailCaller } from './caller-scope.js'
+import { cleanOutside, frameOutsideData, stripControls, truncateUtf8, WALNUT_NOTE_FIELD } from '../../core/outside-content.js'
+import { AGENT_READ_MAX_BYTES } from './untrusted.js'
 
 const CALLER_SID_HEADER = 'x-walnut-caller-sid'
 const CALLER_KIND_HEADER = 'x-walnut-caller-kind'
@@ -61,47 +56,26 @@ export async function isNotThePerson(request: Pick<PluginRouteRequest, 'headers'
   return !!automatedClientOf(request.headers) && await automatedClientIsAgent()
 }
 
-/** The sentence after the data, as the ops say it (the block's name is this envelope's key here). */
-export const AGENT_ROUTE_NOTE = UNTRUSTED_REMINDER.replace('The block above', 'external_content')
+export { WALNUT_NOTE_FIELD }
 
-/** Deep enough for every mail answer; anything deeper is dropped, not passed through raw. */
-const MAX_DEPTH = 12
+const MAIL = { source: 'mail' }
 
-function cleanString(text: string): string {
-  return escapeExternalContentTags(normalizeAngles(stripControls(text)))
-}
-
-/** Every string in `value`, keys included, cleaned as the ops clean authored text. */
-function cleaned(value: unknown, depth = 0): unknown {
-  if (typeof value === 'string') return cleanString(value)
-  if (value === null || typeof value !== 'object') return value
-  if (depth >= MAX_DEPTH) return '[dropped: nested too deep]'
-  if (Array.isArray(value)) return value.map((item) => cleaned(item, depth + 1))
-  const out: Record<string, unknown> = {}
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) out[cleanString(key)] = cleaned(item, depth + 1)
-  return out
-}
-
-/**
- * A top-level field a mail route sets to speak in Walnut's own voice to an agent (the ask it made
- * instead of a person's act). Never authored text: it is lifted out of the data, beside the note.
- */
-export const WALNUT_NOTE_FIELD = 'walnut_note'
-
-function envelope(content: Record<string, unknown>, walnutNote?: string): Record<string, unknown> {
-  return {
-    external_content: { source: 'mail', trust: 'untrusted', ...content },
-    note: AGENT_ROUTE_NOTE,
-    ...(walnutNote ? { [WALNUT_NOTE_FIELD]: walnutNote } : {}),
-  }
-}
-
+/** Answer JSON framed; Walnut's own note (WALNUT_NOTE_FIELD) is lifted out beside the frame. */
 function framedJson(json: unknown): Record<string, unknown> {
   if (json && typeof json === 'object' && !Array.isArray(json) && typeof (json as Record<string, unknown>)[WALNUT_NOTE_FIELD] === 'string') {
     const { [WALNUT_NOTE_FIELD]: walnutNote, ...rest } = json as Record<string, unknown>
-    return envelope({ data: cleaned(rest) }, walnutNote as string)
+    return frameOutsideData(MAIL, rest, walnutNote as string)
   }
-  return envelope({ data: cleaned(json) })
+  return frameOutsideData(MAIL, json)
+}
+
+/** Text framed as data, with `truncated` when it was cut. */
+function framedTextData(text: string, truncated: boolean): Record<string, unknown> {
+  const env = frameOutsideData(MAIL, null) as { external_content: Record<string, unknown> }
+  delete env.external_content.data
+  env.external_content.text = cleanOutside(text)
+  if (truncated) env.external_content.truncated = true
+  return env
 }
 
 async function bytesOf(body: NonNullable<PluginRouteReply['body']>, max: number): Promise<{ bytes: Uint8Array; more: boolean }> {
@@ -146,7 +120,7 @@ export async function frameForAgent(reply: PluginRouteReply): Promise<PluginRout
   if (reply.json !== undefined) return { ...reply, json: framedJson(reply.json) }
   if (reply.text !== undefined) {
     const cut = truncateUtf8(stripControls(reply.text), AGENT_READ_MAX_BYTES)
-    return { ...reply, headers: withoutBodyHeaders(reply.headers), text: undefined, json: envelope({ text: cleanString(cut.text), ...(cut.shown < cut.total ? { truncated: true } : {}) }) }
+    return { ...reply, headers: withoutBodyHeaders(reply.headers), text: undefined, json: framedTextData(cut.text, cut.shown < cut.total) }
   }
   if (reply.body !== undefined) {
     // Bytes (an attachment, a save's streamed answer) reach an agent as text, at most what one
@@ -159,7 +133,7 @@ export async function frameForAgent(reply: PluginRouteReply): Promise<PluginRout
       const json = parsedJson(text)
       yield new TextEncoder().encode(JSON.stringify(json !== undefined && !more
         ? framedJson(json)
-        : envelope({ text: cleanString(stripControls(text)), ...(more ? { truncated: true } : {}) })))
+        : framedTextData(stripControls(text), more)))
     }
     return {
       status: reply.status,
@@ -261,7 +235,8 @@ export function agentAwareRoutes(walnut: WalnutServerPluginApi): WalnutServerPlu
       if (key !== 'route') return Reflect.get(target, key, target)
       return (method: string, path: string, handler: PluginRouteHandler) => {
         const framed: PluginRouteHandler = async (request) => {
-          const reply = await handler(request)
+          // Run as the caller's session, so a step that goes ahead unasked names it (caller-scope.ts).
+          const reply = await withMailCaller(request.headers[CALLER_SID_HEADER], () => handler(request))
           return isAgentCaller(request) ? frameForAgent(reply) : reply
         }
         Object.assign(framed, { [FRAMED]: true, ...(isPersonAct(handler) ? { [PERSON_ACT]: true } : {}) })

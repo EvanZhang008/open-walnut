@@ -703,6 +703,33 @@ describe('with approvals off, an agent\'s send goes out with no letter', () => {
     }
   });
 
+  it('names the session an agent\'s unasked send was for, through the op and through the routes', async () => {
+    const before = process.env.WALNUT_APPROVALS_ASK;
+    process.env.WALNUT_APPROVALS_ASK = '0';
+    const { _resetAskMeLatchForTesting } = await import('../../src/core/approvals/ask-me.js');
+    _resetAskMeLatchForTesting();
+    try {
+      const { executeOp } = await import('../../src/ops/executor.js');
+      const { LOCAL_ORIGIN } = await import('../../src/lib/caller-origin.js');
+      const as = (sid: string) => ({ origin: LOCAL_ORIGIN, apiBase: `http://127.0.0.1:${port}`, callerSid: sid } as never);
+      const viaOp = await newDraft({ subject: 'Unasked via op' });
+      const opAnswer = await executeOp('mail_request_send', { draftId: viaOp.draftId, revision: viaOp.revision }, as('agent-session-op'));
+      expect(opAnswer.ok, JSON.stringify(opAnswer)).toBe(true);
+      const viaRoute = await newDraft({ subject: 'Unasked via route' });
+      const routeAnswer = await executeOp('api', { method: 'POST', path: `/api/plugins/mail/drafts/${viaRoute.draftId}/send`, body: { revision: viaRoute.revision } }, as('agent-session-route'));
+      expect(routeAnswer.ok, JSON.stringify(routeAnswer)).toBe(true);
+      expect(callsFor(viaOp.draftId)).toHaveLength(1);
+      expect(callsFor(viaRoute.draftId)).toHaveLength(1);
+      const { listApprovals } = await import('../../src/core/approvals/store.js');
+      const listed = (await listApprovals({ status: 'all' })).filter((a) => a.unasked === 'mailSend');
+      const of = (subject: string) => listed.find((a) => a.what.includes(subject))?.requester.sessionId;
+      expect(of('Unasked via op')).toBe('agent-session-op');
+      expect(of('Unasked via route')).toBe('agent-session-route');
+    } finally {
+      if (before === undefined) delete process.env.WALNUT_APPROVALS_ASK; else process.env.WALNUT_APPROVALS_ASK = before;
+    }
+  });
+
   it('a mail that reads as personal still waits for the person, and its letter says why first', async () => {
     const before = process.env.WALNUT_APPROVALS_ASK;
     process.env.WALNUT_APPROVALS_ASK = '0';
