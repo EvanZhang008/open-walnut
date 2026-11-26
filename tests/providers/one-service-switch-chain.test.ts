@@ -22,7 +22,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const { lines, followerFact } = vi.hoisted(() => ({ lines: [] as string[], followerFact: vi.fn(() => ({ kind: 'replica' })) }))
+const { lines, followerFact, leaderConfig } = vi.hoisted(() => ({
+  lines: [] as string[], followerFact: vi.fn(() => ({ kind: 'replica' })),
+  leaderConfig: { read: null as null | (() => Record<string, unknown>) },
+}))
 // The real update function; only the host's runner is played: it records the line and answers ok.
 vi.mock('../../src/providers/daemon-service-update.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/providers/daemon-service-update.js')>()
@@ -33,6 +36,16 @@ vi.mock('../../src/providers/daemon-service-update.js', async (importOriginal) =
       serviceUpdate: async (u: { command: string }) => { lines.push(u.command); return { output: '{"ok":true}', tail: null } },
     } as never, scope, opts),
   }
+})
+// The leader's config, one mock for the whole file: a describe sets `leaderConfig.read`, unset reads the
+// real file. Never a vi.doMock in beforeEach beside a vi.doUnmock in afterEach: vitest 3 applies the
+// queued unmock (the test before) and mock (this test) of one path in parallel (VitestMocker.resolveMocks,
+// a Promise.all, run again by each import that finds them queued), so which one wins is a race. The first
+// getConfig of a test then read the real config (no list: every host offered) and the next the mock, and
+// an update with no mode word went up for plain-box (CI run 45784774186; 3 in 15 runs on a dev box).
+vi.mock('../../src/core/config-manager.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/core/config-manager.js')>()
+  return { ...real, getConfig: (async (...a: Parameters<typeof real.getConfig>) => leaderConfig.read ? leaderConfig.read() : real.getConfig(...a)) as typeof real.getConfig }
 })
 vi.mock('../../src/core/host-server/index.js', async (importOriginal) => ({ ...(await importOriginal<Record<string, unknown>>()), hostFollowerFact: followerFact }))
 
@@ -238,12 +251,9 @@ describe('a host named in host_service_offer, with in_process_daemon off', () =>
   beforeEach(() => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
     process.env.WALNUT_SERVICE_LAUNCHER = '1'
-    vi.doMock('../../src/core/config-manager.js', async (importOriginal) => ({
-      ...(await importOriginal<Record<string, unknown>>()),
-      getConfig: async () => ({ experimental: { in_process_daemon: false, service_launcher: true }, host_service_offer: list }),
-    }))
+    leaderConfig.read = () => ({ experimental: { in_process_daemon: false, service_launcher: true }, host_service_offer: list })
   })
-  afterEach(() => { vi.doUnmock('../../src/core/config-manager.js') })
+  afterEach(() => { leaderConfig.read = null })
 
   it('listed: --serve, the mode file, a --service start that serves; out of the list: --no-serve and the daemon again', async () => {
     const { stateDir, launcherEnv } = hostDirs(WALNUT_HOME)
@@ -280,12 +290,9 @@ describe('the default offer: which hosts are asked to switch', () => {
   beforeEach(() => {
     delete process.env.WALNUT_HOST_SERVICE_OFFER
     process.env.WALNUT_SERVICE_LAUNCHER = '1'
-    vi.doMock('../../src/core/config-manager.js', async (importOriginal) => ({
-      ...(await importOriginal<Record<string, unknown>>()),
-      getConfig: async () => config,
-    }))
+    leaderConfig.read = () => config
   })
-  afterEach(() => { vi.doUnmock('../../src/core/config-manager.js') })
+  afterEach(() => { leaderConfig.read = null })
 
   // First in this describe: an update that went through here (the Linux host below) may finish after its test ends,
   // with that test's mocks gone, and its line would land in the next test's record.
