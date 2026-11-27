@@ -18,6 +18,7 @@
  *   - set refuses a target no route serves, and keeps the name the server records (actions.ts).
  */
 import { answeredTemplates } from './record.js'
+import { registerMemoryHolder } from '../observability/memory-ledger.js'
 
 const PARAM_RE = /:[A-Za-z_$][\w$]*/g
 const SPLAT_RE = /\*[A-Za-z_$][\w$]*|\*/g
@@ -37,7 +38,7 @@ export function routeShape(template: string): string {
  */
 const SAMPLE = 'x0000000a1b2'
 export function samplePathOf(template: string): string {
-  return template.replace(PARAM_RE, SAMPLE).replace(SPLAT_RE, `${SAMPLE}/${SAMPLE}`)
+  return template.replace(PARAM_RE, () => SAMPLE).replace(SPLAT_RE, () => `${SAMPLE}/${SAMPLE}`)
 }
 
 export const ROUTE_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
@@ -66,6 +67,12 @@ function sameRoute(wanted: string, served: string): boolean {
 }
 
 const cache = new Map<string, { name: string | null; at: number }>()
+// At most MAX_CACHED targets, each two route names of about 80 characters (memory-ledger.test.ts:
+// every module cache is on the ledger).
+registerMemoryHolder({
+  name: 'usage-watch.route-targets', budgetBytes: MAX_CACHED * 4 * 200,
+  read: () => { let chars = 0; for (const [k, v] of cache) chars += k.length + (v.name?.length ?? 0); return { entries: cache.size, chars } },
+})
 
 /**
  * The name real use records a route target's requests under (`GET /api/sessions/:sessionId/history`
