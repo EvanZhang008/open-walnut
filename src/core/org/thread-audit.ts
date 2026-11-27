@@ -11,6 +11,14 @@
  * while unread. What it found,
  * told and saw fixed is counted per day (thread-audit-store.ts): the measure of the other parts.
  *
+ * A node is also read soon after its threads changed (SOON_MS after an answer landed, a line was
+ * written or threads were joined; at most once per SOON_FLOOR_MS a node), when it holds two or more
+ * cards he can see: two cards on one matter then wait minutes for the node's merge, not the clock's
+ * six hours (2026-11-26, real use: a second card on a matter he had just asked about stood 84
+ * minutes until the clock came by). While he is in that node's chat the read waits, since its note
+ * wakes the node. Before any read of a node, its cards that say one reply are
+ * made one thread (thread-one-reply.ts): the one change the check makes itself, by rule, no model.
+ *
  * Leader only, never on an ephemeral server, with the switch read at every pass (off stops it with
  * no restart), skipped while background AI is off (backgroundAiDisabled) and while the org is off.
  * No model (none set up, a timeout, a test run): the rule findings still go. The model reads only
@@ -18,7 +26,10 @@
  */
 import crypto from 'node:crypto';
 import { log } from '../../logging/index.js';
+import { bus, EventNames } from '../event-bus.js';
 import type { SessionRecord, Task } from '../types.js';
+import type { OrgThread } from './threads-model.js';
+import { snoozedNow } from './thread-view.js';
 import { experimentalEnabled } from '../experimental.js';
 import { homeWritesStopped } from '../../lib/leader-clocks.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
@@ -37,6 +48,19 @@ export const AUDIT_EVERY_MS = 6 * HOUR;
 const TICK_MS = 15 * 60_000;
 const FIRST_TICK_MS = 5 * 60_000;
 const NODES_PER_TICK = 12;
+/** How soon after a node's threads changed it is read, and how long it is then left alone. */
+export const SOON_MS = 90_000;
+export const SOON_FLOOR_MS = 10 * 60_000;
+/**
+ * While he is in the node's chat (or was within this long) the soon read waits: its note wakes the
+ * node, and that turn would run ahead of his next words there (review 2026-11-27). Asked again
+ * every SOON_QUIET_MS, for SOON_QUIET_MAX_MS at most: past that it reads anyway.
+ */
+export const SOON_QUIET_MS = 5 * 60_000;
+export const SOON_QUIET_MAX_MS = 30 * 60_000;
+/** The changes after which two of a node's cards may say one thing: an answer landed, a line was written, threads were joined. */
+const SOON_KINDS: ReadonlySet<string> = new Set(['answered', 'updated', 'merged']);
+const BUS_NAME = 'org-thread-audit';
 /** The judge's budget on a direct call (a CLI or a local model gets more: fastCallBudgetMs). */
 const JUDGE_DIRECT_MS = 30_000;
 
@@ -292,6 +316,8 @@ export async function runThreadAuditPass(now = Date.now()): Promise<string[]> {
       // A leader switch's stop: a pass in flight (up to PASS_CALLS model calls a node, each further one asking first) writes no more audit state or notes (lib/leader-clocks.ts).
       if (homeWritesStopped()) break;
       // Read at every node: turning it off stops the pass where it is.
+      await joinOneReply(id);
+      readAt.set(id, Date.now());
       const r = await auditNode(id, { now, tasks: all });
       if (r.why === 'off' || r.why === 'org_off') break;
       // Tried: not again for AUDIT_EVERY_MS, even when it had no open thread or its counts were not written.
@@ -306,6 +332,87 @@ export async function runThreadAuditPass(now = Date.now()): Promise<string[]> {
   return done;
 }
 
+/** Its cards that say one reply, made one thread (threads-store.ts joinOneReplyCards). Never throws: the read goes on. */
+async function joinOneReply(taskId: string): Promise<void> {
+  try {
+    await (await import('./threads-store.js')).joinOneReplyCards(taskId);
+  } catch (err) {
+    log.task.warn('thread audit: cards that say one reply were not joined', { taskId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/** Two or more open cards of the node he can see (a result is in, or he must decide; not one put aside now): a pair that may say one thing. Pure. */
+export function hasPairForHim(threads: ReadonlyArray<Pick<OrgThread, 'closed' | 'movedTo' | 'snoozed' | 'state' | 'messages'>>, now: number = Date.now()): boolean {
+  return threads.filter((t) => !t.closed && !t.movedTo && (t.state === 'answered' || t.state === 'needs') && !snoozedNow(t, now)).length >= 2;
+}
+
+/** The nodes waiting for their soon read, when each node was last read (soon or by the clock), and since when a read has waited for him to leave the chat, in this process. */
+const soon = new Map<string, ReturnType<typeof setTimeout>>();
+const readAt = new Map<string, number>();
+const heldSince = new Map<string, number>();
+
+/** When a node whose threads changed at `now` is read: SOON_MS on, and never within SOON_FLOOR_MS of its last read. Pure. */
+export function soonWait(lastReadAt: number | undefined, now: number): number {
+  return Math.max(SOON_MS, (lastReadAt ?? 0) + SOON_FLOOR_MS - now);
+}
+
+/** A read of `taskId` in `wait` ms; false when one already waits (its changes until then are read together). */
+function armSoon(taskId: string, wait: number): boolean {
+  if (soon.has(taskId)) return false;
+  const timer = setTimeout(() => { soon.delete(taskId); void runThreadAuditSoon(taskId); }, wait);
+  timer.unref?.();
+  soon.set(taskId, timer);
+  return true;
+}
+
+/** A read of `taskId` soon; false when one already waits. */
+export function auditSoon(taskId: string, now: number = Date.now()): boolean {
+  return armSoon(taskId, soonWait(readAt.get(taskId), now));
+}
+
+/** Is he in this node's chat at `now`, or was he within SOON_QUIET_MS (what he typed there, an attention heartbeat, a phone on its session)? */
+async function heIsInChat(taskId: string, now: number): Promise<boolean> {
+  const [{ getSessionsForTask }, { userInTaskChat }] = await Promise.all([import('../session-tracker.js'), import('./user-away.js')]);
+  return userInTaskChat(taskId, await getSessionsForTask(taskId).catch(() => [] as SessionRecord[]), SOON_QUIET_MS, now);
+}
+
+/**
+ * The soon read of one node: under the clock's own conditions (leader, switch, org and background AI
+ * on, the node keeps Threads, is not complete and its team not stopped), its cards that say one reply
+ * are joined, and with two or more cards he can see it gets one pass, once he is out of its chat.
+ * Null when it was not read. Never throws.
+ */
+export async function runThreadAuditSoon(taskId: string, now: number = Date.now()): Promise<AuditResult | null> {
+  try {
+    const [{ isFollower }, { backgroundAiDisabled }, { isOrgEnabled }] = await Promise.all([
+      import('../server-role.js'), import('../cheap-model.js'), import('./org-enabled.js'),
+    ]);
+    // Background AI off: no model to compare the cards with (a test's judge seam stands in for it).
+    if (isFollower() || homeWritesStopped() || (!override && backgroundAiDisabled()) || !(await threadAuditOn()) || !(await isOrgEnabled())) return null;
+    const all = await (await import('../task-manager.js')).listTasks();
+    const task = all.find((t) => t.id === taskId);
+    const { keepsThreads } = await import('./keeps-threads.js');
+    if (!task || !keepsThreads(task) || task.phase === 'COMPLETE' || task.plugin_only) return null;
+    const { teamOf } = await import('../sessions/team-stop.js');
+    if (all.some((root) => root.team_stop && teamOf(root, all).some((m) => m.id === taskId))) return null;
+    await joinOneReply(taskId);
+    if (!hasPairForHim((await (await import('./threads-store.js')).readThreads(taskId)).threads, now)) { heldSince.delete(taskId); return null; }
+    // He is in this chat: the note would wake the node ahead of his next words. Asked again shortly, for so long.
+    const since = heldSince.get(taskId) ?? now;
+    if (now - since < SOON_QUIET_MAX_MS && await heIsInChat(taskId, now)) {
+      heldSince.set(taskId, since);
+      armSoon(taskId, SOON_QUIET_MS);
+      return null;
+    }
+    heldSince.delete(taskId);
+    readAt.set(taskId, now);
+    return await auditNode(taskId, { now, tasks: all });
+  } catch (err) {
+    log.task.warn('thread audit: the soon read failed for a node', { taskId, error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
 /** The clock running now, by the handle that started it. */
 let clock: { first: ReturnType<typeof setTimeout>; every: ReturnType<typeof setInterval> } | null = null;
 
@@ -314,6 +421,9 @@ function stopClock(): void {
   clearTimeout(clock.first);
   clearInterval(clock.every);
   clock = null;
+  bus.unsubscribe(BUS_NAME);
+  for (const t of soon.values()) clearTimeout(t);
+  soon.clear();
 }
 
 /**
@@ -330,7 +440,23 @@ export function startThreadAudit(opts: { ephemeral?: boolean } = {}): { stop: ()
   mine.first.unref?.();
   mine.every.unref?.();
   clock = mine;
+  // A node whose threads changed is read soon, not at its next six hours.
+  bus.subscribe(BUS_NAME, (event) => {
+    const d = event.data as { taskId?: string; kind?: string } | undefined;
+    if (d?.taskId && d.kind && SOON_KINDS.has(d.kind)) auditSoon(d.taskId);
+  }, { global: true, interest: [EventNames.ORG_THREADS_CHANGED] });
   return { stop: () => { if (clock === mine) stopClock(); } };
+}
+
+/** Tests: the nodes waiting for their soon read; and forget every wait and read time. */
+export function threadAuditSoonWaiting(): string[] {
+  return [...soon.keys()];
+}
+export function resetThreadAuditSoonForTests(): void {
+  for (const t of soon.values()) clearTimeout(t);
+  soon.clear();
+  readAt.clear();
+  heldSince.clear();
 }
 
 /** Tests: whether a clock runs. */

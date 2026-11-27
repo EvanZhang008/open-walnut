@@ -343,6 +343,12 @@ export interface OrgThread {
    * given, and five of its card lines in a day were refused as naming no thread of its own.
    */
   was?: string[];
+  /**
+   * When its one message was taken out of another thread (splitThreadMessage): he, the node or one
+   * of Walnut's checks said it is its own subject, so no rule of Walnut's puts it back under
+   * another (thread-one-reply.ts).
+   */
+  splitOut?: string;
   messages: ThreadMessage[];
   /** The closed thread this one asks again about. */
   follows?: string;
@@ -563,6 +569,7 @@ function normalizeThread(t: unknown): OrgThread | null {
     } else delete next.closed;
   }
   if (opener) next.opener = opener; else delete next.opener;
+  if (next.splitOut !== undefined && !isStr(next.splitOut)) delete next.splitOut;
   normalizeReplySource(next);
   if (next.snoozed && !(typeof next.snoozed === 'object' && isStr(next.snoozed.until) && isStr(next.snoozed.at) && Number.isFinite(Date.parse(next.snoozed.until)))) delete next.snoozed;
   if (next.replyAt !== undefined && !(isStr(next.replyAt) && next.reply)) delete next.replyAt;
@@ -1663,7 +1670,7 @@ export function splitThreadMessage(file: ThreadsFile, threadId: string, messageI
   const { joined: _j, ...moved } = msg;
   const thread: OrgThread = {
     id: newId && THREAD_ID_RE.test(newId) ? newId : newThreadId(),
-    title: fallbackTitle(msg.text, lang), state: 'new', messages: [moved], createdAt: msg.at, updatedAt: at, by,
+    title: fallbackTitle(msg.text, lang), state: 'new', messages: [moved], createdAt: msg.at, updatedAt: at, by, splitOut: at,
   };
   const settled = opts.keepOpen ? from : ackReaction(from, by, at);
   return {

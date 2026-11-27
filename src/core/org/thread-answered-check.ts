@@ -41,7 +41,8 @@ import { withoutWalnutControl } from '../../lib/walnut-control-text.js';
 import { readTurnMarker } from '../../lib/turn-end-marker.js';
 import { quotedEvidence, verdictWord } from './judge-line.js';
 import { ownQuestionOf } from './thread-question.js';
-import { mergeThreads, movedAway, setAnswers, THREAD_TITLE_MAX, ThreadError, updateThread, type OrgThread, type ThreadAnswer, type ThreadMessage, type ThreadsFile } from './threads-model.js';
+import { titledForAll } from './thread-one-reply.js';
+import { mergeThreads, movedAway, setAnswers, ThreadError, updateThread, type OrgThread, type ThreadAnswer, type ThreadMessage, type ThreadsFile } from './threads-model.js';
 import { snoozedNow } from './thread-view.js';
 import { ackHoldsResult } from './thread-known.js';
 import { answerOfRow, isReplyRow, ROW_BEFORE_MS, rowMatches, type AnswerRow } from './thread-answers.js';
@@ -307,41 +308,7 @@ export function markAnsweredGroup(file: ThreadsFile, threadIds: readonly string[
   const carried = next.threads.some((t) => t.id !== into.thread.id && t.messages.some((m) => m.answer?.at === answer.at && m.answer.text === answer.text));
   if (carried) return { file, out: { ...none, left: named.map((c) => c.thread.id) } };
   const done = answerOne(next, into.thread.id, new Set([into, ...merged].map((c) => c.question.id)), answer, at);
-  return done ? { file: titledForAll(done, into, merged), out: { marked: into.thread.id, merged: merged.map((c) => c.thread.id), left } } : { file, out: none };
-}
-
-const TITLE_JOIN = ' \u00b7 ';
-
-/**
- * The kept thread's title once other questions merged into it: each question's title, in the order
- * he asked (review 2026-11-26: a card holding two unrelated questions read as the earliest alone).
- * It stays Walnut's stand-in unless the node wrote every one of them, so the status question still
- * asks the node for one title that covers the card. Titles that say the same are named once. Pure.
- */
-function titledForAll(file: ThreadsFile, into: AnswerCandidate, merged: readonly AnswerCandidate[]): ThreadsFile {
-  if (!merged.length) return file;
-  const all = [into, ...merged];
-  const seen = new Set<string>();
-  const titles = all.map((c) => c.thread.title.replace(/\s+/g, ' ').trim()).filter((t) => {
-    const key = t.toLowerCase();
-    if (!t || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  if (titles.length < 2) return file;
-  const share = Math.floor((THREAD_TITLE_MAX - TITLE_JOIN.length * (titles.length - 1)) / titles.length);
-  const cut = (t: string): string => (t.length <= share ? t : `${t.slice(0, Math.max(1, share - 1)).trimEnd()}\u2026`);
-  const title = titles.map(cut).join(TITLE_JOIN).slice(0, THREAD_TITLE_MAX);
-  const nodeWroteAll = all.every((c) => c.thread.titled);
-  return {
-    ...file,
-    threads: file.threads.map((t) => {
-      if (t.id !== into.thread.id) return t;
-      // A title held for the kept question alone (titleHeld) names only that one: it goes with the old title.
-      const { titled: _titled, titleHeld: _held, ...rest } = t;
-      return { ...rest, title, ...(nodeWroteAll ? { titled: true } : {}) };
-    }),
-  };
+  return done ? { file: titledForAll(done, [into.thread, ...merged.map((c) => c.thread)]), out: { marked: into.thread.id, merged: merged.map((c) => c.thread.id), left } } : { file, out: none };
 }
 
 /** One question's thread: markAnsweredGroup with it alone; `out` is whether it wrote. Pure. */

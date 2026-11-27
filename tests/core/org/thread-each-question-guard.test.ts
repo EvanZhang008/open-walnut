@@ -28,6 +28,8 @@ const MOVERS: Record<string, { calls: number; tests: Array<[file: string, name: 
   'src/core/org/thread-join-check.ts': { calls: 4, tests: [[UNIT, 'splitWhereItIs: a split the check already did is not merged into another thread when it holds his question'], [UNIT, 'splitMessageInto: his question that opened its thread is not moved into another, a remark is'], ['tests/core/org/thread-join-check.test.ts', 'a question judged another subject is never moved under another thread: it opens its own']] },
   // The answered check merges the threads of his questions one reply answers into the oldest's (2026-11-25, the user: "u need to combine them").
   'src/core/org/thread-answered-check.ts': { calls: 1, tests: [['tests/core/org/thread-answered-check.test.ts', 'one reply answering two questions: one thread listed for him, holding both questions, each with the reply']] },
+  // One reply, one card: only threads that read answered merge (2026-11-26: two answered questions, one reply, no card for either).
+  'src/core/org/thread-one-reply.ts': { calls: 1, tests: [['tests/core/org/thread-one-reply.test.ts', 'three questions on one reply are one thread; one of them still working stays its own']] },
   'src/core/org/reply-card-stop.ts': { calls: 1, tests: [[E2E, 'a card line\'s merge of his question is refused at the turn end and by the reply, and he is told why']] },
   // reply-card.ts merges through threads-store.ts mergeThread and thread-tree-merge.ts mergeAcrossTree (counted there).
 }

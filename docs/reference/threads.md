@@ -460,6 +460,23 @@ and this server may write. A verdict is
 kept while both cards read the same (at most 14 days), so an unchanged pair costs no second call.
 Only SAME is reported. Without a model (none set up, a timeout, a test run) the rule findings still go.
 
+A node is also read soon after its threads changed, not only every 6 hours (2026-11-26, real use: a
+second card on a matter he had just asked about stood 84 minutes until the clock reached that node).
+The store's change after an answer landed, a line was written or threads were joined (`answered`,
+`updated`, `merged`) arms one read of that node 90 seconds on (`auditSoon`, `SOON_MS`), however many
+changes come in meanwhile, and never within 10 minutes of the node's last read (`SOON_FLOOR_MS`).
+The read runs under the clock's own conditions and only when the node holds two or more open cards
+he can see (answered or needs, `hasPairForHim`); it is one ordinary pass, so it counts as the
+node's pass for the 6-hour clock and an unchanged pair still costs no call. While he is in that
+node's chat (what he typed there, an attention heartbeat or a phone on its session within 5
+minutes, `userInTaskChat`) the pass waits, because its note wakes the node and that turn would run
+ahead of his next words; it is asked again every 5 minutes and goes ahead after 30 (`SOON_QUIET_MS`,
+`SOON_QUIET_MAX_MS`; review 2026-11-27). Measured on one day of
+his data (2026-11-26): 523 such writes on 50 nodes, at most 406 node-and-ten-minute slots, beside
+286 passes of the clock. Before either read of a node, its cards that say one reply are made one
+thread (`joinOneReplyCards`, under threads_each_question below): the one change the check makes
+itself, by rule, with no model. Guard: `tests/core/org/thread-one-reply-guard.test.ts`.
+
 Only what is new is told: a finding's key is its kind and thread ids, and a key told is not told
 again for 14 days; a later pass that no longer finds it counts it fixed. At most 8 findings a note,
 each with its thread ids and the call that fixes it (`merge_into` for a repeat, the node's card
@@ -541,6 +558,23 @@ thread" and the status question offered the merge. On, "Every experiment on" inc
   the ids merged into that one before, newest first, at most 20): a session, an op or a card that
   still holds the old id names the thread it is under (`threadIdNow`, read at every way in that
   takes a thread id; a thread that lives on the node wins over the pointer a moved thread left).
+- **One reply, one card** (`thread-one-reply.ts` `mergeOneReply`): two questions typed before the
+  node speaks are two threads, and its one reply sits under both. When both read answered with no
+  summary of their own, each card would show that same reply, and his view counts a reply under two
+  threads as news on neither (`sharedAnswers`), so neither has a card. They are made one thread in
+  the write that leaves them so: the node's lines (`writeOwnThreads`) and the answers read from its
+  chat (`setThreadAnswers`), whichever comes second, each judged against the file before the write,
+  so cards that already stood side by side are not touched by a write about something else; the
+  thread check joins what any other write left (a node's own op). The oldest question's thread
+  keeps, reads answered, is titled by every question it holds and keeps the other's id (`was`).
+  Never joined: a card with its own summary (it shows that, and on his data each of the 25 open
+  groups of threads sharing a reply has one per card), one he read, acknowledged, reacted to or put
+  aside, one holding a letter, a choice, the task's ask or a watch, a remark, a thread the node
+  opened, or one a split took out of another thread (`splitOut`, set by `splitThreadMessage`: the
+  merge would undo his or the node's split). The task's ask that names a thread merged in the same
+  write goes on the thread it is under. Not covered: a card with no summary whose reply also sits under a card that has one, or
+  under one that asks him, stays without a card until the node gives it a summary (the thread
+  check's `thin` finding says so); not seen in 3,763 versions of his thread files.
   What the rule guards is a question going out of his sight unanswered, never two cards on one
   matter (2026-11-25: one question typed as two messages seconds apart, both answered alike, and a
   third card on that matter read "look all duplicated ... you need to combine them", and the
@@ -751,6 +785,7 @@ Newest first. State: fixed (with where), open (with who owns it next).
 
 | Date | What the user saw | Cause | State |
 |---|---|---|---|
+| 11-27 | Not reported by him (the daily audit of his sessions, 11-26): he asked about one matter in three messages within a minute; the second and third were answered by one reply, and for 84 minutes neither had a card in his Threads (the audit read the thread file and called it three duplicate cards; replayed on that file with the view's own code, only the first question's card was listed), until the thread check reached the node and the node merged all three | each question opens its own thread, and the node's card lines marked both answered with no summary; a reply under two threads counts as news on neither (`sharedAnswers`), and only the answered check merged threads one reply answered; the thread check read a node once in 6 hours. In 3,763 versions of his thread files since 11-23 this state occurred once | fixed: cards with no summary that say one reply are one thread in the write that leaves them so, in either order of the lines and the answers, and at the thread check for any other write (`thread-one-reply.ts` `mergeOneReply`, `threads-store.ts` `joinOneReplyCards`; log `org threads: one reply, one card`); a node whose threads changed is read by the thread check 90 seconds later when it holds two or more cards he can see (`thread-audit.ts` `auditSoon`). Replayed on that file: the two become one thread in the answers' write and two cards are listed, the pair the check then judges. Guards: `tests/core/org/thread-one-reply-guard.test.ts` (every caller of `setAnswers` and every store write through `updateThread`, from the source), `tests/e2e/thread-one-reply.test.ts`. Review 2026-11-27 (function 8, ux 7), applied: the soon read waits while he is in that node's chat, a split-out thread never joins, the ask's named thread is read after the merge, and the guard lists every `writeThreadsFor` caller. Not covered: a card with no summary beside one that has one on the same reply (never seen in his data) |
 | 11-27 | Not seen by him as an error (the first day of `threads_reply_tag`, read from the log): one task's card stopped moving for a day. 5 of the day's 13 refused card lines were that task writing the id of a thread that had been handed to it and merged into its own thread there, each refused as naming no thread of the task; one of them was a decision line, which also went to him by letter | the merge removes the merged thread's id and nothing kept it; the notice to the task said "Thread <that id> ... is yours now"; 15 `no_thread` answers to `thread_get` and `thread_update` in four days show ops holding such ids too | fixed: a thread keeps the ids merged into it (`was`, newest first, at most 20) and `threadIdNow` reads an id through it at every way in: a reply's card lines (`cardsNow`, both readers), the status question's lines and marks, the thread routes (`threadNowOf`, `merge_into` included), a merge across the tree, a hand-off that names a thread, and his words filed with a thread id. Lines stay one per thread (`linesNow`): where two name one thread now, a decision stays before a state line, then the line that wrote the thread's own id, and the one left out is named in the log. A merge of two names of one thread answers `same_thread` with the id to write. The notice after a merge across the tree names the thread it is under (`tellMergedIn`). Merges made before this have no record (the affected task was told its thread's id by a note). Not covered: his answer to a decision letter or a Board choice sent from a card that still holds a merged thread's id. Guard: `tests/core/org/thread-id-now-guard.test.ts` lists every way in from the source |
 | 11-26 | Not seen by him yet (the thread monitor's [churn]): one status answer of a task rewrote all 6 answered cards it was asked about, the same results in fewer words; the cards lost their detail and two the links of their result | the rule that an answered card that still holds takes no line is words in the question (5 of those 6 cards were quoted under it); nothing on the server held an answer that ignored it | fixed: one status answer puts new words on at most 3 answered cards that still hold, and more at once writes none of those words (`sessions/status-thread-card.ts` `withoutRestated`, `CARDS_RESTATED_MAX`; his reply's own card lines are never held back; the log says `an answer that said its cards again`). Measured on the saved versions of every node's threads, 2,049 status answers since the 11-23 fix: 239 put new words on one held card, 26 on two, 3 on three (the ones read were results that had moved on), 1 on six. Replayed on that node's threads as they were: the 5 held cards keep their words, the one whose summary was owed is written. A restatement of one to three cards cannot be told from a result that moved on, so it stays with the rule in the question, and the monitor keeps counting. Guards: `tests/core/sessions/status-thread-card.test.ts` (the limit; every path that writes status lines on cards listed with its kind), `tests/e2e/status-question-threads.test.ts` |
 | 11-26 | Not seen by him yet (the first day of the thread check and the answered check in real use, read from the log): the answered check marked one thread in a day, a three-day-old question, with a reply about another matter; and a lead with 125 candidate pairs had only 10 read per pass of the thread check | one fast-model call read up to 12 waiting questions beside a reply and its word alone wrote the card; the thread check read one list of 10 pairs per node and pass | fixed: a question the list call names is read a second time alone beside the reply, and only a YES that quotes the reply marks it (`thread-answered-check.ts` `confirmNamed`, `readConfirm`; measured above); the thread check reads up to 3 lists a pass (`PASS_CALLS`). Guards: `tests/core/org/thread-answered-check-guard.test.ts` (the write only after the second read; every fast-model judge under `src` listed with what its word can do), `tests/e2e/thread-audit.test.ts` |

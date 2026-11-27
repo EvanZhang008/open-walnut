@@ -13,7 +13,9 @@ import { oneCardOn } from './one-card.js';
 import { updateJsonFile } from '../../utils/fs.js';
 import { forgetKeptJson, readJsonFileShaped } from '../../utils/json-kept.js';
 import { bus, EventNames } from '../event-bus.js';
+import { log } from '../../logging/index.js';
 import type { OrgThreadsChangedEvent } from '../event-types.js';
+import { mergeOneReply, type OneReplyMerge } from './thread-one-reply.js';
 // Only the leader keeps Threads: every replica (the companion and a host replica alike) holds none.
 import { isFollower } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
@@ -649,13 +651,42 @@ export async function noteThreadsRechecked(taskId: string, marks: ReadonlyMap<st
 /** Answers Walnut read from the node's chat (thread-answers.ts), each onto its message. Returns how many landed. */
 export async function setThreadAnswers(taskId: string, answers: ReadonlyMap<string, ThreadAnswer>): Promise<number> {
   if (!answers.size || isFollower()) return 0;
+  let joined: OneReplyMerge[] = [];
   const changed = await mutateThreads(taskId, (cur) => {
     const r = setAnswers(cur, answers);
-    return { file: r.file, out: r.changed };
+    // Cards that now say one reply are one thread (thread-one-reply.ts).
+    const one = mergeOneReply(r.file, new Date().toISOString(), cur);
+    joined = one.merged;
+    return { file: one.file, out: r.changed };
   });
+  saidOneReply(taskId, joined, 'answers');
   // One change for the whole read: a client reads the node's threads once, not once per thread.
   if (changed.length) emit({ taskId, kind: 'answered', ...(changed.length === 1 ? { threadId: changed[0] } : {}) });
   return changed.length;
+}
+
+/** Cards made one because they said one reply (thread-one-reply.ts): the log row, with the write that brought them together, and one change per kept thread. */
+function saidOneReply(taskId: string, merged: readonly OneReplyMerge[], on: 'answers' | 'lines' | 'check'): void {
+  if (!merged.length) return;
+  log.task.info('org threads: one reply, one card', { taskId, on, merged });
+  for (const m of merged) emit({ taskId, kind: 'merged', threadId: m.into });
+}
+
+/**
+ * The node's cards that say one reply, made one thread whatever write left them so (a node's own
+ * op, a split): the thread check runs it before it reads a node (thread-audit.ts). Nothing is
+ * written when there is none. Returns the merges.
+ */
+export async function joinOneReplyCards(taskId: string): Promise<OneReplyMerge[]> {
+  if (isFollower()) return [];
+  const at = new Date().toISOString();
+  if (!mergeOneReply(await readThreads(taskId), at).merged.length) return [];
+  const joined = await mutateThreads(taskId, (cur) => {
+    const one = mergeOneReply(cur, at);
+    return { file: one.file, out: one.merged };
+  });
+  saidOneReply(taskId, joined, 'check');
+  return joined;
 }
 
 /** A task's own write on one of its threads; `fallback` when the thread refuses `patch` (a close he has not reacted to). */
@@ -679,13 +710,18 @@ export async function writeOwnThreads(
 ): Promise<string[]> {
   const at = new Date().toISOString();
   const handsToUser = (p: ThreadPatch) => p.state === 'needs' || !!p.reopen;
+  let joined: OneReplyMerge[] = [];
   const changed = await mutateThreads(taskId, (cur) => {
     const first = pre ? pre(cur) : { file: cur, out: [] };
     const own = writeOwn(first.file);
-    const r = { file: own.file, out: [...new Set([...first.out, ...own.out])] };
+    // Cards these lines left saying one reply are one thread (thread-one-reply.ts).
+    const one = mergeOneReply(own.file, at, first.file);
+    joined = one.merged;
+    const r = { file: one.file, out: [...new Set([...first.out, ...own.out])] };
     if (!ask) return r;
     // The report's ask goes on its thread in the same write, after the lines (thread-report-ask.ts).
-    const placed = placeAsk(r.file, ask.ask, at, ask.named);
+    // The thread it names as it is now: the merge above may have put it under another.
+    const placed = placeAsk(r.file, ask.ask, at, ask.named ? threadIdNow(r.file, ask.named) : undefined);
     if (placed === r.file) return r;
     const moved = placed.threads.filter((t, i) => t.reportAsk?.id !== r.file.threads[i]?.reportAsk?.id).map((t) => t.id);
     return { file: placed, out: [...new Set([...r.out, ...moved])] };
@@ -714,6 +750,7 @@ export async function writeOwnThreads(
     }
     return { file: done.length ? file : cur, out: done };
   }
+  saidOneReply(taskId, joined, 'lines');
   if (changed.length) emit({ taskId, kind: 'updated', ...(changed.length === 1 ? { threadId: changed[0] } : {}) });
   return changed;
 }

@@ -36,6 +36,7 @@ const WRITERS: Record<string, string> = {
   noteClosesTold: 'marks records in place',
   noteThreadsRechecked: 'marks records in place',
   setThreadAnswers: 'writes answers onto messages in place',
+  joinOneReplyCards: 'joins the node\'s own cards that say one reply, in place on its own records',
   writeOwnThreads: 'a task\'s own writes on its own records',
   placeTaskAsk: 'marks which of the task\'s own records holds its ask, in place',
   sweepClosedThreads: 'deletes records past their week',

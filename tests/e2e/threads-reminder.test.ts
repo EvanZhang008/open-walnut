@@ -223,14 +223,15 @@ describe('a reminder of the open threads now and then', () => {
     // Between reminders: the thread his word moved is spoken for. (The fence's answer may be asked
     // for his reaction, when his new message came after he could read it: thread-view.ts readAfter.)
     const between = await ask(quietAnswer)
-    expect(between).not.toContain('Spring seed order')
+    // Not asked about as a thread (`tN "title"`); on a slow machine his words since may still quote its title there.
+    expect(between).not.toMatch(/t\d+ "Spring seed order"/)
     expect(between).not.toContain('Compost delivery')
     // A compaction brings the reminder: every open thread but the one the line spoke for, none left out.
     await updateSessionRecord(SID, { lastCompactAt: new Date().toISOString() })
     const q = await ask(quietAnswer)
     expect(q).toContain('"Orchard fence"')
     expect(q).toMatch(/pending: t\d+ "Compost delivery" 2h\./)
-    expect(q).not.toContain('Spring seed order')
+    expect(q).not.toMatch(/t\d+ "Spring seed order"/)
     expect(q).not.toContain('Not shown')
   }, 60_000)
 

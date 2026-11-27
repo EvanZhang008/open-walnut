@@ -1799,7 +1799,8 @@ a newer node never changes an older one's. A chosen one is stored on the task as
   one of those ids: it names the thread it was merged into on that task, and the answer carries
   that thread's own `id`. A `merge_into` whose two names are one thread now answers
   `400 same_thread` with the id to write. An older client never sends such an id on purpose and
-  reads `was` as an unknown field.
+  reads `was` as an unknown field. Additive, 2026-11-27: a thread a split made carries `splitOut`,
+  the time its message was taken out of another thread; an older client reads it as an unknown field.
 - `PUT /api/v1/tasks/:id/threads/:thread/follow-ups/:messageId` → `200 { task_id, thread_id,
   message_id }` (additive, 2026-11-10): the message the client is about to send into the node's
   chat with this `qm-…` id is the person's Follow up in this thread. The companion forwards it to
