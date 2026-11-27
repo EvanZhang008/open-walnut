@@ -50,7 +50,7 @@ describe('credential identity through the real letter API', () => {
     await setArchived(id, true)
   })
 
-  it('a core warning and two unrelated task sends share one letter, while another owner gets its own', async () => {
+  it('a core warning and two unrelated task sends share one letter, another owner gets its own, and another part of that owner\'s sign-in folds into it', async () => {
     const core = await sendLetterOnce({ subject: 'Certificate on this computer expires', type: 'review', markdown: 'Renew the local certificate.',
       credentialAsk: { host: '__local__', kind: 'ssh-certificate', expiresAt: 3000 }, sender: { sessionId: 'external', host: 'local' } }, { opKey: 'core-cert:2000' })
     const tasks = await Promise.all(['Operations', 'Build checks'].map(async title => {
@@ -66,10 +66,12 @@ describe('credential identity through the real letter API', () => {
     }
     const other = await send(ask('remote-box'), tasks[0]!)
     expect(other.status).toBe(201)
-    expect((await other.json() as { id: string }).id).not.toBe(core.letter.id)
+    const otherId = (await other.json() as { id: string }).id
+    expect(otherId).not.toBe(core.letter.id)
     const cookie = await send(ask('remote-box', 'login-cookie'), tasks[1]!)
     expect(cookie.status).toBe(201)
-    expect((await listLetters()).letters).toHaveLength(3)
+    expect((await cookie.json() as { id: string }).id).toBe(otherId)
+    expect((await listLetters()).letters).toHaveLength(2)
     const detail = await fetch(`${root}/api/v1/human-inbox/${core.letter.id}`).then(r => r.json()) as { letter: { credentialAsk: unknown; body: string } }
     expect(detail.letter.credentialAsk).toEqual({ host: '__local__', kind: 'ssh-certificate', expiresAt: 3000 })
     expect(detail.letter.body).toContain('local certificate')

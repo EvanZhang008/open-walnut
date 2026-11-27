@@ -4,17 +4,30 @@ import { loginCommandWords, signInLineOf } from '../sign-in-ask.js'
 /** The machine holding the credential, not the remote machine it signs in to. */
 export interface CredentialAsk {
   host: string
-  kind: 'ssh-certificate' | 'login-cookie' | 'login'
+  kind: CredentialKind
   expiresAt?: number
+  /** Other parts of this machine's sign-in later asks folded into this letter as turns (credentialFoldAddsTurn). */
+  folded?: Array<{ kind: CredentialKind; expiresAt?: number }>
 }
+
+export const CREDENTIAL_KINDS = ['ssh-certificate', 'login-cookie', 'login'] as const
+export type CredentialKind = typeof CREDENTIAL_KINDS[number]
+const isKind = (k: unknown): k is CredentialKind => (CREDENTIAL_KINDS as readonly unknown[]).includes(k)
 
 export function normalizeCredentialAsk(raw: unknown): CredentialAsk | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const r = raw as Record<string, unknown>
   if (typeof r.host !== 'string' || !r.host.trim() || r.host.length > 200) return undefined
-  if (!['ssh-certificate', 'login-cookie', 'login'].includes(String(r.kind))) return undefined
+  if (!isKind(r.kind)) return undefined
   if (r.expiresAt !== undefined && (typeof r.expiresAt !== 'number' || !Number.isFinite(r.expiresAt) || r.expiresAt <= 0)) return undefined
-  return { host: r.host.trim(), kind: r.kind as CredentialAsk['kind'], ...(r.expiresAt ? { expiresAt: r.expiresAt as number } : {}) }
+  const folded: Array<{ kind: CredentialKind; expiresAt?: number }> = []
+  for (const f of Array.isArray(r.folded) ? r.folded.slice(0, 12) : []) {
+    const k = (f as { kind?: unknown } | null)?.kind
+    const at = (f as { expiresAt?: unknown } | null)?.expiresAt
+    if (!isKind(k) || k === r.kind || folded.some((x) => x.kind === k)) continue
+    folded.push({ kind: k, ...(typeof at === 'number' && Number.isFinite(at) && at > 0 ? { expiresAt: at } : {}) })
+  }
+  return { host: r.host.trim(), kind: r.kind, ...(r.expiresAt ? { expiresAt: r.expiresAt as number } : {}), ...(folded.length ? { folded } : {}) }
 }
 
 export interface CredentialAskContext {
@@ -35,6 +48,7 @@ export async function credentialAskOf(input: Pick<NewLetter, 'subject' | 'markdo
   const body = String(input.markdown ?? input.html ?? input.text ?? '')
   const command = loginCommandWords(context.hint)
   const locations = new Set<string>()
+  const owners = new Set<string>()
   for (const sentence of [input.subject, ...body.split(/\n|(?<=[.!?])\s+/u)]) {
     const line = signInLineOf(null, sentence, command)
       ?? (typeof sentence === 'string' ? signInLineOf(null, sentence.replace(/^.*?[,;:]\s*(?=run\s)/i, ''), command) : null)
@@ -47,19 +61,50 @@ export async function credentialAskOf(input: Pick<NewLetter, 'subject' | 'markdo
         if (new RegExp(`(?:\\bon\\s+(?:(?:this|the|your)\\s+)?|\\bin\\s+|\\u5728\\s*)${escaped}(?![a-z0-9_-]|\\.[a-z0-9])`, 'iu').test(clean)) {
           locations.add(await context.canonical(entry.host))
         }
+        // Weaker, used only when no sentence names where to run it: Chinese "<box>'s certificate,
+        // login, session" (2026-11-27: "<box> \u7684 SSH \u8bc1\u4e66\u8fc7\u671f\u4e86\uff0c\u8bf7\u8dd1\u4e00\u6b21 <command>").
+        if (new RegExp(`(?<![a-z0-9_.-])${escaped}\\s*(?:\\u4e0a)?\\u7684\\s*(?:[a-z]+\\s*){0,2}(?:\\u8bc1\\u4e66|\\u767b\\u5f55|\\u4f1a\\u8bdd|\\u51ed\\u636e|\\u51ed\\u8bc1|cookie|session|certificate)`, 'iu').test(clean)) {
+          owners.add(await context.canonical(entry.host))
+        }
       }
     }
   }
-  if (locations.size !== 1) return undefined
+  const where = locations.size ? locations : owners
+  if (where.size !== 1) return undefined
   const prose = `${input.subject}\n${body}`
   const kind = /\bcookie\b/i.test(prose) ? 'login-cookie' : /\b(?:ssh\s+)?(?:certificate|cert)\b|证书/iu.test(prose) ? 'ssh-certificate' : 'login'
-  return { host: [...locations][0]!, kind }
+  return { host: [...where][0]!, kind }
 }
 
-/** Active asks fold by host + credential, independent of sender, words, or target host aliases. */
-export function sameCredentialAsk(a: CredentialAsk, b: CredentialAsk): boolean {
-  return a.host === b.host && a.kind === b.kind
-    && (a.expiresAt === undefined || b.expiresAt === undefined || a.expiresAt === b.expiresAt)
+/**
+ * Active asks fold by the machine that holds the credential, independent of sender, words, target
+ * host aliases or which part of its sign-in a sender names: the user signs one machine in once
+ * (2026-11-27: one task asked for clouddev's login cookie, another for its SSH certificate, after
+ * the same expired sign-in; two letters). Of one kind, a known different expiry is a new episode.
+ */
+export function sameCredentialAsk(a: CredentialAsk, b: CredentialAsk, opts: { crossKind?: boolean } = {}): boolean {
+  if (a.host !== b.host) return false
+  if (a.kind !== b.kind) return opts.crossKind !== false
+  return a.expiresAt === undefined || b.expiresAt === undefined || a.expiresAt === b.expiresAt
+}
+
+/**
+ * Folding `asked` into the open letter of `first` adds its words as a turn (nothing it asks is
+ * lost): another part of the machine's sign-in, or the expiry the first letter did not know.
+ */
+export function credentialFoldAddsTurn(asked: CredentialAsk, first: CredentialAsk | undefined): boolean {
+  if (!first) return false
+  if (asked.kind === first.kind) return asked.expiresAt !== undefined && first.expiresAt === undefined
+  // Of another kind: once per episode of that kind (a known new expiry is told again).
+  const told = first.folded?.find((f) => f.kind === asked.kind)
+  return !told || (asked.expiresAt !== undefined && told.expiresAt !== asked.expiresAt)
+}
+
+/** The first letter's scope once `asked` folded into it as a turn. */
+export function credentialAfterFold(asked: CredentialAsk, first: CredentialAsk): CredentialAsk {
+  if (asked.kind === first.kind) return { ...asked, ...(first.folded?.length ? { folded: first.folded } : {}) }
+  const entry = { kind: asked.kind, ...(asked.expiresAt !== undefined ? { expiresAt: asked.expiresAt } : {}) }
+  return { ...first, folded: [...(first.folded ?? []).filter((f) => f.kind !== asked.kind), entry] }
 }
 
 /** Server context is shared by core, plugin, route and task sends. No credential reads. */
@@ -94,7 +139,14 @@ export async function storedCredentialAskOf(letter: LetterRecord, body: string, 
   return credentialAskOf({ subject: letter.subject, markdown: body }, context)
 }
 
-export function findCredentialLetter(ask: CredentialAsk, letters: readonly LetterRecord[]): LetterRecord | undefined {
-  return letters.find(letter => !!letter.credentialAsk && sameCredentialAsk(ask, letter.credentialAsk)
-    && (!letter.archived && !letter.answered || (ask.expiresAt !== undefined && letter.credentialAsk.expiresAt === ask.expiresAt)))
+/**
+ * `crossKind: false` (a core alert's own send, an `ssh-cert-expiry:` op) folds only into its own
+ * kind: the alert archives and adds turns to the letter it holds, never to a task's ask.
+ */
+export function findCredentialLetter(ask: CredentialAsk, letters: readonly LetterRecord[], opts: { crossKind?: boolean } = {}): LetterRecord | undefined {
+  // The newest open letter first: an ask lands on the thread the user reads now.
+  const ordered = [...letters].sort((x, y) => (Number(y.createdAt) || 0) - (Number(x.createdAt) || 0))
+  return ordered.find(letter => !!letter.credentialAsk && sameCredentialAsk(ask, letter.credentialAsk, opts)
+    && (!letter.archived && !letter.answered
+      || (ask.kind === letter.credentialAsk.kind && ask.expiresAt !== undefined && letter.credentialAsk.expiresAt === ask.expiresAt)))
 }

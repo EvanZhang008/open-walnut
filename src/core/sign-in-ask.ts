@@ -109,12 +109,13 @@ function namesLoginCommand(text: string, loginWords: readonly string[]): boolean
 
 /**
  * Words that put a step on someone: please, needs, must, can you... (Chinese: please, needs,
- * "run it first"). A line naming the login command without them ("ran <command> first, then
+ * "run it first", "for you to do", "you run it once"; not "don't", "no more"; 2026-11-27: "the one
+ * thing for you to do: run <command> once on <host>" was read as no ask). A line naming the login command without them ("ran <command> first, then
  * measured", "no need to run <command>") is news, not an ask.
  */
-const NEED = /\b(?:please|pls|needs?|needed|requires?|required|must|have to|has to|once you|after you|you(?:'ll| will)? (?:can|could|should|need)|can you|could you|ask(?:s|ing)? (?:you|the user))\b|\u8bf7|\u9700\u8981|\u9ebb\u70e6|\u5148(?:\u8fd0\u884c|\u8dd1|\u6267\u884c|\u767b\u5f55)(?![\u5b8c\u4e86\u8fc7])/iu;
+const NEED = /\b(?:please|pls|needs?|needed|requires?|required|must|have to|has to|once you|after you|you(?:'ll| will)? (?:can|could|should|need)|can you|could you|ask(?:s|ing)? (?:you|the user))\b|\u8bf7|\u9700\u8981|\u9ebb\u70e6|\u8981\u4f60\u505a|\u4f60(?:\u6765|\u53bb)?(?:\u8fd0\u884c|\u8dd1|\u6267\u884c)\u4e00(?:\u6b21|\u4e0b)|\u5148(?:\u8fd0\u884c|\u8dd1|\u6267\u884c|\u767b\u5f55)(?![\u5b8c\u4e86\u8fc7])/iu;
 /** "No need", "not needed", "no longer"; Chinese: "not needed", "no need", "need not". */
-const NOT_NEEDED = /\b(?:no|not|don't|doesn't|without|never)\s+(?:\w+\s+)?(?:need|needed|required|requires?)\b|\bno longer\b|\u4e0d\u9700\u8981|\u65e0\u9700|\u4e0d\u7528|\u4e0d\u5fc5/iu;
+const NOT_NEEDED = /\b(?:no|not|don't|doesn't|without|never)\s+(?:\w+\s+)?(?:need|needed|required|requires?)\b|\bno longer\b|\u4e0d\u9700\u8981|\u65e0\u9700|\u4e0d\u7528|\u4e0d\u5fc5|\u4e0d\u8981|\u522b\u518d/iu;
 
 /** The sentence starts with the step itself: "Run <login command>", "Sign in again ...". */
 function startsWithStep(line: string, loginWords: readonly string[]): boolean {

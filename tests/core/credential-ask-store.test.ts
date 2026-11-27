@@ -29,11 +29,27 @@ describe('credential asks share the inbox write lock across every sender', () =>
     expect((await listLetters()).letters).toHaveLength(1)
     expect((await getLetter(all[0]!.letter.id))?.credentialAsk).toEqual({ host: '__local__', kind: 'ssh-certificate', expiresAt: 1000 })
   })
-  it('same destination does not merge credentials stored on two machines or two kinds on one machine', async () => {
+  it('credentials on two machines stay two letters; two parts of one machine\'s sign-in are one, the second a turn once', async () => {
     await sendLetterOnce(input())
-    await sendLetterOnce(input('cloudbox'))
-    await sendLetterOnce(input('cloudbox', 'login-cookie'))
-    expect((await listLetters()).letters).toHaveLength(3)
+    const remote = await sendLetterOnce(input('cloudbox'))
+    const cookie = await Promise.all([sendLetterOnce(input('cloudbox', 'login-cookie', 5000, 'task-a')), sendLetterOnce(input('cloudbox', 'login-cookie', 5000, 'task-b'))])
+    expect(cookie.map((o) => o.letter.id)).toEqual([remote.letter.id, remote.letter.id])
+    expect((await listLetters()).letters).toHaveLength(2)
+    const detail = await getLetter(remote.letter.id)
+    expect(detail?.thread).toHaveLength(1)
+    expect(detail?.thread[0]?.body).toContain('login-cookie')
+    expect(detail?.credentialAsk).toEqual({ host: 'cloudbox', kind: 'ssh-certificate', expiresAt: 1000, folded: [{ kind: 'login-cookie', expiresAt: 5000 }] })
+    expect(detail?.read).toBe(false)
+  })
+
+  it('the 2026-11-27 shape: one task names the cookie, another\'s prose names the certificate, on one machine: one letter', async () => {
+    const first = await sendLetterOnce(input('cloudbox', 'login-cookie', 5000, 'task-a'))
+    const later = await sendLetterOnce({ subject: 'cloudbox sign-in expired', type: 'review',
+      markdown: '**\u8bf7\u5728 cloudbox \u4e0a\u8dd1\u4e00\u6b21 `acmelogin -s -o`\u3002** SSH \u8bc1\u4e66\u5df2\u8fc7\u671f\u3002',
+      sender: { sessionId: 'task-b', host: 'cloudbox' } })
+    expect(later.letter.id).toBe(first.letter.id)
+    expect((await listLetters()).letters).toHaveLength(1)
+    expect((await getLetter(first.letter.id))?.thread).toHaveLength(1)
   })
   it('old prose callers identify the renewal location and fold into an existing typed core letter', async () => {
     const first = await sendLetterOnce(input())
@@ -68,4 +84,11 @@ describe('credential asks share the inbox write lock across every sender', () =>
     expect(next.letter.id).not.toBe(first.letter.id)
     expect((await listLetters()).letters).toHaveLength(1)
   })
+
+  it('the core certificate alert never folds into a task\'s ask of another kind on the Mac', async () => {
+    const task = await sendLetterOnce(input('__local__', 'login-cookie', 5000, 'task-a'))
+    const core = await sendLetterOnce(input('__local__', 'ssh-certificate', 1000), { opKey: 'ssh-cert-expiry:1000' })
+    expect(core.letter.id).not.toBe(task.letter.id)
+  })
 })
+

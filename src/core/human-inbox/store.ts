@@ -45,7 +45,7 @@ import { letterOriginOf } from './letter-origin.js';
 import { awaitsUserDecision } from './open-decision.js';
 import { INFO_NOT_INBOX_MESSAGE, passesInfoRule } from './info-letter-rule.js';
 import { kindOfLetter } from './walnut-letters/registry.js';
-import { resolveCredentialAsk, findCredentialLetter, storedCredentialAskOf, credentialAskContext } from './credential-ask.js';
+import { resolveCredentialAsk, findCredentialLetter, storedCredentialAskOf, credentialAskContext, credentialFoldAddsTurn, credentialAfterFold } from './credential-ask.js';
 import { isSignInAsk, loginCommandWords } from '../sign-in-ask.js';
 import {
   LETTER_INLINE_BODY_MAX_BYTES,
@@ -703,17 +703,19 @@ export async function sendLetterOnce(
       // The same op sent meanwhile (checked again under the lock): keep that one.
       const sent = opKey ? store.letters.find(l => l.createdByOp === opKey) : undefined;
       if (sent) { first = { ...sent }; return; }
+      const crossKind = !opKey?.startsWith('ssh-cert-expiry:');
       const credentialLetter = credentialAsk ? findCredentialLetter(credentialAsk, store.letters.map(l => ({
         ...l, ...(oldScopes.has(l.id) ? { credentialAsk: {
           ...oldScopes.get(l.id)!, ...l.credentialAsk, host: oldScopes.get(l.id)!.host,
         } } : {}),
-      }))) : undefined;
+      })), { crossKind }) : undefined;
       if (credentialLetter) {
         const kept = store.letters.find(l => l.id === credentialLetter.id)!;
-        // An old ask with no expiry is not proof that this certificate was announced. Update
-        // that same thread once under the lock and notify, instead of silently swallowing it.
-        if (credentialAsk?.expiresAt !== undefined && credentialLetter.credentialAsk?.expiresAt === undefined) {
-          kept.credentialAsk = credentialAsk;
+        // An old ask with no expiry is not proof that this certificate was announced, and another
+        // part of the machine's sign-in may need another step: that same thread gets the new words
+        // once under the lock and notifies, instead of silently swallowing them.
+        if (credentialAsk && credentialLetter.credentialAsk && credentialFoldAddsTurn(credentialAsk, credentialLetter.credentialAsk)) {
+          kept.credentialAsk = credentialAfterFold(credentialAsk, credentialLetter.credentialAsk);
           kept.read = false;
           kept.readAt = Date.now();
           kept.thread.push({ from: 'agent', text: record.textPreview, at: Date.now(), sender: record.sender,
