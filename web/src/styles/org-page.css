@@ -146,7 +146,9 @@
   flex-direction: column;
   gap: 6px;
 }
-.org-reorg-text { line-height: 1.35; }
+.org-reorg-head { display: flex; align-items: flex-start; gap: 8px; }
+.org-reorg-text { flex: 1 1 auto; min-width: 0; line-height: 1.35; }
+.org-reorg-head > .wn-notice-close { flex: none; margin: -2px -4px 0 0; }
 .org-reorg-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* ── The detail ── */
@@ -178,8 +180,9 @@
 .org-router-settings-open { flex: none; font-size: var(--font-size-sm); color: var(--accent); }
 .org-detail-split.is-router-split { min-height: 160px; }
 /* Mail's "Open router": the message, its state and the next step, under the router's header. */
-.org-router-from-mail { flex: none; padding: 8px 20px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); color: var(--fg); font-size: var(--font-size-md); }
+.org-router-from-mail { position: relative; flex: none; padding: 8px 44px 8px 20px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); color: var(--fg); font-size: var(--font-size-md); }
 .org-router-from-mail p { margin: 0; }
+.org-router-from-mail > .org-router-from-mail-close { position: absolute; top: 6px; right: 12px; }
 .org-router-from-mail p + p { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .org-router-from-mail-label { font-weight: 600; }
 .org-router-from-mail-state { color: var(--fg-secondary); }

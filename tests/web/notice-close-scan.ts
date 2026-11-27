@@ -5,6 +5,7 @@
  * A member is:
  *  - an element of a notice part: <NoticeCard>, <PanelNotice>, <AskCardFrame> (every notice, banner
  *    and ask card is drawn as one of them);
+ *  - an element of its own markup with role="alert", "status" or "note";
  *  - an element of its own markup whose root class names a notice: its first class ends in -banner,
  *    -notice, -toast, -alert, -callout or -receipt (or is that word alone).
  * Its close is NoticeClose (the one ×), a part's `onClose`, or a button inside it whose label says
@@ -92,8 +93,9 @@ export function membersOf(file: string, raw: string): Member[] {
       out.push({ file, line: lineOf(src, m.index!), name: part, closes: CLOSES.test(text), text });
     }
   }
-  // A live region of its own markup: role="alert" or role="status" says it is a notice to the reader.
-  const live = /<([a-z][a-z0-9]*)\b(?:[^<>]|=>)*?\brole=["'](alert|status)["']/g;
+  // A live region or a note of its own markup: role="alert", "status" or "note" says it is a notice
+  // to the reader (2026-11-27: the Org page's reorg reminder, a role="note" with a word key Close).
+  const live = /<([a-z][a-z0-9]*)\b(?:[^<>]|=>)*?\brole=["'](alert|status|note)["']/g;
   for (const m of src.matchAll(live)) {
     const end = elementEnd(src, m.index!, m[1]!);
     const text = src.slice(m.index!, end);

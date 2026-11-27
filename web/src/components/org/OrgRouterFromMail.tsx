@@ -3,7 +3,9 @@
  * the state it is stuck in, and the one thing to do next on this page. It lives in the navigation's
  * own state, so it is gone after a reload or once another node is opened.
  */
+import { useState } from 'react';
 import { useLocation } from 'react-router-dom';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { ROUTER_SETTINGS_OPEN_EVENT } from './OrgRouterSettings';
 import { useRouterSettingsOpen } from './router-settings-open';
 
@@ -33,9 +35,12 @@ export function OrgRouterFromMail({ node, routerId, title, paused }: { node: str
   const location = useLocation();
   const from = routerFromMailOf(location.state, node);
   const settingsOpen = useRouterSettingsOpen(routerId);
-  if (!from) return null;
+  // His × hides it for the message it names; Mail's next "Open router" brings its own.
+  const [hidden, setHidden] = useState<string | null>(null);
+  if (!from || hidden === `${from.subject}\n${from.state}`) return null;
   return (
     <div className="org-router-from-mail" data-testid="org-router-from-mail" role="note">
+      <NoticeClose onClose={() => setHidden(`${from.subject}\n${from.state}`)} label="Hide this note" testId="org-router-from-mail-close" className="org-router-from-mail-close" />
       <p>
         <span className="org-router-from-mail-label">From Mail:</span>{' '}
         <span data-testid="org-router-from-mail-subject">“{from.subject}”</span>

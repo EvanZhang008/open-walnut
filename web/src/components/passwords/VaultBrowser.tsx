@@ -22,6 +22,7 @@ import { PasswordsPopover } from './PasswordsPopover'
 import { ImportDialog } from './ImportDialog'
 import { GeneratorPanel } from './GeneratorPanel'
 import { AgentActivity } from './AgentActivity'
+import { NoticeClose } from '@/components/common/NoticeClose'
 import { RecentAgentUse } from './RecentAgentUse'
 import {
   GridIcon, StarIcon, UserKeyIcon, ClockIcon, CodeIcon, NoteIcon, CardIcon, ShieldIcon, TrashIcon, PlusIcon, SearchIcon,
@@ -119,6 +120,8 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
   const [opened, setOpened] = useState<VaultItem | null>(null)
   const [editing, setEditing] = useState<Editing>(null)
   const [importDialogOpen, setImportDialogOpen] = useState(false)
+  // The recovery warning his × hid, by which warning it was: a changed code shows its own again.
+  const [recoveryHidden, setRecoveryHidden] = useState<string | null>(null)
   const [loadError, setLoadError] = useState('')
   const openSeq = useRef(0)
 
@@ -221,10 +224,13 @@ export function VaultBrowser({ status, onLocked }: { status: VaultStatus; onLock
         </nav>
         {/* Right under the sections, never pinned to the bottom, where the notice stack sits. */}
         <div className="pw-side-tools">
-          {(status.hasRecovery === false || status.recoveryUnsaved) && (
+          {(status.hasRecovery === false || status.recoveryUnsaved) && recoveryHidden !== (status.recoveryUnsaved ? 'unsaved' : 'none') && (
             // No working kit in the person's hands: a forgotten master password would lock the vault for good.
             <div className="pw-side-warn" role="note" data-testid="pw-no-recovery">
-              <b>{status.recoveryUnsaved ? 'Recovery kit not saved' : 'No recovery code yet'}</b>{/* empty-state-ok: warning heading */}
+              <span className="pw-side-warn-head">
+                <b>{status.recoveryUnsaved ? 'Recovery kit not saved' : 'No recovery code yet'}</b>{/* empty-state-ok: warning heading */}
+                <NoticeClose onClose={() => setRecoveryHidden(status.recoveryUnsaved ? 'unsaved' : 'none')} label="Hide until the vault is opened again" testId="pw-no-recovery-close" />
+              </span>
               <span>{status.recoveryUnsaved ? 'Your recovery code changed and the new kit was never saved. Make a new one.' : 'Forget your master password and nothing opens this vault.'}</span>
               <button type="button" className="btn btn-sm" onClick={() => navigate('/settings#passwords')}>Make a recovery kit</button>
             </div>

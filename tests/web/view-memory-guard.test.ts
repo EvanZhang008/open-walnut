@@ -47,6 +47,8 @@ const PASSING: Record<string, string> = {
   'pages/DashboardPage.tsx#showForm': 'the new-task form, a dialog',
   'pages/MainPage.tsx#focusScope': 'where one focus request came from, reset after it is served',
   'components/sessions/DraftWhereLevels.tsx#foldOpen': 'the small menu of the folded levels in the Where picker, a popover open for one pick',
+  'components/org/OrgRouterFromMail.tsx#hidden': 'the From Mail note closed by its x for the one message it names: the note lives in one navigation\'s state and is gone after a reload anyway',
+  'components/passwords/VaultBrowser.tsx#recoveryHidden': 'the recovery warning closed by its x until the vault opens again: a safety warning comes back each time, never hidden for good',
   'components/sessions/DraftTaskMatches.tsx#hidden': 'the matches hidden for the first line typed now: gone once that line changes, a passing dismissal of one search',
   'components/sessions/PromptCards.tsx#activeQ': "which question of an open ask the number keys answer: a keyboard cursor, gone once it is answered",
   'components/sessions/PromptCards.tsx#keyPick': 'the choice a number key picked on an open prompt, waiting for Enter: a keyboard cursor, gone once it is answered',

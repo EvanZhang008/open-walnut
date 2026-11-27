@@ -108,6 +108,7 @@ describe('every card and notice can be closed', () => {
       'web/src/components/actions/ActionNeeded.tsx:AskCardFrame',
       'web/src/components/sessions/UsageLimitBanner.tsx:session-error-banner',
       'web/src/components/common/FileContentView.tsx:fv-offline-banner',
+      'web/src/components/org/OrgReorgReminder.tsx:role=note.org-reorg-note',
     ]) expect(names, known).toContain(known);
     expect(members.length).toBeGreaterThan(60);
   });

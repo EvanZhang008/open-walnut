@@ -3,8 +3,8 @@
  * user: "if the VP more than 6 remind them to do reorg, if they select close we keep remind each
  * one more vp created, like remind in 6, 7, 8 but if they close, we at least don't remind in
  * current load, they can also choose never remind"):
- *   - from 6 VPs one line suggests merging some, with Org chart, Close and Never remind me
- *   - Close hides it for this load: leaving the page and coming back keeps it hidden
+ *   - from 6 VPs one line suggests merging some, with its x, Org chart and Never remind me
+ *   - its x hides it for this load: leaving the page and coming back keeps it hidden
  *   - one more VP brings it back in the same load
  *   - a reload keeps a close at that count (2026-11-23: "我已经close了 ... 他就不要再提醒我了")
  *   - Never remind me hides it for good, a reload included
@@ -68,6 +68,13 @@ test('the reorg reminder: shows from 6 VPs, Close holds at that count across rel
   await expect(note).toBeVisible()
   await expect(note).toContainText(`You have ${n} VPs.`)
   await expect(note.getByTestId('org-reorg-chart')).toBeVisible()
+  // Its close is the one × (NoticeClose) at the end of its words' line, as every notice's.
+  const x = note.getByTestId('org-reorg-close')
+  await expect(x).toHaveClass(/\bwn-notice-close\b/)
+  const [xb, tb] = [(await x.boundingBox())!, (await note.locator('.org-reorg-text').boundingBox())!]
+  expect(xb.x, 'the x sits after the words').toBeGreaterThanOrEqual(tb.x + tb.width - 1)
+  expect(Math.abs(xb.y - tb.y), 'on their first line').toBeLessThan(12)
+  await note.screenshot({ path: test.info().outputPath('reorg-note.png') })
 
   // Close: gone, and still gone after leaving the page and coming back in this load.
   await note.getByTestId('org-reorg-close').click()

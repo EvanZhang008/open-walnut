@@ -420,6 +420,11 @@ export async function railWalk(page: Page, height: number, bars: Bars) {
   await expect(page.getByTestId('pw-no-recovery')).toBeVisible()
   const sideJudged = await judge('vault')
   expect(sideJudged.some((n) => n === 'aside.pw-side' || n.startsWith('aside.pw-side.')), `the side is judged: ${sideJudged.join(', ')}`).toBe(true)
+  // The recovery warning has the one x (every notice in front of him does); it hides the warning.
+  const warn = page.getByTestId('pw-no-recovery')
+  await expect(warn.getByTestId('pw-no-recovery-close')).toBeVisible()
+  await warn.getByTestId('pw-no-recovery-close').click()
+  await expect(warn).toHaveCount(0)
 
   // The rail's buttons that open a page or a side bar beside the page (Org, Agenda, Scratchpad),
   // each from Home.

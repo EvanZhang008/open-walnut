@@ -1,9 +1,10 @@
 /**
  * One line above the Org page's list once there are many VPs (org-reorg-reminder.ts): open the
- * chart to merge some, close it until there is one more VP, or never see it again.
+ * chart to merge some, close it (its ×) until there is one more VP, or never see it again.
  */
 import { useState } from 'react';
 import { log } from '@/utils/log';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import {
   REORG_NEVER_KEY, REORG_NEVER_VALUE, closeReorgReminder, reorgClosedAt, reorgLine, reorgNeverFrom, showReorgReminder,
 } from './org-reorg-reminder';
@@ -28,10 +29,12 @@ export function OrgReorgReminder({ vps, onOpenChart }: { vps: number; onOpenChar
   };
   return (
     <div className="org-reorg-note" role="note" data-testid="org-reorg-reminder">
-      <span className="org-reorg-text">{reorgLine(vps)}</span>
+      <span className="org-reorg-head">
+        <span className="org-reorg-text">{reorgLine(vps)}</span>
+        <NoticeClose onClose={close} label="Hide until there is one more VP" testId="org-reorg-close" />
+      </span>
       <span className="org-reorg-actions">
         <button type="button" className="btn btn-sm" data-testid="org-reorg-chart" onClick={onOpenChart}>Org chart</button>
-        <button type="button" className="btn btn-sm btn-ghost" data-testid="org-reorg-close" onClick={close}>Close</button>
         <button type="button" className="btn btn-sm btn-ghost" data-testid="org-reorg-never" onClick={neverAgain}>Never remind me</button>
       </span>
     </div>
