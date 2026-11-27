@@ -193,7 +193,13 @@ describe('intentional-stop intent in the daemon source', () => {
   function fnBody(src: string, name: string, label: string): string {
     const at = src.indexOf('function ' + name + '(')
     expect(at, `${label}: ${name} not found`).toBeGreaterThan(-1)
-    let i = src.indexOf('{', at)
+    // Skip the parameter list first: a default like `extra = {}` is not the body.
+    let i = at + ('function ' + name).length
+    for (let parens = 0; i < src.length; i++) {
+      if (src[i] === '(') parens++
+      else if (src[i] === ')' && --parens === 0) break
+    }
+    i = src.indexOf('{', i)
     let depth = 0
     for (; i < src.length; i++) {
       const ch = src[i]
