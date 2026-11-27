@@ -70,7 +70,8 @@ final class VoiceTalkRecorder: TalkRecording {
         if let path = TalkDebug.replayFile {
             // The file stands in for the microphone's sound only: the session is
             // switched on as a real take does it (build 160 shipped a session that
-            // a test's own session hid).
+            // a test's own session hid), except in a silent run (`AudioSilence`),
+            // which switches nothing on.
             AppLog.info("talk", "replaying a file as the microphone", ["file": (path as NSString).lastPathComponent])
             if let refused = await recorder.activateForReplay() { return refused }
             started = recorder._beginReplayTake(source: URL(fileURLWithPath: path))
@@ -222,10 +223,16 @@ final class TalkReplayCapture: AudioCapture, AudioLevelSource {
         now = Date.init
         began = Date()
         keepAliveURL = FileManager.default.temporaryDirectory.appendingPathComponent("talk-replay-hold-\(UUID().uuidString).caf")
-        keepAlive = try? AVAudioRecorder(url: keepAliveURL, settings: [
-            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
-        ])
-        keepAlive?.record()
+        if AudioSilence.isOn {
+            // A silent run (`AudioSilence`) switched no session on, so there is none to hold,
+            // and a recorder would run the Simulator's audio device, output included.
+            keepAlive = nil
+        } else {
+            keepAlive = try? AVAudioRecorder(url: keepAliveURL, settings: [
+                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
+            ])
+            keepAlive?.record()
+        }
     }
 
     /// Test seam: these samples, this clock, and no session to hold.

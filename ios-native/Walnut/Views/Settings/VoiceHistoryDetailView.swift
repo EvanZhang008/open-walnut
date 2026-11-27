@@ -87,8 +87,20 @@ final class VoiceHistoryDetailModel {
             #if DEBUG
             _testPlaybackStart?()
             #endif
+            if AudioSilence.isOn {
+                // Where a test or an agent runs the app: it plays for as long as the take
+                // lasts, and no session or player opens (`AudioSilence`).
+                guard let seconds = AudioSilence.seconds(of: audioURL) else { throw CocoaError(.fileReadCorruptFile) }
+                playing = true
+                notice = nil
+                playbackTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(NoticeTiming.seconds(seconds)))
+                    guard !Task.isCancelled, let self else { return }
+                    self.stop()
+                }
+                return
+            }
             let preparedPlayer = try AVAudioPlayer(contentsOf: audioURL)
-            preparedPlayer.volume = AudioSilence.volume(preparedPlayer.volume)
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .spokenAudio)
             try session.setActive(true)

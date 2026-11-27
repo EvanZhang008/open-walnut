@@ -25,6 +25,7 @@ const HELPER = 'Shared/TestRunMark.swift'
 const UNMARKED: Record<string, string> = {
   'Walnut/Views/Chat/Camera/CameraClipMaker.swift': 'its AVURLAsset reads a video the phone just recorded, a local file: no request',
   'Walnut/Core/VideoStills.swift': 'its AVURLAsset reads a local video file for its stills: no request',
+  'Walnut/Views/Sessions/SessionMediaView.swift': "its AVURLAsset (the silent player's picture-only copy) reads the file SessionMediaLoader already downloaded: a local file, no request",
 }
 
 /** Source without comments, so a name in a comment neither adds nor approves a request. */

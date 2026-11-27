@@ -51,6 +51,10 @@ final class SpeechOutput: NSObject {
             handingOff = true
             synthesizer.stopSpeaking(at: .immediate)
         }
+        if AudioSilence.isOn {
+            speakSilently(trimmed, id: id, generation: mine)
+            return
+        }
         await AudioSessionHandoff.settle()
         guard mine == generation else { return }
         do {
@@ -67,8 +71,6 @@ final class SpeechOutput: NSObject {
         utterance.voice = Self.voice(for: language)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         utterance.postUtteranceDelay = 0.1
-        // Spoken at volume zero where a test or an agent runs the app (AudioSilence).
-        utterance.volume = AudioSilence.volume(utterance.volume)
         handingOff = false
         current = utterance
         speakingID = id
@@ -77,6 +79,22 @@ final class SpeechOutput: NSObject {
             "id": id, "language": language, "voice": utterance.voice?.identifier ?? "default",
             "chars": String(trimmed.count),
         ])
+    }
+
+    /// Where a test or an agent runs the app (`AudioSilence`): no session and no
+    /// synthesizer, only the time the words would take, so voice mode reads, finishes
+    /// and listens again as it does aloud. A stop or a newer speak ends it early.
+    private func speakSilently(_ text: String, id: String, generation mine: Int) {
+        handingOff = false
+        current = nil
+        speakingID = id
+        AppLog.info("voice-mode", "speaking silently", ["id": id, "chars": String(text.count)])
+        let seconds = AudioSilence.speechSeconds(text)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(NoticeTiming.seconds(seconds)))
+            guard let self, self.generation == mine, self.speakingID == id else { return }
+            self.speakingID = nil
+        }
     }
 
     /// Stop now. `handoff`: the recorder is about to take the session, so leave

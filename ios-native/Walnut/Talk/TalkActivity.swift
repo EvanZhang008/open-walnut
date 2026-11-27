@@ -77,10 +77,17 @@ final class TalkLiveActivity: TalkActivityPresenting {
         // lost with a sound (it must not pass unnoticed), anything else in
         // silence: a send showing the words Walnut heard, a take saved to go
         // out later, nothing heard.
-        let alert = AlertConfiguration(
-            title: "\(state.title)", body: "\(state.subtitle)",
-            sound: state.needsAttention && !AudioSilence.isOn ? .default : .named(Self.silentSound)
-        )
+        // Where a test or an agent runs the app (`AudioSilence`) the outcome shows with no
+        // alert at all: even the bundled silent sound would run the system's output.
+        let alert: AlertConfiguration?
+        if AudioSilence.isOn {
+            alert = nil
+        } else {
+            alert = AlertConfiguration(
+                title: "\(state.title)", body: "\(state.subtitle)",
+                sound: state.needsAttention ? .default : .named(Self.silentSound)
+            )
+        }
         enqueue {
             await activity.update(content, alertConfiguration: alert)
             try? await Task.sleep(for: .seconds(hold))

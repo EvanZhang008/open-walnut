@@ -7,11 +7,11 @@
  *     zero and speaks at volume zero, only under automation, in the page and as the
  *     source a frame runs;
  *   - the chime never opens the audio device under automation;
- *   - ratchets: every sound API in the web app and the plugins this repository ships, every
- *     sandboxed frame, and every sound site of the iOS app is listed with how it stays
- *     silent, so a new one fails here until it does;
- *   - every Chromium project of the Playwright config mutes itself, and every UI test
- *     launch of the iOS app passes the silent argument.
+ *   - ratchets: every sound API in the web app and the plugins this repository ships, and every
+ *     sandboxed frame, is listed with how it stays silent, so a new one fails here until it does;
+ *   - every Chromium project of the Playwright config mutes itself;
+ *   - the iOS app's web view silencer behaves like the web one (the iOS app's own sound
+ *     sites: tests/ios/audio-silence-sites.test.ts).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -450,24 +450,9 @@ describe('every Playwright config', () => {
   });
 });
 
-describe('ratchet: the iOS app makes no sound where a test or an agent runs it', () => {
-  // A web view is a sound site too: its page can play media or Web Audio.
-  const SOUND = /AVSpeechSynthesizer\(|AVAudioPlayer\(|AVPlayer\(|AVQueuePlayer\(|AudioServicesPlay\w*Sound|AlertConfiguration\(|AVAudioEngine\(|UNNotificationSound|VideoPlayer\(|WKWebViewConfiguration\(|WKWebView\(frame/;
-
-  it('every sound site reads AudioSilence', () => {
-    const found = filesMatching(['ios-native'], SOUND, /\.swift$/, /Tests\//);
-    expect(found.length).toBeGreaterThan(0);
-    const missing = found.filter((f) => !read(f).includes('AudioSilence.'));
-    // SpeechOutput builds its synthesizer once; the volume goes on each utterance.
-    expect(missing).toEqual([]);
-  });
-
-  it('every web view configuration installs the page silencer', () => {
-    const found = filesMatching(['ios-native'], /WKWebViewConfiguration\(\)/, /\.swift$/, /Tests\//);
-    expect(found.length).toBeGreaterThanOrEqual(3);
-    for (const f of found) expect(read(f), f).toMatch(/AudioSilence\.install\(on: /);
-  });
-
+describe('the iOS app silences its web views like the web app', () => {
+  // Which iOS calls may open audio hardware, and that each checks AudioSilence first:
+  // tests/ios/audio-silence-sites.test.ts.
   it('its web view script silences a page like the web silencer, with no webdriver gate', async () => {
     const src = /static let webScript = #"([\s\S]*?)"#/.exec(read('ios-native/Walnut/Core/AudioSilence.swift'))?.[1];
     expect(src).toBeTruthy();
@@ -476,17 +461,5 @@ describe('ratchet: the iOS app makes no sound where a test or an agent runs it',
     const g = fakeRealm(false);
     vm.runInNewContext(src!, g.realm);
     await checkSilenced(g);
-  });
-
-  it('is silent in the Simulator and under tests, never on a device', () => {
-    const src = read('ios-native/Walnut/Core/AudioSilence.swift');
-    expect(src).toMatch(/return simulator && !defaults\.bool\(forKey: allowArgument\)/);
-    expect(src).toMatch(/XCTestConfigurationFilePath/);
-  });
-
-  it('every UI test launch passes the silent argument', () => {
-    const launch = read('ios-native/WalnutUITests/UITestLaunch.swift');
-    expect(launch).toMatch(/silentAudioArguments = \["-walnut\.silentAudio", "YES"\]/);
-    expect(launch).toMatch(/\+ keychainArguments \+ silentAudioArguments \+ arguments/);
   });
 });

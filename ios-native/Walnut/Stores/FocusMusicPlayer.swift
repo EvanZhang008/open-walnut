@@ -228,7 +228,7 @@ final class FocusMusicPlayer {
 
     func setVolume(_ next: Float) {
         volume = min(1, max(0, next))
-        player?.volume = AudioSilence.volume(volume)
+        player?.volume = volume
         AppPrefs.defaults.set(Double(volume), forKey: Self.volumeKey)
     }
 
@@ -327,6 +327,13 @@ final class FocusMusicPlayer {
             // A switch-off still queued from an earlier stop would silence this start.
             await AudioSessionHandoff.settle()
             guard let self, self.generation == current else { return }
+            if AudioSilence.isOn {
+                // Where a test or an agent runs the app: it shows as playing, and no
+                // session, player or output opens (`AudioSilence`).
+                self.starting = false
+                self.playing = true
+                return
+            }
             guard self.claimAudio() else { self.starting = false; return }
             self.startPlayer(track, generation: current)
         }
@@ -343,9 +350,10 @@ final class FocusMusicPlayer {
     }
 
     private func startPlayer(_ track: RhythmMusicListing.Track, generation current: Int) {
+        guard !AudioSilence.isOn else { return }
         guard let first = item(for: track) else { fail("Walnut is not connected."); return }
         let queue = AVQueuePlayer()
-        queue.volume = AudioSilence.volume(volume)
+        queue.volume = volume
         player = queue
         if order == .one || tracks.count == 1 {
             let looper = AVPlayerLooper(player: queue, templateItem: first)
@@ -456,6 +464,7 @@ final class FocusMusicPlayer {
     /// Asked of the session on every start: another part of the app may have switched it
     /// to recording, or off, since the last one.
     private func claimAudio() -> Bool {
+        guard !AudioSilence.isOn else { return false }
         SpeechOutput.shared.stop(handoff: true)
         do {
             let session = AVAudioSession.sharedInstance()
@@ -477,7 +486,7 @@ final class FocusMusicPlayer {
     }
 
     private func observeInterruptions() {
-        guard interruptionObserver == nil else { return }
+        guard !AudioSilence.isOn, interruptionObserver == nil else { return }
         interruptionObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
             let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init)
             let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt).map(AVAudioSession.InterruptionOptions.init) ?? []

@@ -153,6 +153,11 @@ final class LiveCameraSource: NSObject, CameraSource {
     func takePhoto() async throws -> UIImage {
         guard videoInput != nil else { throw CameraSourceError.notRunning }
         let settings = AVCapturePhotoSettings()
+        // A silent run (`AudioSilence`) takes the picture without the shutter sound, wherever
+        // iOS allows that (some places' law forbids it, and iOS then plays it regardless).
+        if AudioSilence.isOn, photoOutput.isShutterSoundSuppressionSupported {
+            settings.isShutterSoundSuppressionEnabled = true
+        }
         let wait = PhotoWait()
         photoWaits[settings.uniqueID] = wait
         defer { photoWaits[settings.uniqueID] = nil }
@@ -166,7 +171,8 @@ final class LiveCameraSource: NSObject, CameraSource {
     func startRecording(to url: URL, sound: Bool) async throws -> Bool {
         guard videoInput != nil else { throw CameraSourceError.notRunning }
         var withSound = false
-        if sound, await AVCaptureDevice.requestAccess(for: .audio), let mic = AVCaptureDevice.default(for: .audio),
+        // A silent run (`AudioSilence`) records the picture only: the microphone never opens.
+        if sound, !AudioSilence.isOn, await AVCaptureDevice.requestAccess(for: .audio), let mic = AVCaptureDevice.default(for: .audio),
            let input = try? AVCaptureDeviceInput(device: mic) {
             let session = session
             withSound = (try? await onQueue { () -> Bool in

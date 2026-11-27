@@ -103,7 +103,8 @@ extension VoiceModeController {
         #if DEBUG
         if let path = TalkDebug.replayFile {
             // The file stands in for the microphone's sound only; the session is
-            // switched on as a real take does it.
+            // switched on as a real take does it, except in a silent run
+            // (`AudioSilence`), which switches nothing on.
             if await recorder.activateForReplay() != nil { return false }
             return recorder._beginReplayTake(source: URL(fileURLWithPath: path))
         }

@@ -42,16 +42,18 @@ describe('shared iOS dictation lifecycle', () => {
     expect(selector).toMatch(/InboxItemTaskPreview\([^\n]+\)\s*\}/);
   });
 
-  it('keeps the UI-test capture silent and unavailable to phone/release builds', () => {
-    const source = read('Core/DebugDictationCapture.swift');
-    expect(source).toMatch(/^#if DEBUG && targetEnvironment\(simulator\)/);
-    expect(source).toContain('arguments.contains("-walnut.uiTestKeychain")');
-    expect(source).toContain('bool(forKey: "walnut.silentAudio")');
-    expect(source).toContain('uploadOverride =');
-    expect(source).toContain('_testBeginTake(');
+  it('records every silent take without audio hardware, and keeps the test words out of phone and release builds', () => {
+    const source = read('Core/SilentVoiceTake.swift');
+    const hook = source.slice(source.indexOf('#if DEBUG && targetEnvironment(simulator)'));
+    expect(hook).toContain('arguments.contains("-walnut.uiTestKeychain")');
+    expect(hook).toContain('bool(forKey: "walnut.silentAudio")');
+    expect(hook).toContain('uploadOverride =');
+    // The test words are a debug Simulator hook only; the silent capture itself is not.
+    expect(source.slice(0, source.indexOf('#if DEBUG && targetEnvironment(simulator)'))).not.toContain('dictationText');
     const code = source.replace(/\/\/[^\n]*/g, '');
     expect(code).not.toMatch(/AVAudioSession|AVAudioRecorder|AVAudioPlayer|activateSession|\.play\(/);
-    expect(read('Core/VoiceRecorder.swift')).toContain('#if DEBUG && targetEnvironment(simulator)\n        if let started = beginSilentUITestTake()');
-    expect(read('Core/VoiceRecorder.swift')).toContain('if isSilentUITestDictation { return }\n        #endif\n        AudioSessionHandoff.deactivateOffMain()');
+    const recorder = read('Core/VoiceRecorder.swift');
+    expect(recorder).toContain('if AudioSilence.isOn { return beginSilentTake() }');
+    expect(recorder).toContain('if AudioSilence.isOn { return }\n        AudioSessionHandoff.deactivateOffMain()');
   });
 });

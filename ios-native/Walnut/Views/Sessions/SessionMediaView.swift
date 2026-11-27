@@ -10,6 +10,8 @@ final class SessionMediaPlayback {
     private(set) var failure: FileReadFailure?
     @ObservationIgnored private var observation: NSKeyValueObservation?
     @ObservationIgnored private var playObservation: NSKeyValueObservation?
+    /// A silent run's picture-only item, while it is made (`AudioSilence`).
+    @ObservationIgnored private var silentLoad: Task<Void, Never>?
     @ObservationIgnored private var audioNotifications: [NSObjectProtocol] = []
     @ObservationIgnored private var interrupted = false
     @ObservationIgnored private let stopSpeech: @MainActor () -> Void
@@ -25,6 +27,8 @@ final class SessionMediaPlayback {
 
     init(settleAudio: @escaping @MainActor () async -> Void = { await AudioSessionHandoff.settle() },
          activateAudio: @escaping @MainActor () throws -> Void = {
+             // A silent run (`AudioSilence`) never switches the session on.
+             guard !AudioSilence.isOn else { return }
              let session = AVAudioSession.sharedInstance()
              try session.setCategory(.playback, mode: .moviePlayback)
              try session.setActive(true)
@@ -40,9 +44,27 @@ final class SessionMediaPlayback {
     func open(_ url: URL, host: String?) {
         teardown()
         preparing = true
-        let item = AVPlayerItem(url: url)
-        let player = AVPlayer(playerItem: item)
-        player.isMuted = AudioSilence.isOn
+        let player: AVPlayer
+        if AudioSilence.isOn {
+            // Where a test or an agent runs the app the picture plays and there is no sound
+            // to render: the player gets a copy of the file's picture with no audio track at
+            // all (a muted player, or one with its audio switched off, still runs an output).
+            player = Self.pictureOnlyPlayer()
+            silentLoad = Task { [weak self, weak player] in
+                let item = await Self.pictureOnlyItem(url)
+                guard let self, let player, self.player === player, !Task.isCancelled else { return }
+                guard let item else {
+                    self.preparing = false
+                    self.failure = FileReadFailure(kind: .unsupportedType, host: host)
+                    AppLog.warn("session-media", "media playback failed", ["domain": "picture-only", "code": "0"])
+                    return
+                }
+                player.replaceCurrentItem(with: item)
+                self.watchStatus(item, host: host)
+            }
+        } else {
+            player = AVPlayer(playerItem: AVPlayerItem(url: url))
+        }
         self.player = player
         playObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             Task { @MainActor [weak self, weak player] in
@@ -55,6 +77,32 @@ final class SessionMediaPlayback {
             }
         }
         observeAudioNotifications()
+        if let item = player.currentItem { watchStatus(item, host: host) }
+    }
+
+    /// The silent player (`AudioSilence`): it starts with no item, and only ever holds a
+    /// picture-only one (`pictureOnlyItem`), so there is never an audio track to render.
+    private static func pictureOnlyPlayer() -> AVPlayer { AVPlayer() }
+
+    /// The file's picture alone: a composition of its video track, with no audio track at
+    /// all. A file with no picture gives an empty composition (it plays nothing, silently);
+    /// nil when the file cannot be read, as a player would fail it.
+    private static func pictureOnlyItem(_ url: URL) async -> AVPlayerItem? {
+        let asset = AVURLAsset(url: url)
+        guard let tracks = try? await asset.loadTracks(withMediaType: .video) else { return nil }
+        let composition = AVMutableComposition()
+        if let video = tracks.first,
+           let range = try? await video.load(.timeRange),
+           let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) {
+            guard (try? track.insertTimeRange(range, of: video, at: .zero)) != nil else { return nil }
+            if let transform = try? await video.load(.preferredTransform) { track.preferredTransform = transform }
+        }
+        return AVPlayerItem(asset: composition)
+    }
+
+    /// Ready or failed, for the item the player holds.
+    private func watchStatus(_ item: AVPlayerItem, host: String?) {
+        observation?.invalidate()
         observation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             Task { @MainActor [weak self, weak item] in
                 guard let self, let item, self.player?.currentItem === item else { return }
@@ -167,6 +215,8 @@ final class SessionMediaPlayback {
         observation = nil
         playObservation?.invalidate()
         playObservation = nil
+        silentLoad?.cancel()
+        silentLoad = nil
         for token in audioNotifications { NotificationCenter.default.removeObserver(token) }
         audioNotifications = []
         interrupted = false

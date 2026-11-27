@@ -11,18 +11,37 @@ final class TalkPlayback: NSObject, AVAudioPlayerDelegate {
     /// The entry playing now, if any.
     private(set) var playingID: String?
     @ObservationIgnored private var player: AVAudioPlayer?
+    /// Bumped by each silent stand-in, so a late one never ends a newer one.
+    @ObservationIgnored private var silentRun = 0
 
     func toggle(_ id: String, url: URL) {
         if playingID == id { return stop() }
         stop()
+        if AudioSilence.isOn {
+            playSilently(id, url: url)
+            return
+        }
         guard let player = try? AVAudioPlayer(contentsOf: url) else { return }
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
         player.delegate = self
-        player.volume = AudioSilence.volume(player.volume)
         guard player.play() else { return }
         self.player = player
         playingID = id
+    }
+
+    /// Where a test or an agent runs the app (`AudioSilence`): the take shows as
+    /// playing for as long as it lasts, and no session or player opens.
+    private func playSilently(_ id: String, url: URL) {
+        guard let seconds = AudioSilence.seconds(of: url) else { return }
+        silentRun += 1
+        let run = silentRun
+        playingID = id
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(NoticeTiming.seconds(seconds)))
+            guard let self, self.silentRun == run, self.playingID == id else { return }
+            self.stop()
+        }
     }
 
     func stop() {

@@ -4,7 +4,8 @@ import XCTest
 ///  - the Shortcuts app lists "Talk to Walnut" with no setup, and a tap with Walnut in the
 ///    background that iOS will not let record from behind (`talkRefuseFromBehind`, the way a
 ///    phone refused build 160) brings Walnut forward already listening (a recorded file
-///    stands in for the microphone, through the real audio session);
+///    stands in for the microphone; the run is silent (`AudioSilence`), so no audio
+///    session is switched on);
 ///  - the server is unreachable, so the take is kept and the panel says so;
 ///  - Settings, Action Button shows it first, then the setup; its list has the reason, its
 ///    length, playback, Send Now and Delete.

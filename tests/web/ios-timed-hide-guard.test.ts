@@ -66,7 +66,7 @@ const KNOWN: KnownHide[] = [
   k('Stores/SessionConversationStore.swift', 'self.replayHoldTask = nil', 'the replay hold forgets its own task'),
   k('Views/Inbox/InboxItemConfirmation.swift', 'store.expirePlan', 'a plan expires at the time the server gave it, minutes away'),
   k('Core/VoiceLiveUploader.swift', 'advanced = false', 'the live upload\'s own step flag, not shown'),
-  k('Core/DebugDictationCapture.swift', 'failOnce = false', 'a debug dictation fixture'),
+  k('Core/SilentVoiceTake.swift', 'failOnce = false', 'a debug dictation fixture'),
   k('Views/Org/OrgThreadsView.swift', 'testMark = nil', 'the UI tests\' own reveal mark, already 8 s (testMarkSeconds)'),
   k('Views/Org/OrgThreadsView.swift', 'highlight = nil', 'a tint UI tests read through testMark; holding it longer would show under the next push\'s held sheet (expectHeld)'),
   k('Views/Tasks/TasksView.swift', 'highlightedTaskId = nil', 'a row tint, nothing to read or tap, no UI test reads it'),

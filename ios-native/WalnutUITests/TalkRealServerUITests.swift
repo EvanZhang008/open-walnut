@@ -10,10 +10,10 @@ import XCTest
 /// 160's phone did with "Audio is in use by another app"), it opens Walnut listening, and a
 /// Send followed at once by leaving Walnut still reaches the CEO. The simulator enforces no
 /// background recording rule, so only a phone proves the from-behind path; this proves the
-/// rest. The run opens the real voice session the way a press does
-/// (`VoiceRecorder.activateForReplay`, the same activation, and a real microphone recorder
-/// held open for the take); only the words come from a recorded file, so nothing is played
-/// or spoken aloud on the Mac that runs it. Its runner
+/// rest. The run takes the path a press does (`VoiceRecorder.activateForReplay`), but it is
+/// silent (`AudioSilence`): no audio session is switched on and no microphone recorder is
+/// held for the take; the words come from a recorded file, and nothing opens the audio
+/// device of the Mac that runs it. Its runner
 /// (`ios-native/tests/ui/run-talk-real-server.sh`) hands it:
 ///
 ///  - `WALNUT_UITEST_SERVER` / `WALNUT_UITEST_TOKEN`: a paired server (a test copy of the

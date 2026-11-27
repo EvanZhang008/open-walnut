@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import WebKit
 
@@ -10,9 +11,14 @@ import WebKit
 /// `WALNUT_SILENT_AUDIO=1` in the environment. A person who wants sound in the Simulator
 /// launches it with `-walnut.allowSound YES`. A real device is never silenced by this.
 ///
-/// Silent means the app plays at volume zero (speech, music, recordings, media) or skips
-/// the cue, so its own state (speaking, playing, finished) moves the same way. Nothing
-/// here touches the machine's volume or mute. Every sound site reads it; the ratchet is
+/// Silent means the app opens no audio hardware at all: no audio session switched on, no
+/// recorder, player, speech or system sound started. Volume zero was not enough: a player
+/// at volume zero still runs the Mac's audio output, and the Simulator runs even a
+/// record-only take through the Mac's output (2026-11-26: a letter's mic in a UI test made
+/// the app an audio output on a Mac with a person at it). So each site takes a stand-in
+/// path instead, and its own state (recording, speaking, playing, finished) moves the
+/// same way. Nothing here touches the machine's volume or mute. Every site that can open
+/// audio hardware checks `isOn` in its own function; the ratchet is
 /// tests/ios/audio-silence-sites.test.ts.
 enum AudioSilence {
     static let silentArgument = "walnut.silentAudio"
@@ -24,8 +30,18 @@ enum AudioSilence {
         simulator: runsInSimulator
     )
 
-    /// The volume a player should use: `volume` normally, 0 while silent.
-    static func volume(_ volume: Float) -> Float { isOn ? 0 : volume }
+    /// How long a file would play, read from its header without opening any audio
+    /// hardware: the stand-in a silent player waits instead of playing it.
+    /// nil when the file is not audio it can read, as a player would refuse it.
+    static func seconds(of url: URL) -> Double? {
+        guard let file = try? AVAudioFile(forReading: url), file.fileFormat.sampleRate > 0 else { return nil }
+        return Double(file.length) / file.fileFormat.sampleRate
+    }
+
+    /// How long speaking `text` would take: the stand-in silent speech waits.
+    static func speechSeconds(_ text: String) -> Double {
+        min(8, max(0.5, Double(text.count) * 0.06))
+    }
 
     static func decide(defaults: UserDefaults, environment: [String: String], simulator: Bool) -> Bool {
         if defaults.bool(forKey: silentArgument) { return true }

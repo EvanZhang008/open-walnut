@@ -13,7 +13,8 @@ protocol AudioCapture: AnyObject {
 extension AVAudioRecorder: AudioCapture {}
 
 /// A capture that reports its own loudness (the DEBUG file replay Talk to
-/// Walnut's tests drive). A real take reads the recorder's meters instead.
+/// Walnut's tests drive, and a silent run's take). A real take reads the
+/// recorder's meters instead.
 protocol AudioLevelSource: AnyObject {
     /// dBFS: -160 is silence, 0 the loudest.
     var level: Float { get }
@@ -55,7 +56,7 @@ final class VoiceRecorder: NSObject {
     static let micRouteKey = "walnut.voice.micRoute"
 
     /// Signed 16-bit PCM in CAF remains readable when capture ends in a crash.
-    static var captureSettings: [String: Any] {
+    nonisolated static var captureSettings: [String: Any] {
         [
             AVFormatIDKey: Int(kAudioFormatLinearPCM),
             AVSampleRateKey: 16_000,
@@ -222,16 +223,19 @@ final class VoiceRecorder: NSObject {
         guard canStart else { return false }
         starting = true
         defer { starting = false }
-        #if DEBUG && targetEnvironment(simulator)
-        if let started = beginSilentUITestTake() { return started }
-        #endif
         ensureRegistered()
         ensureObservers()
         errorMessage = nil
+        // Asked first in a silent run too: the permission is TCC only and opens no audio
+        // hardware, so a denied microphone reads the same as on a phone.
         guard await Self.requestPermission() else {
             errorMessage = Self.microphoneDeniedMessage
             return false
         }
+        // Where a test or an agent runs the app nothing opens the microphone or the audio
+        // session: the Simulator runs even a record-only take through the Mac's own audio
+        // device, output included (2026-11-26). The take is silent and goes the same way.
+        if AudioSilence.isOn { return beginSilentTake() }
         do {
             try await activateSession()
         } catch let failure as VoiceSessionActivationFailure {
@@ -269,19 +273,54 @@ final class VoiceRecorder: NSObject {
                 deactivateSessionOffMain()
                 return false
             }
-            capture = rec
-            fileURL = url
-            recordingID = id
-            elapsed = 0
-            state = .recording
-            startTicker()
-            startLiveUpload(url: url, id: id)
+            beganTake(capture: rec, url: url, id: id)
             return true
         } catch {
             errorMessage = Self.diagnosticMessage(prefix: "Recording failed", error)
             AppLog.error("voice", "record start failed", Self.diagnosticMeta(error, stage: "recorder-init"))
             return false
         }
+    }
+
+    /// A take is recording: the one place a real take and a silent one both enter.
+    private func beganTake(capture: any AudioCapture, url: URL, id: String) {
+        self.capture = capture
+        fileURL = url
+        recordingID = id
+        elapsed = 0
+        state = .recording
+        startTicker()
+        startLiveUpload(url: url, id: id)
+    }
+
+    /// The take a silent run records (`AudioSilence`): the real manifest, store, ticker,
+    /// live upload, stop, retry and Send, over a silent file written without any audio
+    /// hardware (`SilentVoiceCapture`).
+    private func beginSilentTake() -> Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        if debugDictationDenied {
+            errorMessage = Self.microphoneDeniedMessage
+            return false
+        }
+        prepareSilentUITestTranscription()
+        #endif
+        let id = UUID().uuidString
+        let url = store.newRecordingURL(id: id)
+        do {
+            try store.preserveOrThrow(id: id, reason: "recording", surface: originStamp)
+        } catch {
+            errorMessage = Self.diagnosticMessage(prefix: "Recording failed", error)
+            AppLog.error("voice", "record start failed", Self.diagnosticMeta(error, stage: "silent-take"))
+            return false
+        }
+        guard let capture = SilentVoiceCapture(url: url) else {
+            store.preserve(id: id, reason: "start-failed")
+            errorMessage = "Could not start recording"
+            return false
+        }
+        beganTake(capture: capture, url: url, id: id)
+        AppLog.info("voice", "silent take began", ["surface": surface])
+        return true
     }
 
     /// Activates the shared AVAudioSession for recording. Deactivating first
@@ -325,6 +364,8 @@ final class VoiceRecorder: NSObject {
         // A take that just ended, or voice mode's speaker, may still be switching
         // the session off (see `AudioSessionHandoff`): let it finish, or it would
         // switch off the session this take is about to use.
+        // A silent run (`AudioSilence`) switches nothing on; Talk's replayed takes come here too.
+        if AudioSilence.isOn { return }
         await AudioSessionHandoff.settle()
         let session = AVAudioSession.sharedInstance()
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
@@ -1043,9 +1084,8 @@ final class VoiceRecorder: NSObject {
     /// the session is switched off on a background thread, one switch-off at a
     /// time, in the queue the speaker shares (`AudioSessionHandoff`).
     private func deactivateSessionOffMain() {
-        #if DEBUG && targetEnvironment(simulator)
-        if isSilentUITestDictation { return }
-        #endif
+        // A silent run switched no session on (`AudioSilence`).
+        if AudioSilence.isOn { return }
         AudioSessionHandoff.deactivateOffMain()
     }
 
@@ -1133,8 +1173,9 @@ final class VoiceRecorder: NSObject {
     /// Walnut sends real words through the real upload and transcription. The
     /// file is copied into the store like a recorded take.
     /// Test hook for Talk to Walnut's replayed takes: switch the audio session on
-    /// exactly as `start()` does, so a run on a simulator goes through the same
-    /// session steps as the phone, not a session of the test's own.
+    /// exactly as `start()` does, so a run goes through the same session steps as
+    /// the phone, not a session of the test's own. A silent run (`AudioSilence`,
+    /// every Simulator and UI test run) switches nothing on, as `start()` does not.
     func activateForReplay() async -> String? {
         do {
             try await activateSession()
