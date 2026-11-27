@@ -1083,6 +1083,26 @@ fieldset:disabled .wn-seg-item {
   :is(.app-shell-navigation, .is-phone-layer) summary:not(.markdown-body summary, .markdown summary) {
     min-height: 44px;
   }
+  /* A box or a radio keeps its 16 px drawing and its target is 44x44 round it; the row it names
+     (.wn-check-row, a label: a tap anywhere on it ticks the box) is 44 px tall, its words in the
+     middle of a one-line row; a picked row (a menu's, a list of options) is 44 px tall too. */
+  :is(.app-shell-navigation, .is-phone-layer) .wn-check::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+  :is(.app-shell-navigation, .is-phone-layer) .wn-check-row {
+    box-sizing: border-box;
+    min-height: 44px;
+    padding-block: 12px;
+  }
+  :is(.app-shell-navigation, .is-phone-layer) .wn-pick-row {
+    min-height: 44px;
+  }
   :is(.app-shell-navigation, .is-phone-layer) .toggle-switch.settings-switch:not(.wn-switch-sm) {
     min-width: 0;
     min-height: 0;

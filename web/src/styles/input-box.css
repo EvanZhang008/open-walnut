@@ -212,6 +212,13 @@ select, input[list] {
   background-size: 12px;
 }
 select { cursor: pointer; }
+/* On a phone a field is at least 44 px wide as well as 46 tall: a finger's tap (C19), however few
+   characters it holds (2026-11-27: Rhythm's minute fields were drawn 27 px wide). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  :is(.app-shell-navigation, .is-phone-layer) :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select) {
+    min-width: 44px;
+  }
+}
 input[list]::-webkit-calendar-picker-indicator,
 input[list]::-webkit-list-button { display: none !important; opacity: 0; }
 :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select):focus { border-color: var(--input-focus-edge); }

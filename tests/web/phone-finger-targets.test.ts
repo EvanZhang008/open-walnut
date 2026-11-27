@@ -97,9 +97,17 @@ describe('each shared control has its phone finger rule at its definition', () =
     // 31 px tall and 7 px past each way: a 45 px target.
     expect(find(list, /\.toggle-switch\.settings-switch:not\(\[aria-hidden='true'\]\)::before$/, 'inset')?.value).toBe('-7px -2px');
     expect(find(list, /\.wn-switch-sm:not\(\[aria-hidden='true'\]\)::before$/, 'inset')?.value, 'a small switch: 16 + 28 = 44 tall, 28 + 16 = 44 wide').toBe('-14px -8px');
+    expect(find(list, /\.wn-check::before$/, 'width')?.value, 'a box: a 44 px target round its 16 px').toBe('44px');
+    expect(px44(find(list, /\.wn-check-row$/, 'min-height')?.value)).toBe(true);
+    expect(px44(find(list, /\.wn-pick-row$/, 'min-height')?.value)).toBe(true);
     expect(find(list, /\.wn-chip::before$/, 'height')?.value).toBe('max(100%, 44px)');
     expect(px44(find(list, /\.wn-chip$/, 'min-width')?.value)).toBe(true);
     expect(px44(find(list, /summary:not\(\.markdown-body summary, \.markdown summary\)$/, 'min-height')?.value)).toBe(true);
+  });
+
+  it('a field: at least 44 px wide', () => {
+    const list = phoneDecls('styles/input-box.css');
+    expect(px44(list.find((d) => d.prop === 'min-width' && d.selectors.some((x) => /:where\(input:not/.test(x)))?.value)).toBe(true);
   });
 
   it('no other stylesheet sizes the switch for a phone again', () => {

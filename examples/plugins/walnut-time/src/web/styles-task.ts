@@ -95,6 +95,10 @@ export const TASK_CSS = `
   border: 0;
   cursor: pointer;
 }
+/* A crumb takes a finger on a phone (44 px tall and at least as wide), as the console's keys do. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .wt-crumb { min-height: 44px; min-width: 44px; }
+}
 .wt-task-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .wt-task-lanes { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
