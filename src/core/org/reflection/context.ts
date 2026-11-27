@@ -83,13 +83,21 @@ export async function turnsAround(
 /** The session's newest turns, after `afterAt` and up to now: what it did since a late judgment's window ends. */
 export const LATER_TURNS = 2;
 const LATER_TEXT_MAX = 1500;
+/** A message the reflection itself sent (pipeline.ts correctionText, gatedNote, held-corrections.ts heldText). */
+const REFLECTION_MAIL_RE = /'s reflection\b|\borg-reflection\b/;
+
 export async function turnsSince(
   sessionId: string, afterAt: string, read: ReadTranscript = readTranscriptDefault, max = LATER_TURNS,
-  roles: ReadonlyArray<'assistant' | 'agent'> = ['assistant'],
+  mail = 0,
 ): Promise<TurnText[]> {
-  const turns = toTurns(await read(sessionId, { visible: 40 }));
-  // 'agent': what other agents and Walnut told it since (a change withdrawn after the moment arrives that way).
-  return turns.filter((t) => (roles as readonly string[]).includes(t.role) && t.at > afterAt).slice(-max).map((t) => ({ ...t, text: clip(t.text, LATER_TEXT_MAX) }));
+  const turns = toTurns(await read(sessionId, { visible: 40 })).filter((t) => t.at > afterAt);
+  const clipped = (ts: TurnText[]) => ts.map((t) => ({ ...t, text: clip(t.text, LATER_TEXT_MAX) }));
+  const own = max ? turns.filter((t) => t.role === 'assistant').slice(-max) : [];
+  // `mail`: the newest of what other agents and Walnut told it since (a change withdrawn after the moment
+  // arrives that way), taken apart from its own turns so neither crowds the other out, and never the
+  // reflection's own corrections, which would read as their own proof (review of 77eeef8687).
+  const told = mail ? turns.filter((t) => t.role === 'agent' && !REFLECTION_MAIL_RE.test(t.text.slice(0, 400))).slice(-mail) : [];
+  return clipped([...own, ...told].sort((a, b) => a.at.localeCompare(b.at)));
 }
 
 /** The session's last text turn before `at` (what he answered), or undefined. */

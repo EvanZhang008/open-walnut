@@ -111,6 +111,9 @@ export async function takenUp(
       const n = (d as { n?: unknown })?.n;
       const quote = String((d as { quote?: unknown })?.quote ?? '').trim();
       if (!Number.isInteger(n) || quote.replace(/\.{3}|\u2026/g, '').trim().length < (opts.quoteMin ?? 8) || !quoteHolds(quote, laterText)) return [];
+      // The correction's own words, found in LATER (an earlier copy of it), prove nothing (review of 77eeef8687).
+      const own = corrections[(n as number) - 1];
+      if (own && quoteHolds(quote, own)) return [];
       opts.quotes?.set(n as number, quote.slice(0, 300));
       return [n as number];
     });
@@ -216,7 +219,7 @@ export async function handledSince(
     // His own later words in the task (the judge read none after the moment), and the session's later turns.
     const his = (await deps.readMessages?.(c.task.id).catch(() => []) ?? []).filter((m) => m.at > c.to).slice(-LATER_MESSAGES)
       .map((m) => ({ role: 'user' as const, at: m.at, text: clip(m.text, 400) }));
-    const turns = c.sessionId ? await turnsSince(c.sessionId, c.to, deps.readTranscript, 4, ['assistant', 'agent']).catch(() => []) : [];
+    const turns = c.sessionId ? await turnsSince(c.sessionId, c.to, deps.readTranscript, 4, 3).catch(() => []) : [];
     later = [...his, ...turns].sort((a, b) => a.at.localeCompare(b.at));
   }
   if (!later.length) return 'open';

@@ -144,6 +144,24 @@ function settledOf(raw: unknown, userRules: string): Array<{ step: GatedStep; ru
 }
 
 /**
+ * A text about granting or changing a permission, an authorization, a key or a credential: no rule of his
+ * lets its account step through (review of 77eeef8687: the prompt alone said so). English and Chinese.
+ */
+const PERMISSION_RE = new RegExp([
+  String.raw`\b(?:permissions?|authori[sz]ations?|api[- ]?keys?|access[- ]keys?|credentials?|tokens?|scopes?)\b`,
+  '\u6743\u9650', '\u6388\u6743', '\u5bc6\u94a5', '\u51ed\u8bc1', '\u4ee4\u724c',
+].join('|'), 'i');
+
+/** The answer with any settled account step taken back when the text is about permissions or keys. Pure. */
+export function keepPermissionsHeld(text: string, g: GateResult): GateResult {
+  if (!g.settled?.length || !PERMISSION_RE.test(text)) return g;
+  const back = g.settled.filter((x) => x.step === 'user_account');
+  if (!back.length) return g;
+  const settled = g.settled.filter((x) => x.step !== 'user_account');
+  return { ...g, steps: [...new Set([...g.steps, 'user_account' as const])], ...(settled.length ? { settled } : { settled: undefined }), why: `${g.why}; a permission, key or credential stays the user's` };
+}
+
+/**
  * The whole check on some text the reflection would send or write. No steps: it may go as written.
  * `by: 'failed'` is no verdict (the call failed, or its answer could not be read): the caller sends and
  * writes nothing of the text now and checks it again later; it never says a step the text may not hold.
@@ -160,8 +178,9 @@ export async function gateText(text: string, callModel: CallModel, nodeId?: stri
   } catch (err) {
     return fixed ?? { steps: [], why: `the check could not run (${err instanceof Error ? err.message : String(err)})`, by: 'failed' };
   }
-  const read = readGateAnswer(raw, rules);
-  if (!read) return fixed ?? { steps: [], why: 'the check\'s answer could not be read', by: 'failed' };
+  const answer = readGateAnswer(raw, rules);
+  if (!answer) return fixed ?? { steps: [], why: 'the check\'s answer could not be read', by: 'failed' };
+  const read = keepPermissionsHeld(text, answer);
   // Each step his own rule let through is said in the log, with the rule (11-27 audit: none could be counted).
   if (read.settled?.length) log.task.info('reflection: a step was let through by the user\'s own rule', { nodeId, settled: read.settled.map((x) => `${x.step}: ${x.rule.slice(0, 120)}`), text: text.slice(0, 160) });
   if (!fixed) return read;
@@ -190,7 +209,18 @@ export async function checkCached(nodeId: string, text: string, check: StepCheck
   const key = keyOf(text);
   const kept = (await readReflectionState(nodeId, nowMs)).stepChecked?.[key];
   if (kept) return { steps: kept.steps as GatedStep[], why: kept.why, by: 'model', ...(kept.settled?.length ? { settled: kept.settled as GateResult['settled'] } : {}) };
-  const g = await check(text, nodeId);
+  let g = await check(text, nodeId);
+  // A pass that rests on his rule is asked once more and taken only when both agree (review of 77eeef8687:
+  // the same lessons asked twice were settled differently); otherwise the stricter of the two holds.
+  if (g.by === 'model' && g.settled?.length) {
+    const again = await check(text, nodeId).catch(() => null);
+    if (!again || again.by === 'failed') g = { ...g, steps: [...new Set([...g.steps, ...g.settled.map((x) => x.step)])], settled: undefined, why: `${g.why}; not settled twice` };
+    else {
+      const both = g.settled.filter((x) => again.settled?.some((y) => y.step === x.step));
+      const steps = [...new Set([...g.steps, ...again.steps, ...g.settled.filter((x) => !both.includes(x)).map((x) => x.step)])];
+      g = { ...g, steps, ...(both.length ? { settled: both } : { settled: undefined }) };
+    }
+  }
   if (g.by !== 'failed') {
     await updateReflectionState(nodeId, (s) => {
       // What his own rule let through is kept with the verdict (11-27 audit: it could not be counted).

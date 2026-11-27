@@ -81,7 +81,7 @@ export interface ReflectionState {
   /** When an ask or card correction last went to a task, by `<task>:<thread, decision or 'ask'>` (CARD_CORRECTION_GAP_MS). */
   cardCorrected?: Record<string, string>;
   /** The last correction each card got (its words) and how many it got within the gap (pipeline.ts). */
-  cardCorrection?: Record<string, { text: string; n: number }>;
+  cardCorrection?: Record<string, { text: string; n: number; card?: string }>;
 }
 
 /** One correction held for a later send: its task, its day entry (date and time) and the point it makes. */
@@ -168,7 +168,12 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(r.aligns?.date === today && Number.isFinite(r.aligns.count) ? { aligns: r.aligns } : {}),
     ...(Array.isArray(r.alignLog) ? { alignLog: r.alignLog.filter((x) => !!x && typeof x.line === 'string').slice(-50) } : {}),
     ...(typeof r.tidyAsked === 'string' ? { tidyAsked: r.tidyAsked } : {}),
-    ...(r.stepChecked && typeof r.stepChecked === 'object' ? { stepChecked: r.stepChecked } : {}),
+    // Each verdict's shape checked: a broken one is dropped (asked again), never read as a pass.
+    ...(r.stepChecked && typeof r.stepChecked === 'object' ? { stepChecked: Object.fromEntries(Object.entries(r.stepChecked as Record<string, unknown>).filter(([, v]) => {
+      const x = v as { steps?: unknown; why?: unknown; settled?: unknown };
+      return !!x && Array.isArray(x.steps) && x.steps.every((st) => typeof st === 'string') && typeof x.why === 'string'
+        && (x.settled === undefined || (Array.isArray(x.settled) && x.settled.every((y) => !!y && typeof (y as { step?: unknown }).step === 'string' && typeof (y as { rule?: unknown }).rule === 'string')));
+    })) as ReflectionState['stepChecked'] } : {}),
     ...(Array.isArray(r.stepHeld) ? { stepHeld: r.stepHeld.filter((s): s is string => typeof s === 'string').slice(-1000) } : {}),
     ...(Number.isInteger(r.gateVersion) ? { gateVersion: r.gateVersion } : {}),
     ...(r.askFirst && typeof r.askFirst === 'object' ? { askFirst: Object.fromEntries(Object.entries(r.askFirst as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string').slice(-300)) } : {}),

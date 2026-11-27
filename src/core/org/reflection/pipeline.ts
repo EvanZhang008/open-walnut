@@ -9,6 +9,7 @@
  * on) is never looked at, and each candidate is judged once (state.ts `seen`). Every effect is a
  * dependency, so a replay of a real conversation runs the same code with no send.
  */
+import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import type { Task } from '../../types.js';
 import { log } from '../../../logging/index.js';
@@ -108,6 +109,12 @@ function correctionText(node: Task, nodeName: string, c: Candidate, f: Finding, 
   ].join('\n');
 }
 
+/** The words of a card as judged, as a short key (pipeline.ts: was it rewritten since its correction). */
+const cardWordsKey = (c: Candidate): string => crypto.createHash('sha256').update(c.ask?.text ?? '').digest('hex').slice(0, 16);
+
+/** Messages from other agents and Walnut since the moment that the judge's LATER holds, apart from the session's own turns. */
+const LATER_MAIL = 3;
+
 /** What the judge reads for one candidate: its turns (a thread's own, or the session's), the ask and his recent messages. */
 export async function judgeInputOf(node: Task, c: Candidate, deps: Pick<ReflectDeps, 'readTranscript' | 'rulesText' | 'replyLanguage'>, guidance: readonly string[]): Promise<JudgeInput> {
   const turns: TurnText[] = c.context ?? splitCardAnswers(
@@ -123,8 +130,8 @@ export async function judgeInputOf(node: Task, c: Candidate, deps: Pick<ReflectD
   // told the node's session by the task that withdrew it; the judge read only the thread).
   const since = seenTo > c.to ? seenTo : c.to;
   const later = c.context
-    ? [...(c.later ?? []).filter((t) => t.at > seenTo), ...(c.sessionId ? await turnsSince(c.sessionId, since, deps.readTranscript, 4, ['agent']).catch(() => []) : [])].sort((a, b) => a.at.localeCompare(b.at))
-    : c.sessionId ? await turnsSince(c.sessionId, since, deps.readTranscript, undefined, ['assistant', 'agent']).catch(() => []) : [];
+    ? [...(c.later ?? []).filter((t) => t.at > seenTo), ...(c.sessionId ? await turnsSince(c.sessionId, since, deps.readTranscript, 0, LATER_MAIL).catch(() => []) : [])].sort((a, b) => a.at.localeCompare(b.at))
+    : c.sessionId ? await turnsSince(c.sessionId, since, deps.readTranscript, undefined, LATER_MAIL).catch(() => []) : [];
   return {
     signal: c.signal, ...(c.also?.length ? { also: c.also } : {}), taskTitle: c.task.title, ...(c.thread ? { threadTitle: c.thread.title } : {}),
     turnsText: renderTurns(turns), ...(later.length ? { laterText: renderTurns(later) } : {}), momentAt: c.to,
@@ -261,7 +268,9 @@ export async function reflectOnCandidate(
       // Unless the card was rewritten since and still lacks what that correction asked: then once more
       // (11-27 audit: a rewritten card still had no link four hours on, and its second correction was held).
       if (lastCard && now - Date.parse(lastCard) < CARD_CORRECTION_GAP_MS && !heSince) {
-        const again = c.to > lastCard && !!lastCorrection && lastCorrection.n < CARD_CORRECTIONS_MAX
+        // Rewritten: its words differ from the ones corrected (a time can move for other reasons: review of 77eeef8687).
+        const rewritten = lastCorrection?.card ? lastCorrection.card !== cardWordsKey(c) : c.to > lastCard;
+        const again = rewritten && !!lastCorrection && lastCorrection.n < CARD_CORRECTIONS_MAX
           && await cardStillLacks(c, lastCorrection.text, deps, node.id).catch(() => false);
         if (!again) return { to: 'off', why: 'card_corrected' };
       }
@@ -299,7 +308,7 @@ export async function reflectOnCandidate(
             const within = !!lastCard && now - Date.parse(lastCard) < CARD_CORRECTION_GAP_MS;
             await updateReflectionState(node.id, (s) => {
               (s.cardCorrected ??= {})[cardKey] = new Date(now).toISOString();
-              (s.cardCorrection ??= {})[cardKey] = { text: f.correction.slice(0, 1500), n: within ? (s.cardCorrection?.[cardKey]?.n ?? 1) + 1 : 1 };
+              (s.cardCorrection ??= {})[cardKey] = { text: f.correction.slice(0, 1500), n: within ? (s.cardCorrection?.[cardKey]?.n ?? 1) + 1 : 1, card: cardWordsKey(c) };
             }, now);
           }
         }
