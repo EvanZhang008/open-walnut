@@ -157,6 +157,34 @@ describe('a key is a box its target can stand in', () => {
     }
     expect(found, 'give the key position: relative (absolute and fixed keep their target too)').toEqual([]);
   });
+
+  // A relative key honours the top/right another rule gave it for an absolute place (2026-11-27
+  // review: the compact error's × went 8 px down and left, the phone bar's Menu key 12 px).
+  it('a key made relative clears the offsets another rule placed it at', () => {
+    const companions = keyClasses();
+    const isKey = (c: string) => c !== 'btn' && companions.has(c) && !/^(is|has)-/.test(c);
+    const placed = new Map<string, string>();
+    const relative: { cls: string[]; where: string; resets: boolean }[] = [];
+    const bySel = new Map<string, Decl[]>();
+    for (const file of walk(WEB_SRC, ['.css'])) {
+      const rel = path.relative(WEB_SRC, file);
+      for (const d of decls(rel)) for (const sel of d.selectors) {
+        if (/::?(before|after)/.test(sel)) continue;
+        const k = `${rel} :: ${d.atRules.join(' ')} :: ${sel.trim()}`;
+        bySel.set(k, [...(bySel.get(k) ?? []), d]);
+      }
+    }
+    for (const [k, list] of bySel) {
+      const cls = lastCompoundClasses(withoutHas(k.split(' :: ')[2]!)).filter(isKey);
+      if (!cls.length) continue;
+      const pos = list.find((d) => d.prop === 'position')?.value ?? '';
+      const offsets = list.filter((d) => /^(top|right|bottom|left|inset)$/.test(d.prop));
+      if (/^(absolute|fixed)/.test(pos) && offsets.some((d) => !/^(auto|0|0px)$/.test(d.value))) for (const c of cls) placed.set(c, k);
+      if (/^relative/.test(pos)) relative.push({ cls, where: `${list[0]!.file}:${list[0]!.line} ${k.split(' :: ')[2]}`, resets: offsets.length > 0 });
+    }
+    const found = relative.filter((r) => !r.resets && r.cls.some((c) => placed.has(c))).map((r) => r.where);
+    expect(found, 'add inset: auto beside its position: relative').toEqual([]);
+  });
 });
 
 describe('a key draws no ::before of its own', () => {

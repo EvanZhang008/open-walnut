@@ -40,4 +40,4 @@
 /* Its × (NoticeClose): at the top right of a panel's error, at the end of a compact one's line. */
 .region-error:has(> .region-error-close) { position: relative; }
 .region-error > .region-error-close { position: absolute; top: 8px; right: 8px; }
-.region-error--compact > .region-error-close { position: relative; flex: none; margin: -4px -6px -4px auto; }
+.region-error--compact > .region-error-close { position: relative; inset: auto; flex: none; margin: -4px -6px -4px auto; }
