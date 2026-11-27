@@ -21,8 +21,9 @@
   pointer-events: auto;
 }
 
-/* "3 comments": the family's small key, in the header's top right. */
+/* "3 comments": the family's small key, in the header's top right, over the document: solid. */
 .doc-comments-chip {
+  --btn-under: var(--bg);
   position: absolute;
   top: var(--dc-top);
   right: 12px;

@@ -41,7 +41,7 @@
   font-size: var(--font-size-sm);
   cursor: pointer;
 }
-.cal-side-header .cal-grid-controls button:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 8%, var(--bg)); color: var(--fg); }
+.cal-side-header .cal-grid-controls button:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
 .cal-side-header .cal-grid-controls .cal-zoom-value { font-size: var(--font-size-xs); }
 .cal-side-header .cal-grid-controls .cal-hours-toggle { font-size: var(--font-size-xs); }
 .cal-side-header .cal-grid-controls .cal-hours-toggle[aria-pressed='true'] { color: var(--accent); }

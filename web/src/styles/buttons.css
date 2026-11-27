@@ -8,8 +8,13 @@
 
    Look: the quiet grey key the user picked on the Needs you card ("I like P1 button"): a fill and
    no border, so it reads the same on a white page, a grey panel, a dark sheet or frosted glass.
-   The fill is the text colour mixed into the page colour, never a fixed grey token, so it stays a
-   step away from the --bg-secondary panels it sits on. Round (--radius-full): a capsule, a circle when
+   The fill is a tint of the text colour laid over whatever the key sits on, never a fixed grey and
+   never the text colour mixed into the page colour: mixed into --bg, a dark key was #2c2c2c and
+   vanished on the #2c2c2e cards and settings groups it sits on (2026-11-27 audit: 29 keys on the
+   Apps, Usage, Rhythm and notes-import pages). On the page itself the tint reads exactly as the
+   old mix did. A key a view places over content (absolute, over a document or a canvas) sets
+   `--btn-under: var(--bg)` so it stays solid; tests/web/btn-fill-surfaces.test.ts fails on a
+   surface token it would vanish on, a placed key without it, or a new fill mixed into --bg. Round (--radius-full): a capsule, a circle when
    it is an icon alone; a row of a list (.btn-block.btn-ghost) keeps the row corner. Two heights: 34 px
    (default: forms, dialogs, cards) and 28 px (.btn-sm: rows, toolbars, settings). */
 
@@ -21,10 +26,12 @@
 }
 .btn {
   /* Declared on the key itself, so a surface that sets its own --fg (a dark sheet) tints it right. */
-  /* Solid, never see-through: a key that floats over a canvas or a document stays a key. */
-  --btn-fill: color-mix(in srgb, var(--fg) var(--btn-strength), var(--bg));
-  --btn-fill-hover: color-mix(in srgb, var(--fg) calc(var(--btn-strength) + 4%), var(--bg));
-  --btn-fill-press: color-mix(in srgb, var(--fg) calc(var(--btn-strength) + 8%), var(--bg));
+  /* A tint over the surface (--btn-under unset): a step away from every surface it sits on. A key
+     placed over content sets --btn-under: var(--bg) on its own class and is solid; left undeclared
+     here, so that class wins in any load order. */
+  --btn-fill: color-mix(in srgb, var(--fg) var(--btn-strength), var(--btn-under, transparent));
+  --btn-fill-hover: color-mix(in srgb, var(--fg) calc(var(--btn-strength) + 4%), var(--btn-under, transparent));
+  --btn-fill-press: color-mix(in srgb, var(--fg) calc(var(--btn-strength) + 8%), var(--btn-under, transparent));
   /* Labels on a solid key read at 4.5:1 or more in both themes: the accent and the error red are
      taken a little darker for a fill, and the red a little toward the text colour for a label. */
   --btn-primary-fill: color-mix(in srgb, var(--accent) 86%, var(--btn-shade));

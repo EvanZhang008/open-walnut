@@ -189,8 +189,9 @@
 .drawing-canvas-host { position: absolute; inset: 0; }
 /* A plugin's overlay (canvasExtra): its children place themselves in the canvas box. */
 .drawing-workspace-overlay { display: contents; }
-/* Make a diagram: a key over the canvas, at the selection's corner. */
+/* Make a diagram: a key over the canvas, at the selection's corner: solid over the drawing. */
 .drawing-diagram-pill {
+  --btn-under: var(--bg);
   position: absolute;
   z-index: 3;
   transform: translate(-100%, -100%);
