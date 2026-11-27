@@ -13,7 +13,7 @@ import { TimeTape } from './tape'
 import { TimeChapters } from './chapters'
 import { TimeLanes } from './lanes'
 import { useScreenTime } from './screentime'
-import { Checkbox, Segmented } from './controls'
+import { Checkbox, Segmented } from './host-controls'
 
 /**
  * Timeline — "how did my day actually go?", in three switchable readings of the

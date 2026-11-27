@@ -16,7 +16,9 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { countAll, kindsOf, members, KINDS, type Counts } from './choice-controls-scan';
+import { countAll, kindsOf, members, KINDS, WEB_SRC, type Counts } from './choice-controls-scan';
+import { PLUGIN_SRCS } from './ui-standard-scan';
+import { walk } from './css-scan';
 
 const BASELINE = path.join(__dirname, 'choice-controls-baseline.json');
 const STANDARD = '.claude/skills/walnut-ui-requirements/standard.md';
@@ -73,12 +75,15 @@ describe('choice controls: one component per kind', () => {
   });
 
   it('reads the shipped plugins too (their pages take the components through walnut.ui.views)', () => {
-    const files = new Set(members().map((m) => m.file));
-    expect([...files].some((f) => f.startsWith('../../plugin-store/'))).toBe(true);
-    // The Time page draws no tab bar, segmented track, checkbox or pick of its own on its main page:
-    // the task page's session picker (task-page.tsx) is the one left, in the baseline.
-    const time = members().filter((m) => m.file.startsWith('../../examples/plugins/walnut-time/') && !m.file.endsWith('task-page.tsx'));
-    expect(time.map((m) => `${m.file}:${m.line} ${m.what}`)).toEqual([]);
+    // The scan walks every plugin's TSX: a tab bar written by hand there is found like one in web/src.
+    const walked = PLUGIN_SRCS.flatMap((dir) => walk(dir, ['.tsx'])).map((f) => path.relative(WEB_SRC, f));
+    for (const page of ['../../plugin-store/walnut-rhythm/', '../../plugin-store/notes-import/', '../../examples/plugins/walnut-time/', '../../examples/plugins/walnut-demo/']) {
+      expect(walked.some((f) => f.startsWith(page)), page).toBe(true);
+    }
+    // 2026-11-27 UI audit: no plugin page draws a tab bar, segmented track, checkbox, radio, switch,
+    // chip or pick of its own any more; each one is the host's (host-controls.tsx).
+    const own = members().filter((m) => m.file.startsWith('../../'));
+    expect(own.map((m) => `${m.file}:${m.line} ${m.what}`)).toEqual([]);
   });
 
   it('the standard names the components and this test', () => {

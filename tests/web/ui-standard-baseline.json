@@ -162,7 +162,7 @@
     "../../examples/plugins/walnut-time/src/web/styles-base.ts": 1,
     "../../examples/plugins/walnut-time/src/web/styles-task.ts": 1,
     "../../examples/plugins/walnut-time/src/web/styles-views.ts": 2,
-    "../../plugin-store/notes-import/src/web/styles.ts": 4
+    "../../plugin-store/notes-import/src/web/styles.ts": 2
   },
   "radiusNotToken": {
     "apps/mail/mail-compose.css": 2,
@@ -262,9 +262,9 @@
     "../../examples/plugins/walnut-demo/src/web/styles.ts": 2,
     "../../examples/plugins/walnut-time/src/web/styles-base.ts": 5,
     "../../examples/plugins/walnut-time/src/web/styles-lanes.ts": 5,
-    "../../examples/plugins/walnut-time/src/web/styles-task.ts": 3,
+    "../../examples/plugins/walnut-time/src/web/styles-task.ts": 2,
     "../../examples/plugins/walnut-time/src/web/styles-views.ts": 9,
-    "../../plugin-store/notes-import/src/web/styles.ts": 8,
+    "../../plugin-store/notes-import/src/web/styles.ts": 7,
     "../../plugin-store/walnut-rhythm/src/web/styles.ts": 2
   },
   "pillRadius": {
@@ -280,7 +280,7 @@
     "styles/trigger-picker.css": 1,
     "styles/usage-breakdown.css": 1,
     "styles/workspaces.css": 2,
-    "../../plugin-store/notes-import/src/web/styles.ts": 6
+    "../../plugin-store/notes-import/src/web/styles.ts": 5
   },
   "fontSizeOffScale": {
     "apps/mail/mail-compose.css": 3,
@@ -353,8 +353,8 @@
     "styles/unpaired-notice.css": 3,
     "styles/walnut-agent.css": 1,
     "styles/workspaces.css": 1,
-    "../../examples/plugins/walnut-demo/src/web/styles.ts": 16,
-    "../../plugin-store/notes-import/src/web/styles.ts": 17,
+    "../../examples/plugins/walnut-demo/src/web/styles.ts": 15,
+    "../../plugin-store/notes-import/src/web/styles.ts": 16,
     "../../plugin-store/walnut-rhythm/src/web/styles.ts": 16
   },
   "shadowLiteral": {
@@ -562,7 +562,7 @@
     "styles/walnut-agent.css": 4,
     "styles/worker-fold.css": 1,
     "styles/workspaces.css": 8,
-    "../../examples/plugins/walnut-demo/src/web/styles.ts": 2,
+    "../../examples/plugins/walnut-demo/src/web/styles.ts": 1,
     "../../examples/plugins/walnut-time/src/web/styles-apps.ts": 3,
     "../../examples/plugins/walnut-time/src/web/styles-base.ts": 2,
     "../../examples/plugins/walnut-time/src/web/styles-lanes.ts": 1,
@@ -967,7 +967,6 @@
     "styles/top-thread.css": 2,
     "../../examples/plugins/walnut-time/src/web/styles-base.ts": 1,
     "../../examples/plugins/walnut-time/src/web/styles-views.ts": 2,
-    "../../plugin-store/notes-import/src/web/styles.ts": 1,
     "../../plugin-store/walnut-rhythm/src/web/styles.ts": 2
   },
   "restyledField": {
@@ -979,8 +978,7 @@
     "styles/globals.css": 3,
     "styles/passwords.css": 2,
     "styles/quickbar.css": 2,
-    "styles/unpaired-notice.css": 1,
-    "../../plugin-store/notes-import/src/web/styles.ts": 8
+    "styles/unpaired-notice.css": 1
   },
   "fieldText": {
     "apps/mail/mail-compose.css": 2,

@@ -93,7 +93,7 @@ export function FocusCard({ walnut, store, state, music }: FocusCardProps) {
           <p className="rhythm-muted" data-testid="rhythm-focus-off">
             Off. {focus.lastRun ? `${runText(focus)}. ` : ''}Pick what the block is for, how long it runs and what plays, then start.{config.focusQuietsWalnut ? ' Walnut stays quiet until it ends.' : ''}
           </p>
-          <div className="rhythm-picker" role="radiogroup" aria-label="Task for this focus block" data-testid="rhythm-task-picker">
+          <div className="rhythm-picker" role="radiogroup" data-choice-exempt="a column of the shared Picked rows (wn-pick-row), one picked" aria-label="Task for this focus block" data-testid="rhythm-task-picker">
             <button
               type="button"
               role="radio"

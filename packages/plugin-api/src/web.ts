@@ -541,6 +541,9 @@ export interface WebUiService {
     Segmented?: PluginComponent<SegmentedViewProps>
     Tabs?: PluginComponent<TabsViewProps>
     Checkbox?: PluginComponent<CheckboxViewProps>
+    Radio?: PluginComponent<RadioViewProps>
+    Switch?: PluginComponent<SwitchViewProps>
+    Chip?: PluginComponent<ChipViewProps>
   }
 }
 
@@ -596,16 +599,70 @@ export interface TabsViewProps<V extends string = string> {
   'data-testid'?: string
 }
 
-/** Walnut's checkbox: the native box drawn as everywhere else, with its label as one clickable row. */
+/**
+ * Walnut's checkbox: the native box drawn as everywhere else, with its label as one clickable row.
+ * For picking items of a list, or a choice a form applies on Save or Start; an on/off setting that
+ * takes effect at once is a `SwitchView`.
+ */
 export interface CheckboxViewProps {
   checked: boolean
   onChange(checked: boolean): void
+  /** Some, not all (a dash): the box of a group whose items are partly picked. */
+  indeterminate?: boolean
   label?: ReactNode
   /** A muted line under the label. */
   detail?: ReactNode
+  /** The accessible name when there is no `label`. */
+  'aria-label'?: string
+  /** The box's id, for a `<label htmlFor>` of your own elsewhere in the row. */
+  id?: string
   disabled?: boolean
   title?: string
   /** Placement of the row (margin, flex), never a look. */
+  className?: string
+  'data-testid'?: string
+}
+
+/** Walnut's radio: one of a few choices that each need a line of words, in a column. */
+export interface RadioViewProps {
+  checked: boolean
+  /** Called when this radio is picked. */
+  onChange(): void
+  /** The native group name: one per column of radios. */
+  name: string
+  label?: ReactNode
+  detail?: ReactNode
+  disabled?: boolean
+  title?: string
+  className?: string
+  'data-testid'?: string
+}
+
+/** Walnut's switch: an on/off setting that takes effect at once. `size="sm"` in a dense row. */
+export interface SwitchViewProps {
+  checked: boolean
+  onChange(checked: boolean): void
+  'aria-label': string
+  disabled?: boolean
+  /** Turning now (the setting is being written). */
+  busy?: boolean
+  size?: 'md' | 'sm'
+  title?: string
+  className?: string
+  'data-testid'?: string
+}
+
+/**
+ * Walnut's chip: a filter over a list (one or several on), 24 px and round, its label cut with an
+ * ellipsis (give the whole name in `title`) and an optional muted `count` after it.
+ */
+export interface ChipViewProps {
+  pressed: boolean
+  onClick(): void
+  children: ReactNode
+  count?: ReactNode
+  title?: string
+  disabled?: boolean
   className?: string
   'data-testid'?: string
 }

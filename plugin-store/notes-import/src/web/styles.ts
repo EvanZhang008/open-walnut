@@ -96,34 +96,11 @@ export const IMPORT_CSS = `
 .ni-inline-form { display: flex; gap: 8px; margin-top: 6px; max-width: 460px; }
 .ni-inline-form .ni-input { flex: 1 1 auto; }
 .ni-folder { width: 220px; }
-.ni-folder-prefix { color: var(--fg-muted); font-size: 13px; }
+.ni-folder-prefix { color: var(--fg-muted); font-size: 13px; white-space: nowrap; flex: none; }
 .ni-filter { width: 100%; margin-bottom: 6px; }
 
 .ni-choice { display: grid; gap: 6px; margin-top: 6px; }
-.ni-radio, .ni-check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; line-height: 18px; cursor: pointer; }
-.ni-radio input, .ni-check input { margin: 0; accent-color: var(--accent); }
-/* Drawn here: WebKit's own radio reads as filled in dark mode. */
-.ni-radio input {
-  appearance: none; -webkit-appearance: none; flex: 0 0 auto;
-  box-sizing: border-box; width: 14px; min-width: 14px; max-width: 14px; height: 14px; padding: 0; border-radius: 999px;
-  border: 1.5px solid var(--fg-muted); background: transparent; cursor: pointer;
-}
-.ni-radio input:checked { border-color: var(--accent); box-shadow: inset 0 0 0 2.5px var(--settings-group-bg, var(--bg)), inset 0 0 0 7px var(--accent); }
-.ni-radio input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ni-radio input:disabled { opacity: 0.5; cursor: default; }
-/* Checkboxes too: WebKit's own box is a bright white square on a dark page. */
-.ni-check input[type="checkbox"], input.ni-keep {
-  appearance: none; -webkit-appearance: none; flex: 0 0 auto; display: inline-grid; place-content: center;
-  box-sizing: border-box; width: 14px; min-width: 14px; max-width: 14px; height: 14px; padding: 0; border-radius: 3px;
-  border: 1.5px solid var(--fg-muted); background: transparent; cursor: pointer;
-}
-.ni-check input[type="checkbox"]:checked, input.ni-keep:checked, input.ni-keep:indeterminate { border-color: var(--accent); background: var(--accent); }
-.ni-check input[type="checkbox"]:checked::after, input.ni-keep:checked::after {
-  content: ''; width: 7px; height: 3.5px; border: solid #fff; border-width: 0 0 1.75px 1.75px; transform: translateY(-1px) rotate(-45deg);
-}
-input.ni-keep:indeterminate::after { content: ''; width: 7px; height: 1.75px; background: #fff; border: 0; transform: none; }
-.ni-check input[type="checkbox"]:focus-visible, input.ni-keep:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ni-check input[type="checkbox"]:disabled, input.ni-keep:disabled { opacity: 0.5; cursor: default; }
+/* The radios and the boxes are Walnut's own (host-controls.tsx); these classes only place their rows. */
 .ni-picker { display: grid; gap: 6px; margin-top: 8px; max-width: 520px; }
 .ni-picker-list {
   display: grid;
@@ -132,9 +109,12 @@ input.ni-keep:indeterminate::after { content: ''; width: 7px; height: 1.75px; ba
   border: 1px solid var(--border);
   border-radius: 8px;
 }
-.ni-check { padding: 7px 10px; }
+.ni-check { display: flex; padding: 7px 10px; }
+.ni-check .wn-check-label { min-width: 0; }
 .ni-check + .ni-check { border-top: 1px solid var(--settings-hairline, var(--border)); }
-.ni-check-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ni-check-line { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; min-width: 0; }
+/* A page's whole name shows (it is what tells two pages apart); its counts follow, or wrap below. */
+.ni-check-title { min-width: 0; overflow-wrap: anywhere; }
 
 .ni-run-title { font-weight: 600; }
 .ni-bar { height: 6px; margin-top: 6px; border-radius: 999px; background: var(--bg-secondary, var(--border)); overflow: hidden; max-width: 520px; }
@@ -167,7 +147,7 @@ input.ni-keep:indeterminate::after { content: ''; width: 7px; height: 1.75px; ba
 .ni-step-label { cursor: pointer; }
 .ni-steps-inner .ni-step-line { padding: 4px 14px; }
 .ni-keep { margin: 2px 0 0; }
-.ni-keep-space { flex: 0 0 14px; }
+.ni-keep-space { flex: 0 0 16px; }
 .ni-step-line[data-left-out="true"] > .ni-kind, .ni-step-line[data-left-out="true"] > .ni-step-copy > .ni-step-text { opacity: 0.5; text-decoration: line-through; }
 .ni-step-line { display: flex; gap: 10px; align-items: flex-start; padding: 7px 14px; }
 .ni-step-line[data-ok="false"] { opacity: 0.6; }

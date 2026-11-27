@@ -329,6 +329,8 @@ describe('every page keeps its view choices (utils/view-memory.ts)', () => {
     // A pick handed to one of Walnut's choice controls is no typed text (the Time page's device switch).
     const picked = `const [device, setDevice] = useState('mac')\nreturn <Segmented value={device} onChange={setDevice} options={o} aria-label="Device" />`;
     expect(draftsOffDevice(picked)).toEqual([]);
+    // A tag with a type argument is still that tag (the demo's view tabs, `<Tabs<ViewId>`).
+    expect(draftsOffDevice(`const [tab, setTab] = useState<V>('task')\nreturn <Tabs<V> value={tab} onChange={setTab} items={t} />`)).toEqual([]);
     const typed = `const [note, setNote] = useState('')\nreturn <input value={note} onChange={(e) => setNote(e.target.value)} />`;
     expect(draftsOffDevice(typed).map((d) => d.name)).toEqual(['note']);
   });

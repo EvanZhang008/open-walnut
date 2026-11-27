@@ -64,13 +64,10 @@ export const BASE_CSS = `
   text-transform: uppercase;
 }
 
-/* ── Tabs, the range and the kind: the console's own Tabs and Segmented (controls.tsx); these
+/* ── Tabs, the range and the kind: the console's own Tabs and Segmented (host-controls.tsx); these
    classes only place them. ── */
 
 .wt-tabs { margin-bottom: 18px; }
-
-/* The fallback on a host without those views: a row of plain keys. */
-.wt-key-row { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 
 /* ── Filters ── */
 

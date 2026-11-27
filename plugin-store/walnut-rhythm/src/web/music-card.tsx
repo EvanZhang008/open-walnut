@@ -140,7 +140,7 @@ export function MusicCard({ player, store, state, onOpenFolder, busy }: { player
           onChange={(order) => player.setOrder(order)}
         />
 
-        <div className="rhythm-picker" role="radiogroup" aria-label="Focus music track" data-testid="rhythm-music-tracks">
+        <div className="rhythm-picker" role="radiogroup" data-choice-exempt="a column of the shared Picked rows (wn-pick-row), one picked" aria-label="Focus music track" data-testid="rhythm-music-tracks">
           {tracks.map((track) => (
             <button
               key={track.id}

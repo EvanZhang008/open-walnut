@@ -243,9 +243,11 @@ width); it never gives them a fill, border, corner or size of its own, and never
 | Option card | `.wn-option-card` | one of a few large side-by-side choices with a title and a line of words (New task or Quick question) | every card the same 1 px `--border` and 16 px padding, its name in `.wn-option-card-title` (`--font-size-lg`, 600) and its line in `.wn-option-card-desc`; the picked one a half-accent hairline and `--accent-subtle`; the focus ring only on `:focus-visible` | `aria-checked` (on `role=radio`) or `aria-pressed` |
 
 A plugin's page (the store's in `plugin-store/`, the examples in `examples/plugins/`, Time among
-them) is the console's too: it draws its tabs, segmented controls and checkboxes with
-`walnut.ui.views.Tabs`, `Segmented` and `Checkbox` (the components above, handed over by the host)
-and its keys with `.btn`, never copies of its own; the ratchets read those folders as they read
+them) is the console's too: it draws its tabs, segmented controls, checkboxes, radios, switches
+and chips with `walnut.ui.views.Tabs`, `Segmented`, `Checkbox`, `Radio`, `Switch` and `Chip` (the
+components above, handed over by the host, through the one adapter each plugin copies,
+`src/web/host-controls.tsx`, kept identical by `tests/web/plugin-host-controls.test.ts`) and its keys
+with `.btn`, never copies of its own; the ratchets read those folders as they read
 `web/src` (2026-11-27 UI audit: the Time page's square-cornered tabs and day keys beside the
 Calendar's round ones). A pick that only an on-class of its own turns on, with no ARIA state, is
 counted too (`pick`).

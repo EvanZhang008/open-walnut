@@ -4,10 +4,12 @@ import { DemoEventLog } from './web/event-log'
 import { DemoSettings } from './web/settings'
 import { DEMO_CSS } from './web/styles'
 import type { DemoBadge, DemoContext, RunOutcome } from './web/types'
+import { setHostControls } from './web/host-controls'
 
 const AUXILIARY_PATH = '/plugin-demo-about'
 
 export async function activate(walnut: WalnutWebApi) {
+  setHostControls(walnut.ui.views)
   const events = new DemoEventLog()
   const statsPath = `/api/plugins/${walnut.pluginId}/stats`
 

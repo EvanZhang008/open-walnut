@@ -5,11 +5,13 @@ import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { ImportApp } from './web/app'
 import { createImportStore } from './web/store'
 import { IMPORT_CSS } from './web/styles'
+import { setHostControls } from './web/host-controls'
 
 /** The documented default weight for a plugin App (core screens use 10 to 1000). */
 const APP_ORDER = 500
 
 export async function activate(walnut: WalnutWebApi) {
+  setHostControls(walnut.ui.views)
   const store = createImportStore(walnut)
 
   function ImportIcon({ size = 18 }: { size?: number }) {

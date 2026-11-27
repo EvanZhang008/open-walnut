@@ -1,6 +1,6 @@
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { createTimeApi } from './web/api'
-import { setHostControls } from './web/controls'
+import { setHostControls } from './web/host-controls'
 import { TimeApp } from './web/app'
 import { TIME_CSS } from './web/styles'
 import { TaskTimePage } from './web/task-page'

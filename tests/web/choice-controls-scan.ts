@@ -87,6 +87,17 @@ const CLASS_ATTR = /className=(?:"([^"]*)"|\{((?:[^{}]|\{[^{}]*\})*)\})/g;
 
 const isHome = (rel: string) => HOMES.some((h) => rel.startsWith(h));
 
+/**
+ * The class names a className writes, without the JS around them: `${on ? '' : ' btn-primary'}`
+ * gives `btn-primary`, never the variable `on` (2026-11-27: Rhythm's Play key read as an on-class).
+ */
+function writtenClasses(cls: string): string {
+  const parts: string[] = [];
+  for (const m of cls.matchAll(/'([^']*)'|"([^"]*)"/g)) parts.push(m[1] ?? m[2] ?? '');
+  for (const m of cls.matchAll(/`((?:[^`\\]|\\.)*)`/g)) parts.push(m[1].replace(/\$\{(?:[^{}]|\{[^{}]*\})*\}/g, ' '));
+  return parts.length ? parts.join(' ') : cls;
+}
+
 /** Kinds one element is a hand-built member of (empty for a shared component or anything else). */
 export function kindsOf(tag: string, attrs: string): Array<{ kind: Kind; what: string }> {
   if (!/^[a-z]/.test(tag)) return [];
@@ -95,8 +106,12 @@ export function kindsOf(tag: string, attrs: string): Array<{ kind: Kind; what: s
   if (/\bdata-choice-exempt=["'][^"']{8,}["']/.test(attrs)) return [];
   const cls = [...attrs.matchAll(CLASS_ATTR)].map((m) => m[1] ?? m[2] ?? '').join(' ');
   const words = new Set(cls.match(/[a-z][a-z0-9-]*/g) ?? []);
-  const out: Array<{ kind: Kind; what: string }> = [];
+  // The shared Picked row (styles/pick-and-nav.css): a row of a list of options with its ARIA state
+  // (role=radio and aria-checked among them) is that family, not a hand-built control.
   const role = attrs.match(/\brole=["']([a-z]+)["']/)?.[1];
+  if (/(^|\s)wn-pick-row(?=\s|$)/.test(writtenClasses(cls)) && (role === 'radio' || role === 'option' || role === 'menuitemradio')) return [];
+  const written = writtenClasses(cls);
+  const out: Array<{ kind: Kind; what: string }> = [];
   const add = (kind: Kind, what: string) => { if (!out.some((o) => o.kind === kind)) out.push({ kind, what }); };
   if (role === 'tab' || role === 'tablist') add('tab', `role=${role}`);
   if (role === 'switch') add('switch', 'role=switch');
@@ -115,11 +130,11 @@ export function kindsOf(tag: string, attrs: string): Array<{ kind: Kind; what: s
     if (/-tabs?(-bar)?(-item|-btn|-button)?$/.test(w)) add('tab', `.${w}`);
     else if (/-(seg|segment|segmented)$/.test(w)) add('segment', `.${w}`);
     else if (/-switch$/.test(w) && !inertWrapper) add('switch', `.${w}`);
-    else if (/-chip$/.test(w) && (/\baria-pressed\b/.test(attrs) || /\b(active|on|selected|is-on|is-active|is-selected)\b/.test(cls))) add('chip', `.${w}`);
+    else if (/-chip$/.test(w) && (/\baria-pressed\b/.test(attrs) || /(^|\s)(active|on|selected|is-on|is-active|is-selected)(?=\s|$)/.test(written))) add('chip', `.${w}`);
   }
   // A button that keeps its own on-class beside aria-pressed draws an on state of its own: a second
   // active-state name (the audit found five: .active, .on, .is-on, .is-active, .selected).
-  if (/\baria-pressed\b/.test(attrs) && (/\b(active|on|is-on|is-active|selected|is-selected)\b/.test(cls) || /[a-z]-(on|active|selected)\b/.test(cls))) add('pressed', 'aria-pressed with its own on-class');
+  if (/\baria-pressed\b/.test(attrs) && (/(^|\s)(active|on|is-on|is-active|selected|is-selected)(?=\s|$)/.test(written) || /[a-z0-9]--?(on|active|selected)(?=\s|$)/.test(written))) add('pressed', 'aria-pressed with its own on-class');
   if (tag === 'button' && !role && !out.length && !/\baria-(pressed|checked|selected|current)\b/.test(attrs) && ON_CLASS_SWITCHED.test(cls)) add('pick', 'an on-class of its own, no ARIA');
   if (/\baria-expanded\b/.test(attrs)) {
     const fold = [...words].find((w) => /-(toggle|fold|disclosure|chevron|caret|expand|collapse|collapser)$/.test(w));

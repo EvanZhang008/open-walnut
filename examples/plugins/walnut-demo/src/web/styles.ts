@@ -20,18 +20,8 @@ export const DEMO_CSS = `
 .wd-header p { color: var(--fg-muted); font-size: 13px; max-width: 68ch; }
 .wd-kicker { color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 
-.wd-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
-.wd-tab {
-  padding: 7px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full, 999px);
-  background: var(--card-bg);
-  color: var(--fg-secondary);
-  font-size: 13px;
-  cursor: pointer;
-}
-.wd-tab:hover { background: var(--bg-hover); }
-.wd-tab-active { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent); font-weight: 600; }
+/* The section and view tabs are Walnut's own Tabs (host-controls.tsx); these only place them. */
+.wd-tabs { margin-bottom: 4px; }
 .wd-tabs-inner { margin-bottom: 10px; }
 
 .wd-section { display: block; min-width: 0; }
@@ -71,7 +61,7 @@ export const DEMO_CSS = `
 .wd-button:disabled { opacity: 0.55; cursor: default; }
 .wd-button-primary { border-color: var(--accent); background: var(--accent-subtle); color: var(--accent); }
 .wd-button-danger { border-color: var(--error); color: var(--error); background: transparent; }
-.wd-button:focus-visible, .wd-tab:focus-visible, .wd-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wd-button:focus-visible, .wd-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .wd-input {
   flex: 1 1 200px;

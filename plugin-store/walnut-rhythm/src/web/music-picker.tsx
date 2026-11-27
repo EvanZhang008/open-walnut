@@ -64,7 +64,7 @@ export function MusicPicker({ music, store, value, onPick, testId }: {
   const previewing = view.previewing ? choiceKey(view.previewing) : null
 
   return (
-    <div className="rhythm-picker" role="radiogroup" aria-labelledby={`${testId}-label`} data-testid={testId}>
+    <div className="rhythm-picker" role="radiogroup" data-choice-exempt="a column of the shared Picked rows (wn-pick-row), one picked" aria-labelledby={`${testId}-label`} data-testid={testId}>
       {musicOptions(listing, starred).map((option) => {
         const key = choiceKey(option.choice)
         const on = key === choiceKey(value)

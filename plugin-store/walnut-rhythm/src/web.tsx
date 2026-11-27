@@ -24,11 +24,13 @@ import { NowPlaying } from './web/now-playing'
 import { StartForm } from './web/start-form'
 import { createRhythmStore } from './web/store'
 import { RHYTHM_CSS } from './web/styles'
+import { setHostControls } from './web/host-controls'
 
 /** The documented default weight for a plugin App (core screens use 10 to 1000). */
 const APP_ORDER = 500
 
 export async function activate(walnut: WalnutWebApi) {
+  setHostControls(walnut.ui.views)
   const store = createRhythmStore(walnut)
   // Console-wide, so the music keeps playing on every screen; the plugin's signal ends it.
   const music = createMusicPlayer(walnut, store)

@@ -5,15 +5,15 @@
 import { useState } from 'react'
 import { dndRowView } from './dnd-model'
 import type { RhythmPublicState, RhythmStore } from './store'
+import { Checkbox } from './host-controls'
 
 /** The Start form's switch. Shown only on the Mac that hosts Walnut. */
 export function DndStartToggle({ state, value, onChange }: { state: RhythmPublicState; value: boolean; onChange(next: boolean): void }) {
   if (!state.dnd.available) return null
   return (
-    <label className="rhythm-dnd-toggle" data-testid="rhythm-start-dnd">
-      <input type="checkbox" checked={value} onChange={(event) => onChange(event.currentTarget.checked)} data-testid="rhythm-start-dnd-input" />
-      <span>Turn on Mac Do Not Disturb until it ends</span>
-    </label>
+    <span className="rhythm-dnd-toggle" data-testid="rhythm-start-dnd">
+      <Checkbox checked={value} onChange={onChange} data-testid="rhythm-start-dnd-input" label="Turn on Mac Do Not Disturb until it ends" />
+    </span>
   )
 }
 

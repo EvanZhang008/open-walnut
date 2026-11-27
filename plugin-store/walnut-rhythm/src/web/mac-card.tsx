@@ -10,6 +10,7 @@
 import { dndSetupText } from './dnd-model'
 import { LEGACY_SHORTCUT_ON, legacyText } from '../server/dnd-words'
 import type { RhythmPublicState } from './store'
+import { Switch } from './host-controls'
 
 export interface MacCardProps {
   state: RhythmPublicState
@@ -83,10 +84,8 @@ export function MacCard({ state, onInstall, onOpenPrivacy, onDndSetting, refresh
             )}
           </div>
           <div className="rhythm-row-actions">
-            <label className="rhythm-dnd-toggle">
-              <input type="checkbox" checked={dndOn} disabled={busy} data-testid="rhythm-dnd-setting" onChange={(event) => onDndSetting(event.currentTarget.checked)} />
-              <span>{dndOn ? 'On' : 'Off'}</span>
-            </label>
+            {/* A setting that takes effect at once: the shared switch. */}
+            <Switch checked={dndOn} disabled={busy} data-testid="rhythm-dnd-setting" aria-label="Mac Do Not Disturb during focus blocks" onChange={onDndSetting} />
             {setup.step === 'add' && (
               // Stays clickable while watching: a dialog closed by mistake opens again at once.
               <button type="button" className="btn btn-sm btn-primary" disabled={busy} data-testid="rhythm-shortcuts-install" onClick={onInstall}>

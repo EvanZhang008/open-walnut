@@ -1,5 +1,5 @@
 import type { ContentAction, ContentItem } from '../../../packages/plugin-api/src/content-actions'
-import type { CheckboxViewProps, RouteLineViewProps, SegmentedViewProps, TabsViewProps } from '../../../packages/plugin-api/src/web'
+import type { CheckboxViewProps, ChipViewProps, RadioViewProps, RouteLineViewProps, SegmentedViewProps, SwitchViewProps, TabsViewProps } from '../../../packages/plugin-api/src/web'
 import type { ComponentType, RefObject } from 'react'
 
 export interface Disposable {
@@ -384,6 +384,9 @@ export interface PluginViews {
   Segmented: ComponentType<SegmentedViewProps>
   Tabs: ComponentType<TabsViewProps>
   Checkbox: ComponentType<CheckboxViewProps>
+  Radio: ComponentType<RadioViewProps>
+  Switch: ComponentType<SwitchViewProps>
+  Chip: ComponentType<ChipViewProps>
 }
 
 export interface WalnutWebApiHost {

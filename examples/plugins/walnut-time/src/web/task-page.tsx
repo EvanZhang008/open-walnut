@@ -4,6 +4,7 @@ import { formatLane, type TimePage, type TimePaths } from './task-routes'
 import type { TaskTimeStore } from './task-time-store'
 import { dayLabel } from './time-timeline'
 import { DirectionMark, FoldChevron } from './fold-chevron'
+import { Chip } from './host-controls'
 
 /**
  * One task's time (or one session's), day by day: where the task detail slot and the
@@ -210,35 +211,27 @@ function TaskBody({ data, focus, onFocus }: { data: TaskTime; focus: string | nu
       {data.sessions.length > 0 && (
         <section className="wt-section">
           <div className="wt-section-head"><h2>Sessions</h2></div>
-          <div className="wt-task-sessions" role="tablist" aria-label="Narrow to one session">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={!focused}
-              className={`wt-task-session${!focused ? ' is-active' : ''}`}
-              onClick={() => onFocus(null)}
-              data-testid="time-task-session-all"
-            >
-              <span className="wt-task-session-name">Whole task</span>
-            </button>
+          {/* Chips (a filter over the days below, one on): a long title is cut with an ellipsis and
+              given whole in its tooltip; the day list under it names each session whole. */}
+          <div className="wt-task-sessions" role="group" aria-label="Narrow to one session">
+            <Chip pressed={!focused} onClick={() => onFocus(null)} data-testid="time-task-session-all">Whole task</Chip>
             {data.sessions.map((s) => (
-              <button
+              <Chip
                 key={s.sessionId}
-                type="button"
-                role="tab"
-                aria-selected={focused === s.sessionId}
-                className={`wt-task-session${focused === s.sessionId ? ' is-active' : ''}`}
+                pressed={focused === s.sessionId}
                 onClick={() => onFocus(s.sessionId)}
                 data-testid="time-task-session"
-                data-session-id={s.sessionId}
+                title={names.get(s.sessionId)}
+                count={(
+                  <span className="wt-task-session-v">
+                    <span className={laneClass('human', s.totals.all.humanMs)}>{formatLane(s.totals.all.humanMs)}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className={laneClass('agent', s.totals.all.agentMs)}>{formatLane(s.totals.all.agentMs)}</span>
+                  </span>
+                )}
               >
-                <span className="wt-task-session-name">{names.get(s.sessionId)}</span>
-                <span className="wt-task-session-v">
-                  <span className={laneClass('human', s.totals.all.humanMs)}>{formatLane(s.totals.all.humanMs)}</span>
-                  <span aria-hidden="true">·</span>
-                  <span className={laneClass('agent', s.totals.all.agentMs)}>{formatLane(s.totals.all.agentMs)}</span>
-                </span>
-              </button>
+                {names.get(s.sessionId)}
+              </Chip>
             ))}
           </div>
         </section>

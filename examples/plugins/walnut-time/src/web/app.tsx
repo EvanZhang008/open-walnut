@@ -10,7 +10,7 @@ import {
   TREND_DAYS, WINDOW_DAYS, daysInScope, scopeHint, type Scope, type ScopeMode,
 } from './time-scope'
 import { TimeTimeline } from './timeline'
-import { Tabs } from './controls'
+import { Tabs } from './host-controls'
 
 /**
  * The app shell: one page, four tabs, one data load.

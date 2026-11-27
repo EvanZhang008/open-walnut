@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Card, Chip } from './ui-kit'
 import type { DemoContext } from './types'
+import { Tabs } from './host-controls'
 
 const VIEW_TABS = [
   { id: 'task', label: 'Task', needsSession: false },
@@ -40,21 +41,13 @@ export function ViewsSection(props: { demo: DemoContext }) {
         title="Host views"
         hint="Only the selected view is mounted. Switching tabs unmounts the previous one."
       >
-        <div className="wd-tabs wd-tabs-inner" role="tablist">
-          {VIEW_TABS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              role="tab"
-              aria-selected={entry.id === active}
-              className={`wd-tab ${entry.id === active ? 'wd-tab-active' : ''}`}
-              data-testid={`plugin-demo-view-${entry.id}`}
-              onClick={() => setActive(entry.id)}
-            >
-              {entry.label}
-            </button>
-          ))}
-        </div>
+        <Tabs<ViewId>
+          className="wd-tabs-inner"
+          aria-label="Host views"
+          value={active}
+          items={VIEW_TABS.map((entry) => ({ value: entry.id, label: entry.label, testId: `plugin-demo-view-${entry.id}` }))}
+          onChange={setActive}
+        />
         <p className="wd-muted">{VIEW_NOTES[active]}</p>
         <div className="wd-row">
           <input

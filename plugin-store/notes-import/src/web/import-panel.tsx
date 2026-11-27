@@ -9,6 +9,7 @@ import { inNotes, plural } from './words'
 import { matchCase, safeFolder } from '../server/paths'
 import { folderScope, scopeIds, type FolderScope } from './folder-scope'
 import { diffNoteLines } from './line-diff'
+import { Checkbox, Radio } from './host-controls'
 
 type Setter<T> = (next: T | ((prev: T) => T)) => void
 type UseView = <T>(name: string, initial: T) => [T, Setter<T>]
@@ -146,15 +147,11 @@ export function ImportPanel(props: { walnut: WalnutWebApi; store: ImportStore; s
         <div className="ni-row ni-row-top">
           <div className="ni-row-copy">
             <span>What</span>
-            <div className="ni-choice" role="radiogroup" aria-label="What to import">
-              <label className="ni-radio">
-                <input type="radio" name="ni-scope" checked={scope === 'all'} onChange={() => chooseScope('all')} disabled={running} data-testid="ni-scope-all" />
-                <span>Everything shared with the connection{access ? ` (${[plural(access.pages, 'page'), access.databases ? plural(access.databases, 'database') : ''].filter(Boolean).join(', ')})` : ''}</span>
-              </label>
-              <label className="ni-radio">
-                <input type="radio" name="ni-scope" checked={scope === 'some'} onChange={() => chooseScope('some')} disabled={running || !roots.length} data-testid="ni-scope-some" />
-                <span>Only some top-level pages</span>
-              </label>
+            <div className="ni-choice" role="group" aria-label="What to import">
+              <Radio name="ni-scope" checked={scope === 'all'} onChange={() => chooseScope('all')} disabled={running} data-testid="ni-scope-all"
+                label={`Everything shared with the connection${access ? ` (${[plural(access.pages, 'page'), access.databases ? plural(access.databases, 'database') : ''].filter(Boolean).join(', ')})` : ''}`} />
+              <Radio name="ni-scope" checked={scope === 'some'} onChange={() => chooseScope('some')} disabled={running || !roots.length} data-testid="ni-scope-some"
+                label="Only some top-level pages" />
             </div>
             <span className="ni-help">Sub-pages come along, including ones Notion only lists inside a page, so the count can grow while it imports.</span>
             {target === settled && following === settled && followed && !narrower && !broader && (
@@ -170,17 +167,15 @@ export function ImportPanel(props: { walnut: WalnutWebApi; store: ImportStore; s
                 )}
                 <div className="ni-picker-list">
                   {visibleRoots.map((root) => (
-                    <label key={root.id} className="ni-check">
-                      <input
-                        type="checkbox"
-                        checked={chosenLive.includes(root.id)}
-                        disabled={running}
-                        onChange={(e) => chooseRoots((prev) => e.target.checked ? [...new Set([...prev, root.id])] : prev.filter((id) => id !== root.id))}
-                        data-testid="ni-root"
-                      />
-                      <span className="ni-check-title">{root.title}</span>
-                      <span className="ni-muted">{whatIsIn(root)}</span>
-                    </label>
+                    <Checkbox
+                      key={root.id}
+                      className="ni-check"
+                      checked={chosenLive.includes(root.id)}
+                      disabled={running}
+                      onChange={(on) => chooseRoots((prev) => on ? [...new Set([...prev, root.id])] : prev.filter((id) => id !== root.id))}
+                      data-testid="ni-root"
+                      label={<span className="ni-check-line"><span className="ni-check-title">{root.title}</span><span className="ni-muted">{whatIsIn(root)}</span></span>}
+                    />
                   ))}
                   {!visibleRoots.length && <span className="ni-muted ni-pad">No page matches.</span>}
                 </div>

@@ -503,7 +503,8 @@
   transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out;
 }
 
-.wn-chip:hover:not(:disabled):not([aria-disabled='true']) {
+/* Only an off chip lights up under the pointer: an on one keeps its accent look while hovered. */
+.wn-chip:hover:not(:disabled):not([aria-disabled='true']):not([aria-pressed='true']):not([aria-checked='true']):not([aria-selected='true']) {
   background: var(--choice-chip-hover);
   color: var(--fg);
 }
@@ -572,8 +573,8 @@
 .wn-chip[aria-pressed='true'] .wn-chip-count,
 .wn-chip[aria-checked='true'] .wn-chip-count,
 .wn-chip[aria-selected='true'] .wn-chip-count {
+  /* Full strength: small words on the accent tint need all their contrast (11-27 review: 3.8:1 at 0.8). */
   color: inherit;
-  opacity: 0.8;
 }
 
 /* ── Switch: on or off, takes effect at once. 38x22, or 28x16 in a menu or a dense row. ── */

@@ -98,7 +98,9 @@ const LITERAL_ARG = /^\s*(?:'[^']*'|"[^"]*"|`[^`$]*`|-?\d+|true|false|!\s*[\w.]+
 /** The JSX element a handler at `i` belongs to: the last `<tag` before it, with its attributes so far. */
 function elementBefore(src: string, i: number): { tag: string; attrs: string } {
   const before = src.slice(Math.max(0, i - 800), i)
-  const at = Math.max(before.lastIndexOf('<'), 0)
+  // The tag's own `<`, never a type argument's: `<Tabs<ViewId>` is a Tabs (a `<` right after a name opens generics).
+  const opens = [...before.matchAll(/(?<![\w$.])<[A-Za-z]/g)]
+  const at = opens.length ? opens[opens.length - 1].index! : 0
   const m = /^<([A-Za-z][\w.]*)/.exec(before.slice(at))
   return { tag: m?.[1] ?? '', attrs: before.slice(at) }
 }
@@ -164,7 +166,7 @@ function textElement(src: string, i: number): boolean {
   const { tag, attrs } = elementBefore(src, i)
   if (/^select$/i.test(tag)) return false
   // Walnut's choice controls (walnut.ui.views.Segmented, Tabs, Checkbox and the host's own) pick a value: no text is typed.
-  if (/^(?:Segmented|SegmentedControl|Tabs|Tab|Checkbox|Radio|Chip|ToggleSwitch)$/.test(tag)) return false
+  if (/^(?:Segmented|SegmentedControl|Tabs|Tab|Checkbox|Radio|Chip|Switch|ToggleSwitch)$/.test(tag)) return false
   if (/type\s*=\s*["'{]?\s*["']?(?:checkbox|radio|range|color|file)\b/.test(attrs)) return false
   return true
 }

@@ -5,7 +5,7 @@ import { DayNav, type DayNavTestIds } from './day-nav'
 import { Stat } from './reports'
 import { ScreenTimeSection, useScreenTime } from './screentime'
 import { dayLabel, formatDuration } from './time-timeline'
-import { Segmented } from './controls'
+import { Segmented } from './host-controls'
 
 /**
  * Apps — where the REST of the screen time went: which Mac app, and for a browser,

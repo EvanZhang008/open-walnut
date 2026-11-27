@@ -4,6 +4,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import type { ImportStore, PublicState } from './store'
 import { inNotes, plural } from './words'
+import { Checkbox } from './host-controls'
 
 type Step = NonNullable<PublicState['organize']['plan']>['steps'][number]
 
@@ -72,19 +73,7 @@ function groupSteps(steps: Step[]): Group[] {
 }
 
 function Keep({ id, checked, partly, disabled, onChange, label }: { id?: string; checked: boolean; partly?: boolean; disabled?: boolean; onChange(next: boolean): void; label: string }) {
-  return (
-    <input
-      id={id}
-      type="checkbox"
-      className="ni-keep"
-      checked={checked}
-      ref={(el) => { if (el) el.indeterminate = !!partly }}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.checked)}
-      aria-label={label}
-      data-testid="ni-step-keep"
-    />
-  )
+  return <Checkbox id={id} className="ni-keep" checked={checked} indeterminate={partly} disabled={disabled} onChange={onChange} aria-label={label} data-testid="ni-step-keep" />
 }
 
 /** A step's words; clicking them ticks or unticks its box, as the box does. */

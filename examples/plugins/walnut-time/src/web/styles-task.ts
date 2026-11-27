@@ -110,36 +110,13 @@ export const TASK_CSS = `
 .wt-task-lane.is-human b { color: var(--wt-human); }
 .wt-task-lane.is-agent b { color: var(--wt-agent); }
 
-.wt-task-sessions { display: flex; flex-wrap: wrap; gap: 6px; }
-.wt-task-session {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-  max-width: 100%;
-  padding: 6px 10px;
-  font: inherit;
-  font-size: var(--font-size-md, 13px);
-  color: var(--fg);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  cursor: pointer;
-}
-.wt-task-session:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.wt-task-session.is-active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
-}
-/* A session's name is what tells the chips apart: it wraps in full, never cut (the Day by day head
-   names it the same way); its time stays one line beside it. */
-.wt-task-session-name {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  text-align: left;
-}
-.wt-task-session-v { display: inline-flex; flex: none; gap: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; font-size: var(--font-size-sm, 12px); }
-.wt-task-session-v .is-human, .wt-task-day-sessions .is-human { color: var(--wt-human); }
-.wt-task-session-v .is-agent, .wt-task-day-sessions .is-agent { color: var(--wt-agent); }
+.wt-task-sessions { display: flex; flex-wrap: wrap; gap: 4px; }
+.wt-task-session-v { display: inline-flex; flex: none; gap: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wt-task-day-sessions .is-human { color: var(--wt-human); }
+.wt-task-day-sessions .is-agent { color: var(--wt-agent); }
+/* Small words on a chip's tint: the text shades of the two lane colours, readable in both themes. */
+.wt-task-session-v .is-human { color: var(--accent-text); }
+.wt-task-session-v .is-agent { color: color-mix(in srgb, var(--wt-agent) 60%, var(--fg)); }
 .wt-task-session-v .is-zero, .wt-task-day-sessions .is-zero { color: var(--fg-muted); }
 
 /* The days are one list in one box (the console's shared .wn-list-box), a hairline between days

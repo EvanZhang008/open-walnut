@@ -47,7 +47,7 @@ export const VIEWS_CSS = `
   font-style: normal;
 }
 
-/* The view switch (the console's Segmented, controls.tsx) and its Lanes options, one group at the
+/* The view switch (the console's Segmented, host-controls.tsx) and its Lanes options, one group at the
    end of the nav's line; where the line wraps (a phone) the group starts at the left, together. */
 .wt-tt-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-left: auto; min-width: 0; }
 @media (max-width: 600px) { .wt-tt-tools { margin-left: 0; } }

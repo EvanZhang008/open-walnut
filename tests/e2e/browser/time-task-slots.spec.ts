@@ -248,7 +248,7 @@ test('a session\'s time is a fact in its menu, and no chip on the header row by 
   await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
   await expect(page.locator('.task-kebab-menu:visible')).toHaveCount(0)
   await expect(page.getByTestId('time-task-session').filter({ hasText: 'Rename the time grid' }))
-    .toHaveAttribute('aria-selected', 'true')
+    .toHaveAttribute('aria-pressed', 'true')
   await page.getByTestId('time-task-back').click()
   await expect(column(page, SID_A)).toBeVisible({ timeout: 30_000 })
   expect(errors).toEqual([])

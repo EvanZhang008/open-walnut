@@ -72,7 +72,7 @@ const publicMicIsHostMic: HostMicButton = null as unknown as PublicMicButton
 void hostMicIsPublicMic
 void publicMicIsHostMic
 
-// The shared choice controls a plugin draws (Segmented, Tabs, Checkbox): the public props are the
+// The shared choice controls a plugin draws (Segmented, Tabs, Checkbox, Radio, Switch, Chip): the public props are the
 // ones the host's views take, both ways.
 type PublicSegmented = NonNullable<PublicWebApi['ui']['views']['Segmented']>
 type HostSegmented = HostWebApi['ui']['views']['Segmented']
@@ -80,10 +80,19 @@ type PublicTabs = NonNullable<PublicWebApi['ui']['views']['Tabs']>
 type HostTabs = HostWebApi['ui']['views']['Tabs']
 type PublicCheckbox = NonNullable<PublicWebApi['ui']['views']['Checkbox']>
 type HostCheckbox = HostWebApi['ui']['views']['Checkbox']
-const choiceViewsBothWays: [PublicSegmented, HostSegmented, PublicTabs, HostTabs, PublicCheckbox, HostCheckbox] = [
+type PublicRadio = NonNullable<PublicWebApi['ui']['views']['Radio']>
+type HostRadio = HostWebApi['ui']['views']['Radio']
+type PublicSwitch = NonNullable<PublicWebApi['ui']['views']['Switch']>
+type HostSwitch = HostWebApi['ui']['views']['Switch']
+type PublicChip = NonNullable<PublicWebApi['ui']['views']['Chip']>
+type HostChip = HostWebApi['ui']['views']['Chip']
+const choiceViewsBothWays: [PublicSegmented, HostSegmented, PublicTabs, HostTabs, PublicCheckbox, HostCheckbox, PublicRadio, HostRadio, PublicSwitch, HostSwitch, PublicChip, HostChip] = [
   null as unknown as HostSegmented, null as unknown as PublicSegmented,
   null as unknown as HostTabs, null as unknown as PublicTabs,
   null as unknown as HostCheckbox, null as unknown as PublicCheckbox,
+  null as unknown as HostRadio, null as unknown as PublicRadio,
+  null as unknown as HostSwitch, null as unknown as PublicSwitch,
+  null as unknown as HostChip, null as unknown as PublicChip,
 ]
 void choiceViewsBothWays
 

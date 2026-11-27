@@ -10,10 +10,10 @@ import { PluginSettingsForm } from '@/components/settings/PluginSettingsForm'
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
 import { ContentActionButtons } from '@/components/content/ContentActionButtons'
 import { RouteLine } from '@/components/router/RouteLine'
-import { Checkbox, SegmentedControl, Tabs } from '@/components/controls'
+import { Checkbox, Chip, Radio, SegmentedControl, Tabs, ToggleSwitch } from '@/components/controls'
 import type { ContentItem } from '@/utils/content-actions'
 import { lazy, Suspense, useCallback, useRef, type RefObject } from 'react'
-import type { CheckboxViewProps, DrawingViewProps, SegmentedViewProps, TabsViewProps } from '../../../packages/plugin-api/src/web'
+import type { CheckboxViewProps, ChipViewProps, DrawingViewProps, RadioViewProps, SegmentedViewProps, SwitchViewProps, TabsViewProps } from '../../../packages/plugin-api/src/web'
 import { LoadingState } from '@/components/common/EmptyState'
 
 const DrawingWorkspace = lazy(() => import('@/components/drawing/DrawingWorkspace').then((module) => ({ default: module.DrawingWorkspace })))
@@ -45,8 +45,21 @@ function TabsView(props: TabsViewProps) {
   return <Tabs {...props} />
 }
 
+// `className` places the row with its label, or the box itself when there is no label.
 function CheckboxView({ className, ...props }: CheckboxViewProps) {
-  return <Checkbox {...props} rowClassName={className} />
+  return <Checkbox {...props} rowClassName={className} className={props.label ? undefined : className} />
+}
+
+function RadioView({ className, ...props }: RadioViewProps) {
+  return <Radio {...props} rowClassName={className} className={props.label ? undefined : className} />
+}
+
+function SwitchView(props: SwitchViewProps) {
+  return <ToggleSwitch {...props} />
+}
+
+function ChipView({ pressed, onClick, children, ...props }: ChipViewProps) {
+  return <Chip {...props} pressed={pressed} onClick={() => onClick()}>{children}</Chip>
 }
 
 function CalendarView() {
@@ -187,6 +200,9 @@ export function createPluginViews(pluginId: string): PluginViews {
     Segmented: SegmentedView,
     Tabs: TabsView,
     Checkbox: CheckboxView,
+    Radio: RadioView,
+    Switch: SwitchView,
+    Chip: ChipView,
   }
 }
 

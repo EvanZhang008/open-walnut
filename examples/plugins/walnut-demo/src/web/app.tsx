@@ -6,6 +6,7 @@ import { ServerSection } from './server-section'
 import { ViewsSection } from './views-section'
 import { WebSection } from './web-section'
 import { SECTION_IDS, SECTION_LABELS, type DemoContext, type LayoutMode, type SectionId } from './types'
+import { Tabs } from './host-controls'
 
 const COMPACT_WIDTH = 560
 
@@ -66,21 +67,13 @@ export function DemoApp(props: DemoAppProps) {
         </div>
       </header>
 
-      <nav className="wd-tabs" role="tablist" aria-label="Plugin Demo sections">
-        {SECTION_IDS.map((id) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={id === section}
-            className={`wd-tab ${id === section ? 'wd-tab-active' : ''}`}
-            data-testid={`plugin-demo-tab-${id}`}
-            onClick={() => openSection(id)}
-          >
-            {SECTION_LABELS[id]}
-          </button>
-        ))}
-      </nav>
+      <Tabs
+        className="wd-tabs"
+        aria-label="Plugin Demo sections"
+        value={section}
+        items={SECTION_IDS.map((id) => ({ value: id, label: SECTION_LABELS[id], testId: `plugin-demo-tab-${id}` }))}
+        onChange={openSection}
+      />
 
       <main className="wd-section" data-testid={`plugin-demo-section-${section}`}>
         {section === 'platform' && (

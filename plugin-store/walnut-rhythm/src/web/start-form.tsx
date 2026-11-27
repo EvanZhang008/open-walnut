@@ -116,7 +116,7 @@ function MinutesRow({ label, presets, limits, value, onChange, testId }: {
     <div className="rhythm-start-row">
       <span className="rhythm-start-label" id={`${testId}-label`}>{label}</span>
       <Segments
-        labelledBy={`${testId}-label`}
+        label={`${label} minutes`}
         value={parsed}
         options={presets.map((preset) => ({ value: preset, label: String(preset), testId: `${testId}-${preset}` }))}
         onChange={(preset) => onChange(String(preset))}

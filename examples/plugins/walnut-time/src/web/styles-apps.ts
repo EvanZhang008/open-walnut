@@ -99,7 +99,7 @@ export const APPS_CSS = `
  * so an hour-resolution bar is never mistaken for a five-second one at a glance.
  */
 export const SCREENTIME_CSS = `
-/* The device switch is the console's Segmented (controls.tsx): one device at a time, never a merge. */
+/* The device switch is the console's Segmented (host-controls.tsx): one device at a time, never a merge. */
 
 /* ── Apple Screen Time ── */
 

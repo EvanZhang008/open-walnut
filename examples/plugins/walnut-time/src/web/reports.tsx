@@ -2,7 +2,7 @@ import type { DayTime, TimeHumanKind } from './api'
 import { DayNav, type DayNavTestIds } from './day-nav'
 import { TREND_DAYS, scopeLabel, type Scope, type ScopeMode } from './time-scope'
 import { formatDuration } from './time-timeline'
-import { Segmented } from './controls'
+import { Segmented } from './host-controls'
 
 /**
  * The scope bar, the Agents tab, and the pieces both report tabs draw with. The
