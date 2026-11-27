@@ -520,7 +520,7 @@ html .tp-cols-head.wn-menu-heading {
 .tp-proj-filter {
   margin: 2px 2px 4px;
   padding: 0 8px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   flex: none;
 }
 /* The filter with its mic (MicInput): the wrapper keeps the box's place. */

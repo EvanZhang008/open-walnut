@@ -53,13 +53,13 @@
   flex: 1 1 120px;
   min-width: 0;
   padding: 0 8px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 .org-new-director-project {
   flex: 0 1 auto;
   max-width: 45%;
   padding: 0 4px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 .org-new-director-error { flex-basis: 100%; color: var(--error); font-size: var(--font-size-sm); }
 /* A VP with no Director yet shows only the input its "New Director…" asked for. */

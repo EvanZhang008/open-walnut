@@ -171,7 +171,7 @@
 .engine-setting-custom {
   max-width: 220px;
   padding: 4px 6px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 .engine-setting-text,
@@ -181,7 +181,7 @@
 
 .engine-setting-control .number-input {
   width: 92px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 .engine-setting-reset {

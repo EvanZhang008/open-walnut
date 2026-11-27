@@ -193,7 +193,7 @@ const DELEGATED: Record<string, { markers: string[]; why: string }> = {
     markers: ['box.current = el;', 'return away.current ? null : box.current;', 'boxRef={dictationBox}', 'handleRef={mic}', 'onTranscribe={dictation.onTranscribe}'],
     why: 'MicInput uses a focus-aware view of the same input ref, so dictation does not refocus a field left while its words arrive',
   },
-  "components/chat/ChatInput.tsx|textarea placeholder=placeholder ?? (focusedTaskTitle ? `Ask about '${focusedTaskTitle}'...` : 'Type a message... (/ for commands)')": {
+  "components/chat/ChatInput.tsx|textarea placeholder=placeholder ?? (focusedTaskTitle ? `Ask about '${focusedTaskTitle}'...` : '')": {
     markers: ['<MicButton', 'onTranscribe={(text) => writeDictation(text, false)}', 'ref={textareaRef}'],
     why: "the chat composer's MicButton writes through writeDictation into textareaRef",
   },

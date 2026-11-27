@@ -216,7 +216,7 @@
   }
   .app-shell-navigation .ask-walnut-drawer-search { min-height: 44px; }
   .app-shell-navigation .ask-walnut-drawer-search-input {
-    font-size: 16px;
+    font-size: var(--input-phone-text);
   }
   .app-shell-navigation .ask-walnut-drawer-item {
     min-height: 48px;

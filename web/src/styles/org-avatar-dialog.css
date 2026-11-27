@@ -8,7 +8,7 @@
 .org-avatar-who { display: flex; gap: 14px; align-items: center; padding: 6px 18px 4px; }
 .org-avatar-now { flex: none; width: 64px; height: 64px; border-radius: var(--radius-lg); }
 .org-avatar-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: var(--font-size-sm); color: var(--fg-secondary); }
-.org-avatar-name input, .org-avatar-ask input { box-sizing: border-box; width: 100%; font-size: 14px; }
+.org-avatar-name input, .org-avatar-ask input { box-sizing: border-box; width: 100%; font-size: var(--font-size-md); }
 .org-avatar-name input:disabled { opacity: .6; }
 .org-avatar-name small { font-size: var(--font-size-xs); }
 .org-avatar-tabs { margin: 6px 18px 6px; }

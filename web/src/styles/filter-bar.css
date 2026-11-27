@@ -209,7 +209,7 @@ html :is(.fb-group-title, .fb-layout-title).wn-menu-heading { padding: 4px 8px 2
 .fb-custom-input {
   width: 64px;
   padding: 0 8px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 /* ── Search results (6.3): `Status  In Progress` or `View  Pinned`, the kind muted ── */

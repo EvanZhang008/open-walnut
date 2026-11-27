@@ -430,7 +430,7 @@
   }
 
   html body .is-phone-layer .tag-editor-input {
-    font-size: 16px;
+    font-size: var(--input-phone-text);
   }
 
   html body .is-phone-layer .copyable-id-value,

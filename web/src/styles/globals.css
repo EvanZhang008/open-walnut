@@ -3373,7 +3373,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 .wf-search {
   width: 100%;
   min-width: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 .wf-overview--wide .wf-search { max-width: 340px; }
 .wf-overview-main { display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
@@ -3898,7 +3898,7 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 }
 .team-chat-input-field {
   flex: 1;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 .team-chat-send-btn {
   padding: 6px 12px;
@@ -8650,7 +8650,7 @@ body.walnut-dragging {
 .vd-sel {
   width: 100%;
   min-width: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   cursor: pointer;
 }
 
@@ -9557,7 +9557,7 @@ body.walnut-dragging {
 }
 .focus-inline-add input {
   width: 100%;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 /* Promote / Demote tier button */
@@ -11619,7 +11619,7 @@ body.walnut-dragging {
 .detail-setting-input {
   flex: 1;
   min-width: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 .detail-stat-grid {
@@ -11751,7 +11751,7 @@ body.walnut-dragging {
   border: none;
   outline: none;
   background: transparent;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   color: var(--fg);
   padding: 3px 0;
 }
@@ -12696,7 +12696,7 @@ html .task-kebab-section-label.wn-menu-heading {
   position: sticky;
   top: 0;
   margin: 6px 6px 4px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 /* The filter with its mic (MicInput): the wrapper sticks, the box fills it. */
 .mic-field.task-kebab-project-filter-field { position: sticky; top: 0; margin: 6px 6px 4px; }
@@ -12812,7 +12812,7 @@ html .task-kebab-section-label.wn-menu-heading {
 .dp-time-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 26px; }
 .dp-time-label { display: inline-flex; align-items: center; gap: 6px; }
 .dp-time-input {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   width: 84px;
 }
 .dp-time-note { flex-basis: 100%; font-size: var(--font-size-xs); color: var(--error); }
@@ -13810,7 +13810,7 @@ html .task-kebab-section-label.wn-menu-heading {
 
 .context-source-budget {
   width: 70px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   font-family: var(--font-mono);
   text-align: right;
 }
@@ -14420,7 +14420,7 @@ html .task-kebab-section-label.wn-menu-heading {
 }
 .qtc-confirm-input {
   width: 100%;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 .qtc-confirm-title {
   font-size: var(--font-size-md);
@@ -15144,7 +15144,7 @@ html .sps-section-label.wn-menu-heading {
   width: 100%;
   box-sizing: border-box;
   margin: 2px 0 6px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 /* Provider tag on cross-group filter matches ("Sonnet 4.6 — Amazon Bedrock"). */
@@ -16499,7 +16499,7 @@ td.usage-share-col {
   width: 100%;
   padding: 2px 6px;
   font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 /* Path edit wrapper + fuzzy recent-folder suggestion dropdown */
@@ -16878,7 +16878,7 @@ a.tag-chip:hover .tag-chip-value,
 }
 
 .tag-editor-input {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   padding: 2px 4px;
   min-width: 20px;
 }
@@ -18459,7 +18459,7 @@ a.tag-chip:hover .tag-chip-value,
 .repos-search-input {
   flex: 1;
   max-width: 400px;
-  font-size: 14px;
+  font-size: var(--font-size-md);
 }
 
 .repos-count {
@@ -18659,7 +18659,7 @@ a.tag-chip:hover .tag-chip-value,
 
 .repo-form-input {
   width: 100%;
-  font-size: 14px;
+  font-size: var(--font-size-md);
 }
 
 .repo-form-input-mono {
@@ -20967,7 +20967,7 @@ a.file-link:hover {
   min-width: 80px;
   padding: 0 8px;
   font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 .session-web-address-invalid,
 .session-web-address-invalid:focus { border-color: var(--error); }
@@ -21361,7 +21361,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .app-modal-input {
   width: 100%;
   margin-top: 14px;
-  font-size: 14px;
+  font-size: var(--font-size-md);
   box-sizing: border-box;
 }
 .app-modal-actions {
@@ -21723,7 +21723,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .sdc-search input {
   width: 100%;
   box-sizing: border-box;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 .sdc-spinner {
   position: absolute;
@@ -23276,7 +23276,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   border: none;
   background-color: transparent;
   color: var(--fg-muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   cursor: pointer;
 }
 
@@ -23698,7 +23698,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
 .cloud-userdata-box {
   width: 100%;
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-md);
   line-height: 1.5;
   padding: 10px 12px;
   resize: vertical;
@@ -23728,7 +23728,7 @@ button.focus-tiers-label-editable {
 button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .focus-tiers-edit-input {
   flex: 1;
-  font-size: 14px;
+  font-size: var(--font-size-md);
   font-weight: 500;
   padding: 2px 4px;
   margin: -2px -4px;
@@ -25821,7 +25821,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   outline: none;
   background: transparent;
   color: var(--fg);
-  font-size: 14px;
+  font-size: var(--font-size-md);
 }
 
 .session-search-spinner-slot {

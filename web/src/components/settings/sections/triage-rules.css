@@ -100,7 +100,7 @@
 textarea.settings-input.trr-note-input { width: 100%; height: auto; min-height: 0; padding: 5px 48px 5px 8px; resize: vertical; font-family: inherit; font-size: var(--font-size-md); }
 /* On a phone its neighbors are 16px (phone-settings.css), and iOS zooms into a smaller box on focus. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .settings-layout[data-phone-settings] textarea.settings-input.trr-note-input { font-size: 16px; }
+  .settings-layout[data-phone-settings] textarea.settings-input.trr-note-input { font-size: var(--input-phone-text); }
 }
 .trr-confirm-q { font-size: var(--font-size-sm); color: var(--fg-secondary); margin-right: 2px; }
 /* Confirming a removal: the question and its buttons take their own line under the rule, so the

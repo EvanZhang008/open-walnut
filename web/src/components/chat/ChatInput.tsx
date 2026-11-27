@@ -2228,8 +2228,9 @@ function ChatInputBody({ onSend, onCommand, onStop, onInterruptSend, onSendInSpl
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             onBlur={(e) => { caretLeft.current = e.currentTarget.value.length > 0; }}
-            {...(label ? { 'aria-label': label } : {})}
-            placeholder={placeholder ?? (focusedTaskTitle ? `Ask about '${focusedTaskTitle}'...` : 'Type a message... (/ for commands)')}
+            // An empty box carries no hint text (SKILL.md rule 20); its name stays for a screen reader.
+            {...(label || !(placeholder || focusedTaskTitle) ? { 'aria-label': label ?? 'Message' } : {})}
+            placeholder={placeholder ?? (focusedTaskTitle ? `Ask about '${focusedTaskTitle}'...` : '')}
             disabled={disabled}
             rows={1}
             {...NO_AUTOFILL_PROPS}

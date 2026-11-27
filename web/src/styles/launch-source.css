@@ -90,7 +90,7 @@
   flex: 1;
   min-width: 0;
   padding: 2px 4px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 .detail-setting-select:disabled { opacity: 0.6; }
 .project-launch-defaults .launch-source-tag { flex-shrink: 0; max-width: 90px; }

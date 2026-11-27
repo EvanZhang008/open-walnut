@@ -183,7 +183,8 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
           <ChatInput
             onSend={handleSend}
             fileTarget={{ sessionId }}
-            placeholder="Send message... (/ for commands)"
+            placeholder=""
+            label="Send a message to this session"
             sessionCommands={slashCommands}
             searchSessionCommands={searchSlashCommands}
             draftKey={`draft:session:${sessionId}`}

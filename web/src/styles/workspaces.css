@@ -93,7 +93,7 @@
   flex: 1 1 auto;
   min-width: 80px;
   padding: 2px 8px;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-md);
   line-height: 1.5;
 }
 .draft-workspace-note { font-size: var(--font-size-xs); color: var(--fg-muted); }

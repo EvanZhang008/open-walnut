@@ -303,7 +303,7 @@
   input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']),
   textarea,
   select {
-    font-size: 16px !important;
+    font-size: var(--input-phone-text) !important;
   }
 
   /* Finger-sized targets for the task toolbar's icon buttons (24px on desktop). */

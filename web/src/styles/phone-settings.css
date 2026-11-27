@@ -225,7 +225,7 @@
   }
 
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .settings-input:not(textarea) {
-    font-size: 16px;
+    font-size: var(--input-phone-text);
   }
 
   /* 44 px in all, the picked pill still inset by 2 px (2026-11-04 review: with no padding the

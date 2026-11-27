@@ -253,7 +253,8 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
             searchSessionCommands={searchSlashCommands}
             onSessionCommandsPaletteOpen={onSlashPaletteOpen}
             sessionCommandsStatus={slashCommandsStatus}
-            placeholder={pending ? 'Type now — sent when the session is ready…' : 'Message Claude Code… (/ for commands)'}
+            placeholder={pending ? 'Type now — sent when the session is ready…' : ''}
+            label="Message Claude Code"
             draftKey={`draft:notes-cc${sessionId ? `:${sessionId}` : ''}`}
             mentionCwd={session?.cwd}
             mentionHost={session?.host}

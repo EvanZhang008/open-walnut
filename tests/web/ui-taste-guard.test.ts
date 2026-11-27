@@ -63,3 +63,21 @@ describe('the user\'s taste: round, not square, never a pill', () => {
     expect(/border-radius:\s*50%/.test(rule), '.qb-mic { border-radius: 50% }').toBe(true);
   });
 });
+
+/**
+ * SKILL.md rule 20: an empty message box stays empty. 2026-11-23, the user, of the session box's
+ * "Send a message to this session... (/ for commands)": "remove this too ugly", "clean simple".
+ * Three more boxes still said "(/ for commands)" four days later (UI audit, 2026-11-27).
+ */
+describe('an empty message box carries no long hint text', () => {
+  const SRC = path.resolve(__dirname, '../../web/src');
+  const files = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? files(path.join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [path.join(dir, e.name)] : []);
+
+  it('no placeholder explains the slash commands or the keys', () => {
+    const hits = files(SRC).flatMap((f) => [...fs.readFileSync(f, 'utf8').matchAll(/[^\n]*(?:\(\s*\/\s*for commands\s*\)|for commands\)|Shift\+Enter for)[^\n]*/g)]
+      .filter((m) => /placeholder/i.test(m[0]))
+      .map((m) => `${path.relative(SRC, f)}: ${m[0].trim().slice(0, 120)}`));
+    expect(hits, 'leave the box empty and put its name in aria-label (ChatInput `label`)').toEqual([]);
+  });
+});
