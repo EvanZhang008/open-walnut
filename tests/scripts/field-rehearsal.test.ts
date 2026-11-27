@@ -16,7 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { fieldDistBin, fieldVersions, packVersion, readFieldJson, writeFieldJson } from '../../scripts/release-rehearsal/field-packs.mjs'
-import { FIELD_SCENARIOS, REHEARSAL_ROUTER, ROUTER_AREAS, ROUTER_STORE_VERSION, TASK_STORE, judgeDaemon, judgeRouterRefusal, judgeRouterServedBack, nodeForm, pruneToLogs, releaseArchive, shareOf, startFrom, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
+import { FIELD_SCENARIOS, REHEARSAL_ROUTER, ROUTER_AREAS, ROUTER_STORE_VERSION, TASK_STORE, judgeDaemon, judgeRestartKept, judgeRouterRefusal, judgeRouterServedBack, nodeForm, pruneToLogs, releaseArchive, shareOf, startFrom, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
 import { TASK_DB_MAX_SUPPORTED_VERSION, TASK_DB_ROUTER_VERSION, TASK_DB_SCHEMA_VERSION } from '../../src/core/task-db-version.js'
 import { normalizeRouterAreas, routerAreasPath } from '../../src/core/router/areas.js'
 import { routerTaskDbPath } from '../../src/core/router/data-version.js'
@@ -155,6 +155,55 @@ describe('judgeDaemon: the daemon after an update in use', () => {
 
   it('with the release\'s daemon version unknown, it still requires a replacement', () => {
     expect(() => judgeDaemon({ before, now: { ...before }, expected: null, alive: alive([100]) })).toThrow(/still pid 100/)
+  })
+})
+
+describe('judgeRestartKept: the start point across a person\'s restart of its server', () => {
+  const V = '0.6.38-nightly.20261126.2631'
+  const alive = (pids: number[]) => (pid: number) => pids.includes(pid)
+  const groups = (gs: number[]) => (g: number) => gs.includes(g)
+
+  it('a daemon program outlives its server, with its CLI', () => {
+    const runtime = { version: 'walnut-daemon-a', pid: 100 }
+    expect(judgeRestartKept({ version: V, runtime, clis: [500], server: 90, alive: alive([100]), groupAlive: groups([500]) })).toMatch(/daemon 100 kept with its CLI/)
+    expect(() => judgeRestartKept({ version: V, runtime, clis: [500], server: 90, alive: alive([]), groupAlive: groups([500]) })).toThrow(/daemon \(pid 100\) ended with its server/)
+    expect(() => judgeRestartKept({ version: V, runtime, clis: [500], server: 90, alive: alive([100]), groupAlive: groups([]) })).toThrow(/CLI process groups 500 ended with its server/)
+  })
+
+  // 2026-11-27, CI run 45929675030: the first nightly with in_process_daemon on by default as a
+  // start point; its runtime is its server's process, so it ends with the server by design.
+  it('the runtime in the server\'s process ends with it, and the CLI stays', () => {
+    const runtime = { version: 'walnut-daemon-a', pid: 90, inProcess: true }
+    expect(judgeRestartKept({ version: V, runtime, clis: [500], server: 90, alive: alive([]), groupAlive: groups([500]) })).toMatch(/runtime ended with its server \(pid 90\), its CLI kept/)
+    expect(() => judgeRestartKept({ version: V, runtime, clis: [500], server: 91, alive: alive([]), groupAlive: groups([500]) })).toThrow(/names pid 90 .*not its server 91/)
+    expect(() => judgeRestartKept({ version: V, runtime, clis: [500], server: 90, alive: alive([90]), groupAlive: groups([500]) })).toThrow(/still runs after its stop/)
+    expect(() => judgeRestartKept({ version: V, runtime, clis: [500], server: 90, alive: alive([]), groupAlive: groups([]) })).toThrow(/CLI process groups 500 ended with its server/)
+    expect(() => judgeRestartKept({ version: V, runtime, clis: [], server: 90, alive: alive([]), groupAlive: groups([]) })).toThrow(/recorded no CLI process group/)
+  })
+
+  it('a version that recorded no runtime is a failure, never read as either placement', () => {
+    expect(() => judgeRestartKept({ version: V, runtime: { version: null, pid: null }, clis: [500], server: 90 })).toThrow(/records no session runtime/)
+  })
+
+  // The class: a rehearsal check that a session runtime is alive must know where that version put
+  // it (a program, or its server's process). A bare alive(<x>.daemon.pid) took every start point
+  // for a program; a file that pins the placement (WALNUT_IN_PROCESS_DAEMON) may read it plainly.
+  it('every liveness check of a runtime pid in the rehearsal reads its placement', () => {
+    const dir = path.join(ROOT, 'scripts/release-rehearsal')
+    const bare: string[] = []
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.mjs'))) {
+      const src = fs.readFileSync(path.join(dir, f), 'utf8')
+      if (src.includes('WALNUT_IN_PROCESS_DAEMON')) continue
+      // Each top-level function (or const) on its own: one that checks a runtime pid is alive
+      // must branch on its placement somewhere in its body.
+      for (const chunk of src.split(/\n(?=(?:export )?(?:async )?(?:function|const) )/)) {
+        const hit = chunk.split('\n').find((line) => /alive\([^)]*daemon\??\.pid\)/i.test(line))
+        if (hit && !chunk.includes('inProcess')) bare.push(`${f}: ${hit.trim()}`)
+      }
+    }
+    expect(bare).toEqual([])
+    const field = fs.readFileSync(path.join(dir, 'field.mjs'), 'utf8')
+    expect(field.match(/judgeRestartKept\(/g)?.length).toBeGreaterThanOrEqual(2)
   })
 })
 

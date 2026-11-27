@@ -100,6 +100,16 @@ export function listenersOf(port) {
   return out
 }
 
+/**
+ * Which of `listeners` (listenersOf the port) is the server that `parent` started: `parent` itself,
+ * or the oldest of its children holding the socket (an npm launcher runs the file as its child, and
+ * a child the server is forking holds the socket too until its exec closes it).
+ */
+export function serverAmong(listeners, parent) {
+  return listeners.includes(parent) ? parent
+    : listeners.filter((p) => parentOf(p) === parent).sort((a, b) => startedAt(a) - startedAt(b))[0] ?? listeners[0] ?? null
+}
+
 /** What `pid`'s open file descriptors point at (Linux), or []. */
 export function openPaths(pid) {
   const dir = `/proc/${pid}/fd`

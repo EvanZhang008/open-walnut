@@ -149,6 +149,9 @@ describe('IsolatedWalnut', () => {
     // random moment after its server stopped; binary-restart's new server wrote its message
     // to the old daemon's CLI 0.1 s before that, and the message went unanswered.
     expect(Number(w.env.WALNUT_DAEMON_HEARTBEAT_MS)).toBeGreaterThanOrEqual(30 * 60_000)
+    // A release whose server holds the runtime in its own process keeps the CLIs only in a dir
+    // marked persistent (2026-11-27: field-work's in-process nightly start point lost them).
+    expect(w.env.WALNUT_DAEMON_PERSISTENT).toBe('1')
     expect(new IsolatedWalnut({ work: tmp, name: 'iso2', extraEnv: { X: '1' } }).env.WALNUT_DAEMON_HEARTBEAT_MS).toBe(w.env.WALNUT_DAEMON_HEARTBEAT_MS)
     // No scenario puts the short heartbeat back: every one that restarts its server would race it.
     const users = [
@@ -158,7 +161,7 @@ describe('IsolatedWalnut', () => {
         .map((f) => `tests/scripts/${f}`).filter((f) => fs.readFileSync(path.join(ROOT, f), 'utf8').includes('IsolatedWalnut')),
     ]
     expect(users.length).toBeGreaterThan(4)
-    const setters = users.filter((f) => /WALNUT_DAEMON_HEARTBEAT_MS['"]?\s*[:=]/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
+    const setters = users.filter((f) => /WALNUT_DAEMON_(HEARTBEAT_MS|PERSISTENT)['"]?\s*[:=]/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
     expect(setters).toEqual([])
   })
 

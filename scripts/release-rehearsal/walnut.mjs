@@ -94,6 +94,11 @@ export class IsolatedWalnut {
       // The mock writes a transcript the way the CLI does, where the CLI keeps it.
       MOCK_CLAUDE_TRANSCRIPT_DIR: path.join(this.home, '.claude/projects'),
       WALNUT_DAEMON_HEARTBEAT_MS: PERSISTENT_DAEMON_HEARTBEAT_MS,
+      // The same for a release whose server holds the runtime in its own process (in_process_daemon,
+      // on by default since 0f5d35bca6): an isolated dir's runtime ends its CLIs when it stops, and
+      // this marks the dir as one that keeps them, as a person's does (local-daemon.ts
+      // defaultDaemonPersistence). shutdown() still ends the CLIs its streams dir records.
+      WALNUT_DAEMON_PERSISTENT: '1',
       ...extraEnv,
     }
   }

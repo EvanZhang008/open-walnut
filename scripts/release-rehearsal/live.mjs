@@ -60,7 +60,7 @@ import { fileURLToPath } from 'node:url'
 import { nextVersion, setManifestVersion } from '../release.mjs'
 import { builtName } from '../release-files.mjs'
 import { packVersion, publishedTags } from './field-packs.mjs'
-import { alive, childrenOf, commandOf, cpuTicks, daemonOf, groupAlive, listenersOf, openPaths, parentOf, startedAt } from './live-proc.mjs'
+import { alive, childrenOf, commandOf, cpuTicks, daemonOf, groupAlive, listenersOf, openPaths, parentOf, serverAmong } from './live-proc.mjs'
 import { startRegistry } from './registry.mjs'
 import { INSTALL_SH, systemPathWithoutNode } from './runtime.mjs'
 import { compareVersions } from './version-order.mjs'
@@ -167,12 +167,6 @@ async function installA(work, name, live, registry) {
       WALNUT_UPDATE_REGISTRY_URL: registry.distTagsUrl,
       npm_config_registry: `${registry.url}/`,
       WALNUT_UPDATE_IDLE_MS: String(IDLE_MS),
-      // The session's CLI outlives a restart of the server, as on a person's machine, whose daemon
-      // dir keeps its sessions. Since 0f5d35bca6 the server holds the runtime in its own process
-      // (in_process_daemon) and an isolated dir's runtime ends its CLIs when it stops: this marks
-      // the dir as one that keeps them (local-daemon.ts defaultDaemonPersistence), as a deploy
-      // rehearsal's does. shutdown() still ends the CLIs its streams dir records.
-      WALNUT_DAEMON_PERSISTENT: '1',
     },
   })
   const bare = systemPathWithoutNode(path.join(work, 'system-bin'))
@@ -231,9 +225,7 @@ async function personActive(w) {
 function treeOf(w) {
   const parent = w.server?.pid
   const listeners = listenersOf(w.port)
-  // A child the server is forking holds the socket too until its exec closes it: the oldest holder is the server.
-  const server = listeners.includes(parent) ? parent
-    : listeners.filter((p) => parentOf(p) === parent).sort((a, b) => startedAt(a) - startedAt(b))[0] ?? listeners[0] ?? null
+  const server = serverAmong(listeners, parent)
   return { parent, parentAlive: alive(parent), listeners, server, serverParent: server ? parentOf(server) : null, serverCmd: server ? commandOf(server) : '' }
 }
 
@@ -452,7 +444,7 @@ export async function rehearseLive({ work, liveJson, scenario, walnuts, video = 
       const left = listenersOf(w.port)
       if (left.length) throw new Error(`still listening on :${w.port}: ${left.map((p) => `${p} ${commandOf(p)}`).join('; ')}`)
       const orphans = childrenOf(1).filter((p) => /walnut/.test(commandOf(p)) && commandOf(p).includes(' web'))
-      const daemonAlive = alive(state.daemon.pid)
+      const daemonAlive = !state.daemon.inProcess && alive(state.daemon.pid)
       const watched = state.watch.stop()
       if (watched.violations.length) throw new Error(`the started process ${tree.parent} did server work: ${watched.violations.slice(0, 5).join('; ')}`)
       const said = parentLog(w, tree.parent, state.boots.size)

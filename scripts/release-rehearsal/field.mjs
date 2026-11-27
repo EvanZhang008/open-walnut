@@ -16,9 +16,12 @@
  *   field       a fresh install, started: its startup update installs the
  *               release and starts as it.
  *   field-work  an install in use (a task, a session whose CLI stays alive,
- *               its history) restarts into the update. Its daemon outlives the
- *               restart, as a person's does (IsolatedWalnut holds the isolated
- *               daemon's parent check off), so the release must
+ *               its history) restarts into the update. Its session's CLI outlives
+ *               the restart, as a person's does, and so does its daemon program
+ *               when the start point runs one (IsolatedWalnut holds the isolated
+ *               daemon's parent check off and marks the dir persistent; a start
+ *               point whose server holds the runtime ends it with the server:
+ *               judgeRestartKept reads which from its daemon dir), so the release must
  *               replace the old daemon with a session running: the task, the
  *               history and the session (a third message) are there, the old
  *               daemon and its CLI are gone, and the SQLite files the old
@@ -92,7 +95,7 @@ import { readFieldJson } from './field-packs.mjs'
 import { PACKAGE, UPSTREAM, publishedVersion, startRegistry } from './registry.mjs'
 import { ArchiveWalnut, publishLocally, serveReleases } from './runtime.mjs'
 import { IsolatedWalnut } from './walnut.mjs'
-import { daemonOf as daemonIn } from './live-proc.mjs'
+import { alive, daemonOf as daemonIn, groupAlive, listenersOf, serverAmong } from './live-proc.mjs'
 import { compareVersions } from './version-order.mjs'
 
 const nonce = () => crypto.randomBytes(4).toString('hex')
@@ -166,9 +169,6 @@ export async function fetchStartPoints({ upstream = UPSTREAM, fetchImpl = fetch,
 /** The install's daemon dir: the running daemon's version and pid. */
 // A daemon program's pid, or the server's own when it holds the runtime in its process (live-proc.mjs).
 const daemonOf = (w) => daemonIn(w.daemonDir)
-
-const alive = (pid) => { if (!pid || pid <= 1) return false; try { process.kill(pid, 0); return true } catch { return false } }
-const groupAlive = (pgid) => { if (!pgid || pgid <= 1) return false; try { process.kill(-pgid, 0); return true } catch { return false } }
 
 /** The process groups of the CLIs the daemon spawned (its streams dir records them). */
 function cliGroups(w) {
@@ -439,6 +439,33 @@ export function judgeDaemon({ before, now, expected, alive: isAlive = alive, gro
   return `daemon ${before.version} (pid ${before.pid}) -> ${now.version} (pid ${now.pid}${now.inProcess ? ', in the server\'s process' : ''}), ${same ? 'the same CLI process' : 'a new CLI process'}`
 }
 
+/**
+ * The start point's session runtime across a person's restart of its server (field-work,
+ * field-back, field-router-back), judged by where that version itself put it: `runtime` is what
+ * its daemon dir records (daemonOf), a program's daemon.pid or the instance id of the server's
+ * own process. A daemon program outlives its server; the runtime in the server's process
+ * (in_process_daemon, on by default since 0f5d35bca6) ends with it. Either way the session's CLI
+ * stays for the next server, as on a person's machine. `server`: the pid that served the port
+ * before the stop (serverAmong: an npm launcher's child).
+ * 2026-11-27: the first in-process nightly as a start point failed all three with "ended with its
+ * server", from a check that took every start point's runtime for a program.
+ */
+export function judgeRestartKept({ version, runtime, clis, server, alive: isAlive = alive, groupAlive: isGroupAlive = groupAlive }) {
+  if (!runtime?.pid) throw new Error(`${version} records no session runtime in its daemon dir (no daemon.pid, no instance id of its server)`)
+  if (runtime.inProcess) {
+    if (runtime.pid !== server) throw new Error(`${version}'s runtime names pid ${runtime.pid} as the server's process, not its server ${server}`)
+    if (isAlive(runtime.pid)) throw new Error(`${version}'s server (pid ${runtime.pid}), holding the runtime, still runs after its stop`)
+  } else if (!isAlive(runtime.pid)) {
+    throw new Error(`${version}'s daemon (pid ${runtime.pid}) ended with its server: the rehearsal does not keep it as a person's is kept`)
+  }
+  if (!clis.length) throw new Error(`${version}'s session in use recorded no CLI process group`)
+  const gone = clis.filter((g) => !isGroupAlive(g))
+  if (gone.length) throw new Error(`${version}'s session CLI process groups ${gone.join(', ')} ended with its server: the rehearsal does not keep them as a person's are kept`)
+  return runtime.inProcess
+    ? `${version}'s runtime ended with its server (pid ${runtime.pid}), its CLI kept`
+    : `${version}'s daemon ${runtime.pid} kept with its CLI`
+}
+
 /** The daemon after the update of `work`'s install to the release whose file is `file`. */
 function expectDaemonUpdated(w, work, file) {
   return judgeDaemon({
@@ -456,9 +483,10 @@ function expectDaemonUpdated(w, work, file) {
 async function updateInUse(w, from, field, registry, upstream) {
   await installStart(w, from, upstream)
   const done = await putToWork(w, from)
-  // A person's restart: the server goes; the daemon and its CLI stay.
+  // A person's restart: the server goes; its sessions' CLIs stay, and a daemon program with them.
+  const server = serverAmong(listenersOf(w.port), w.server?.pid ?? null)
   await w.stop()
-  if (!alive(done.daemon.pid)) throw new Error(`${from.version}'s daemon (pid ${done.daemon.pid}) ended with its server: the rehearsal does not keep it as a person's is kept`)
+  judgeRestartKept({ version: from.version, runtime: done.daemon, clis: done.clis, server })
   registry.setDistTags(tags(field.release.version))
   await w.start({ timeoutMs: 900_000 })
   expectStartupUpdate(w, from.version, field.release.version)
