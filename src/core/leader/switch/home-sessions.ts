@@ -167,8 +167,6 @@ export function planLine(p: HomeSessionsPlan): string {
 export interface HomeStopDeps {
   list(): Promise<SessionRecord[]>
   save(sid: string, patch: Partial<SessionRecord>): Promise<void>
-  /** Many rows' patches at once (one transaction), when the store has it. */
-  saveMany?(patches: ReadonlyArray<{ sid: string; patch: Partial<SessionRecord> }>): Promise<void>
   /** Whether this machine's runtime supervises a session cron of `sid` (false when it keeps none). */
   supervised(sid: string): Promise<boolean>
   /** Stop `sid` through this machine's own session runtime, reason leader_switch: resolves once its process is gone. */
@@ -258,8 +256,8 @@ export async function stopHomeSessions(o: { switchId: string; home: string; mach
     if (stamp.stopped === 'turn' && !(rec.restartLoss?.cause === 'leader_switch' && rec.restartLoss.state === 'pending')) patch.restartLoss = turnLoss(rec, at)
     return { sid: rec.claudeSessionId, patch }
   })
-  if (o.deps.saveMany) await o.deps.saveMany(patches)
-  else for (const x of patches) await o.deps.save(x.sid, x.patch)
+  // One by one: 653 rows took 1.3 s on a synthetic home of the user's density (scripts/leader-switch/measure-home-scale.ts).
+  for (const x of patches) await o.deps.save(x.sid, x.patch)
   out.stampMs = o.deps.now() - t0
   // The stops' budget starts once the rows are marked: the marks of many rows never eat the time a CLI has to end.
   const deadline = o.deps.now() + o.budgetMs

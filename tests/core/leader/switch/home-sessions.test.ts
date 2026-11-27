@@ -176,7 +176,7 @@ describe('the old leader\'s stop', () => {
     let inFlight = 0
     let most = 0
     const call = async () => { inFlight++; most = Math.max(most, inFlight); await new Promise((r) => setTimeout(r, 2)); inFlight-- }
-    let batches = 0
+    let saves = 0
     const r = await stopHomeSessions({
       switchId: 'S1', home, machine: 'machine-a', budgetMs: 2_000,
       deps: {
@@ -184,11 +184,11 @@ describe('the old leader\'s stop', () => {
         supervised: async () => { await call(); return false },
         stop: async () => { await call(); return { ok: true } },
         // Marks that take longer than the whole budget: the stops still get theirs.
-        saveMany: async (patches) => { batches++; await new Promise((res) => setTimeout(res, 2_500)); for (const x of patches) await s.save(x.sid, x.patch) },
+        save: async (id, patch) => { if (saves++ === 0) await new Promise((res) => setTimeout(res, 2_500)); await s.save(id, patch) },
       },
     })
     expect(r.ok).toBe(true)
-    expect(batches).toBe(1)
+    expect(saves).toBe(300)
     expect(r.stampMs).toBeGreaterThanOrEqual(2_500)
     expect(most).toBeLessThanOrEqual(16)
     expect(most).toBeGreaterThan(1)
