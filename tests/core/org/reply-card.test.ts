@@ -16,11 +16,11 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-reply-car
 import { setThreadsKept } from '../../../src/core/org/threads-kept.js'
 import { setReplyTag } from '../../../src/core/org/reply-card-switch.js'
 import { cardLines, seenUpTo, tagsReplies, type ReplySaw } from '../../../src/core/org/reply-card.js'
-import { askedAlready, CardLineLacks, needsKey, needsPatch, notOpenReason, upAlready } from '../../../src/core/org/reply-card-decision.js'
+import { askedAlready, CardLineLacks, cardsNow, cardsNowRead, needsKey, needsPatch, notOpenReason, upAlready } from '../../../src/core/org/reply-card-decision.js'
 import { CARD_STOP_LINES, cardStopReason, owedMessage } from '../../../src/core/org/reply-card-stop.js'
 import { readCardTags, type CardTag } from '../../../src/lib/card-tag.js'
 import { listForQuestion, planThreadWrites, PROGRESS_MAX, readThreadLines, threadQuestionBlock } from '../../../src/core/sessions/status-threads.js'
-import { emptyThreads, fileMessage, setAnswers, updateThread, ThreadError, THREAD_TITLE_MAX, type OrgThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
+import { emptyThreads, fileMessage, mergeThreads, setAnswers, updateThread, ThreadError, THREAD_TITLE_MAX, type OrgThread, type ThreadsFile } from '../../../src/core/org/threads-model.js'
 import { openNotWaiting } from '../../../src/core/org/thread-view.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 25, 20, min)).toISOString()
@@ -323,5 +323,76 @@ describe('the message a turn owes a line for', () => {
     expect(owedMessage(t, SID, now, at(1))?.id).toBe('tm-2')
     // Nothing known (a restart): as before, the newest with no answer.
     expect(owedMessage(t, SID, now, undefined)?.id).toBe('tm-2')
+  })
+})
+
+// 2026-11-27, real use: a thread handed to a task was merged into the task's own thread there; the
+// task kept the id it had been given and five of its lines in a day were refused.
+describe('a line that names a thread a merge put under another', () => {
+  function merged(): { file: ThreadsFile; fence: string; seeds: string } {
+    const f = twoThreads()
+    const [fence, seeds] = f.threads
+    return { file: mergeThreads(f, seeds.id, fence.id, 'task:lead-1', at(6)).file, fence: fence.id, seeds: seeds.id }
+  }
+
+  it('is the line of the thread it is under now, and writes it', () => {
+    setThreadsKept(true)
+    const { file, fence, seeds } = merged()
+    const read = readCardTags(`Ordered.\n\n<walnut-card thread="${seeds}" state="answered" summary="Ordered from the first supplier."/>`)
+    // As written, the line names no thread of this node.
+    expect(cardLines(file, read.cards, ALL).refused.map((r) => r.thread)).toEqual([seeds])
+    const now = cardsNow(file, read.cards)
+    expect(now.map((c) => c.thread)).toEqual([fence])
+    const lines = cardLines(file, now, ALL)
+    expect(lines.refused).toEqual([])
+    expect(written(file, lines.fields).threads.find((t) => t.id === fence)).toMatchObject({ state: 'answered', reply: 'Ordered from the first supplier.' })
+  })
+
+  it('a merge line whose two ends are one thread now is done, and one aimed at the old id reaches the thread', () => {
+    const { file: f0, fence, seeds } = merged()
+    const file = fileMessage(f0, { text: 'and the gate, which way should it open?', via: 'chat', at: at(8) }).file
+    const gate = file.threads.find((t) => t.id !== fence)!.id
+    const tag = (thread: string, merge: string): CardTag => ({ thread, merge } as CardTag)
+    expect(cardsNow(file, [tag(seeds, fence), tag(fence, seeds)])).toEqual([])
+    expect(cardsNow(file, [tag(gate, seeds)])).toEqual([{ thread: gate, merge: fence }])
+  })
+
+  it('two lines that name one thread now are one line: the one that wrote its own id, else the last', () => {
+    const { file, fence, seeds } = merged()
+    const tag = (thread: string, summary: string): CardTag => ({ thread, state: 'working', summary } as CardTag)
+    expect(cardsNow(file, [tag(fence, 'own'), tag(seeds, 'old id')]).map((c) => c.summary)).toEqual(['own'])
+    expect(cardsNow(file, [tag(seeds, 'old id'), tag(fence, 'own')]).map((c) => c.summary)).toEqual(['own'])
+    // Both through ids merged away (a second merge): the last written stays.
+    const more = fileMessage(file, { text: 'and the gate, which way should it open?', via: 'chat', at: at(8) }).file
+    const gate = more.threads.find((t) => t.id !== fence)!.id
+    const both = mergeThreads(more, fence, gate, 'task:lead-1', at(9)).file
+    expect(cardsNow(both, [tag(seeds, 'first'), tag(fence, 'second')])).toEqual([{ thread: gate, state: 'working', summary: 'second' }])
+  })
+
+  it('a decision written under the old id stays before a state line for the thread, and the line left out is named', () => {
+    const { file, fence, seeds } = merged()
+    const needs = { thread: seeds, state: 'needs', ask: 'Which supplier?', options: ['Larch', 'Oak'] } as CardTag
+    const state = { thread: fence, state: 'working', summary: 'Comparing.' } as CardTag
+    for (const cards of [[needs, state], [state, needs]]) {
+      const now = cardsNowRead(file, cards)
+      expect(now.cards).toEqual([{ ...needs, thread: fence }])
+      expect(now.dropped).toEqual([{ thread: fence, under: fence }])
+    }
+    // Two state lines: the one left out is the one that wrote the old id.
+    expect(cardsNowRead(file, [{ thread: seeds, state: 'working' } as CardTag, state]).dropped).toEqual([{ thread: seeds, under: fence }])
+  })
+
+  it('a merge of a thread into itself with no merged id in it keeps its own refusal', () => {
+    const { file, fence } = merged()
+    const self = { thread: fence, merge: fence } as CardTag
+    expect(cardsNow(file, [self])).toEqual([self])
+  })
+
+  it('a line that names a thread of this node, or an id nobody held, is left exactly as written', () => {
+    const { file, fence } = merged()
+    const cards = readCardTags(`Done.\n\n<walnut-card thread="${fence}" state="working"/>\n<walnut-card thread="th-000000000000" state="working"/>`).cards
+    const now = cardsNow(file, cards)
+    expect(now).toHaveLength(2)
+    now.forEach((c, i) => expect(c).toBe(cards[i]))
   })
 })

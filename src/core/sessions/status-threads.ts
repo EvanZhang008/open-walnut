@@ -31,7 +31,7 @@ import { THREAD_TITLE_MAX, type OrgThread, type ThreadPatch, type ThreadsFile } 
 import type { OwnThreadOpen, OwnThreadWrite } from '../org/threads-store.js';
 import { exchangesOf, hasThreadNews } from '../org/thread-view.js';
 import { ackHoldsResult, lineMay } from '../org/thread-known.js';
-import { lastUserAt, reactedSince } from '../org/threads-model.js';
+import { lastUserAt, linesNow, reactedSince } from '../org/threads-model.js';
 import { oneCardNow } from '../org/one-card.js';
 import { linesAreCards, threadsKeptNow } from '../org/threads-kept.js';
 import { markerRe } from './status-marker.js';
@@ -509,7 +509,10 @@ export async function applyThreadLines(taskId: string, report: Pick<StatusReport
     let restated: string[] = [];
     let written: string[] = [];
     const changed = await writeOwnThreads(taskId, (cur) => {
-      const a = steps.after(lines, marks);
+      const said = steps.after(lines, marks);
+      // Each line and mark as it names a thread now: a merge since the answer's list put its thread under another.
+      const now = <T extends { id: string }>(of: readonly T[]) => linesNow(cur, of, (l) => l.id, (l, id) => ({ ...l, id })).lines;
+      const a = { lines: now(said.lines), marks: { ...(said.marks.titles ? { titles: now(said.marks.titles) } : {}), ...(said.marks.seen ? { seen: now(said.marks.seen) } : {}) } };
       const p = planThreadWrites(cur, a.lines, opened, a.marks, !from);
       held = p.held;
       asked = p.asked;

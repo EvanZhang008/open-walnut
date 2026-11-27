@@ -7,7 +7,7 @@
  * one line on its next message, as before (2026-11-25, the lead's review: in the turn that receives
  * the work the task must already know its thread).
  */
-import type { MoveEnd, OrgThread } from './threads-model.js';
+import { threadIdNow, type MoveEnd, type OrgThread } from './threads-model.js';
 import type { FollowTask, OrgPlaces } from './thread-follow.js';
 import { keepsThreads } from './keeps-threads.js';
 import { isBelow, oneIdDecision, oneIdOn, openTask, sameIdTaskLine, type OneIdDecision } from './thread-one-id.js';
@@ -78,7 +78,10 @@ export async function sameIdLineBeforeSend(input: { callerSid?: string; target?:
     if ('refused' in parties) return '';
     const { from, target, p } = parties;
     const { readThreads } = await import('./threads-store.js');
-    const t = (await readThreads(from.id)).threads.find((x) => x.id === input.threadId && !x.closed);
+    // The thread as it is named there now: an id a merge put under another thread names that one.
+    const file = await readThreads(from.id);
+    const named = threadIdNow(file, input.threadId);
+    const t = file.threads.find((x) => x.id === named && !x.closed);
     if (!t) return '';
     return sameIdDecision({ from, target, thread: t, to: follow.handOffTo(from, target, p), p }).move ? sameIdTaskLine(t.id, t.title) : '';
   } catch {

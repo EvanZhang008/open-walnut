@@ -53,6 +53,18 @@ beforeEach(async () => {
   ])
 })
 
+// A merge since the answer's list put the thread under another (threads-model.ts threadIdNow): the
+// line is the line of the thread it is under, never lost as naming no thread.
+describe('a status line that names a thread merged into another since', () => {
+  it('is written on the thread it is under', async () => {
+    await seed([thread(BUSY, 'Fence posts', { state: 'working', was: ['th-a1b2c3d6'] })])
+    const changed = await applyThreadLines(TASK, line('th-a1b2c3d6', 'Fence wire', 'working', 'The wire came; stringing it.'))
+    expect(changed).toEqual([BUSY])
+    expect((await get(BUSY)).reply).toBe('The wire came; stringing it.')
+    expect(await get('th-a1b2c3d6')).toBeUndefined()
+  })
+})
+
 describe('a status answer and a thread the task parked', () => {
   it('a working line keeps it pending, writes its words quietly, and arms no overdue clock', async () => {
     for (let turn = 0; turn < 3; turn++) {

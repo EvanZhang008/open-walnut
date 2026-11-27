@@ -30,7 +30,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
-import { addTask } from '../../src/core/task-manager.js'
+import { addTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { ensureMainTask, ensureProjectLead } from '../../src/core/org/org-store.js'
 import { fileThreadMessage, moveThread, setThreadAnswers } from '../../src/core/org/threads-store.js'
@@ -259,6 +259,40 @@ describe('Main and by hand', () => {
     // To where it already is: refused, nothing changes.
     const same = await api('POST', `/tasks/${walnut.taskId}/threads/${filed.id}/move`, { to: walnut.taskId })
     expect(same.status).toBe(409)
+  }, 60_000)
+})
+
+// 2026-11-27, real use: a lead's thread was merged into a thread of a task below it; that task
+// was told "Thread <old id> ... is yours now", wrote the old id for a day, and each line was refused.
+describe('a thread merged into a thread of a task below', () => {
+  it('the task there is told the thread it is under now, and the old id still reaches it', async () => {
+    const work = (await addTask({ title: 'Marina harbour survey', project: 'Marina', parent_task_id: marina.taskId })).task.id
+    await updateTaskRaw(work, { threads_on: true } as never, { source: 'test' })
+    const workSid = await startSessionFor(work, 'Marina')
+    const theirs = await fileHisWords(work, 'How deep is the harbour at low tide?')
+    const mine = await fileHisWords(marina.taskId, 'Is the harbour deep enough at low tide?')
+    const r = await api<{ merged_on?: { task: string } }>('PATCH', `/tasks/${marina.taskId}/threads/${mine.id}`, { merge_into: theirs.id }, marina.sid)
+    expect(r.status).toBe(200)
+    expect(r.json.merged_on?.task).toBe(work)
+    const note = pendingStatusNote(workSid)?.text ?? ''
+    expect(note).toContain(`Thread ${mine.id} `)
+    expect(note).toContain(`was merged into your thread ${theirs.id} `)
+    expect(note).not.toContain('It is yours now')
+    const got = await api<{ thread: OrgThread }>('GET', `/tasks/${work}/threads/${mine.id}`, undefined, workSid)
+    expect(got.status).toBe(200)
+    expect(got.json.thread.id).toBe(theirs.id)
+  }, 60_000)
+
+  it('a send that names the old id of a thread merged on the sender\'s own Threads lists the task under the thread it is in', async () => {
+    const own = (await addTask({ title: 'Marina tide tables', project: 'Marina' })).task.id
+    await startSessionFor(own, 'Marina')
+    const kept = await fileHisWords(marina.taskId, 'Where are the tide tables kept?')
+    const gone = await fileHisWords(marina.taskId, 'Who updates the tide tables?')
+    expect((await api('PATCH', `/tasks/${marina.taskId}/threads/${gone.id}`, { merge_into: kept.id }, marina.sid)).status).toBe(200)
+    const sent = await api<{ thread_handoff?: { moved: unknown[]; linked: Array<{ id: string }> } }>('POST', '/messages',
+      { to: own, title: 'Tide tables', text: 'Please answer both.', expect_reply: false, thread: gone.id }, marina.sid)
+    expect(sent.json.thread_handoff).toMatchObject({ moved: [], linked: [expect.objectContaining({ id: kept.id })] })
+    expect((await threadsOf(marina.taskId, '?open=1')).find((t) => t.id === kept.id)?.tasks).toEqual([own])
   }, 60_000)
 })
 

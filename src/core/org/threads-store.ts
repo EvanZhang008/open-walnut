@@ -18,7 +18,7 @@ import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isFollower } from '../server-role.js';
 import { walnutLetterLanguage as letterLang } from '../human-inbox/walnut-letters/languages.js';
 import {
-  addMovedMessages, carryHisWords, closeAskOf, deliveryOpen, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, relocateThreadOut, setAnswers, splitMessageInto, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, updateThread,
+  addMovedMessages, carryHisWords, closeAskOf, deliveryOpen, emptyThreads, enteredNeeds, fileMessage, markClosesTold, markRechecked, mergeThreads, movedAway, moveThreadIn, moveThreadOut, normalizeThreads, openThread, patchHandsToUser, relocateThreadOut, setAnswers, splitMessageInto, splitThreadMessage, stampLegacyReplyAt, sweepClosed, ThreadError, threadIdNow, updateThread,
   type FileMessageInput, type FileMessageResult, type MoveEnd, type OpenThreadInput, type ThreadAskOwner, type ThreadMoveKind, type OrgThread, type ThreadAnswer, type ThreadDelivery, type ThreadMessage, type ThreadPatch, type ThreadState, type ThreadRecheck, type ThreadsFile, type ThreadTextSource, type ThreadWriter,
 } from './threads-model.js';
 import { threadsDbOnNow, useThreadsDb, writeThreadsLeftovers } from './threads-backend.js';
@@ -274,13 +274,15 @@ export async function fileThreadMessage(taskId: string, input: FileMessageInput,
   let mergedThere: string | undefined;
   let answeredAsk = false;
   const res = await mutateThreads(taskId, (cur) => {
-    const there = input.threadId && hops < 3 ? cur.threads.find((t) => t.id === input.threadId) : undefined;
+    // The thread his words name as it is here now: an id a merge put under another thread names that one.
+    const threadId = input.threadId ? threadIdNow(cur, input.threadId) : undefined;
+    const there = threadId && hops < 3 ? cur.threads.find((t) => t.id === threadId) : undefined;
     if (there && movedAway(there) && there.movedTo!.task !== taskId) {
       movedTo = there.movedTo!.task;
       mergedThere = there.movedTo!.merged;
       return { file: cur, out: null };
     }
-    const r = fileMessage(cur, { ...input, lang });
+    const r = fileMessage(cur, { ...input, ...(threadId ? { threadId } : {}), lang });
     // Joined to a thread that waited on him: his answer to it, whatever its words (review 2026-11-24).
     answeredAsk = cur.threads.find((t) => t.id === r.thread.id)?.state === 'needs';
     return { file: r.file, out: r };

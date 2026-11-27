@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   CLOSED_KEEP_MS, CLOSED_KEPT, emptyThreads, fallbackTitle, fileMessage, mergeThreads, normalizeThreads, openThread,
-  setAnswers, sortedThreads, splitThreadMessage, sweepClosed, ThreadError, updateThread, type ThreadAnswer, type ThreadsFile,
+  setAnswers, sortedThreads, splitThreadMessage, sweepClosed, THREAD_WAS_MAX, ThreadError, threadIdNow, updateThread, type ThreadAnswer, type ThreadsFile,
 } from '../../../src/core/org/threads-model.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 1, 0, min)).toISOString()
@@ -214,6 +214,64 @@ describe('several asks about one subject are one thread', () => {
     expect(() => mergeThreads(f, b.id, a.id, 'human', at(32))).toThrow(/closed/)
     // Nor a closed one into an open one: that would open it again unasked.
     expect(() => mergeThreads(f, a.id, b.id, 'human', at(33))).toThrow(/reopen it first/)
+  })
+
+  // 2026-11-27, real use: a thread handed to a task was merged into the task's own thread, the task
+  // kept writing the id it had been given, and every line was refused as naming no thread.
+  it('the id of a merged thread names the thread it is under, through later merges and a reload', () => {
+    let f = file('one', 'two', 'three')
+    const [a, b, c] = f.threads
+    f = mergeThreads(f, a.id, b.id, 'task:lead-1', at(40)).file
+    expect(f.threads.find((t) => t.id === b.id)?.was).toEqual([a.id])
+    expect(threadIdNow(f, a.id)).toBe(b.id)
+    f = mergeThreads(f, b.id, c.id, 'task:lead-1', at(41)).file
+    expect(f.threads.find((t) => t.id === c.id)?.was).toEqual([b.id, a.id])
+    expect([a.id, b.id, c.id].map((id) => threadIdNow(f, id))).toEqual([c.id, c.id, c.id])
+    // An id nobody held stays as given: the caller's own "no thread" answers it.
+    expect(threadIdNow(f, 'th-000000000000')).toBe('th-000000000000')
+    const again = normalizeThreads(JSON.parse(JSON.stringify(f)), 'lead-1')
+    expect(threadIdNow(again, a.id)).toBe(c.id)
+    // A split takes one message out under a new id: the old ids stay with the thread they were merged into.
+    const out = splitThreadMessage(f, c.id, f.threads[0].messages[0].id, 'human', at(42))
+    expect(out.thread.was).toBeUndefined()
+    expect(threadIdNow(out.file, a.id)).toBe(c.id)
+  })
+
+  it('a live thread wins over a record that names its id, and the record is bounded and cleaned on read', () => {
+    const f = file('one', 'two')
+    const [a, b] = f.threads
+    const many = Array.from({ length: THREAD_WAS_MAX + 5 }, (_, i) => `th-${String(i).padStart(12, '0')}`)
+    const read = normalizeThreads({ threads: [{ ...a, was: [b.id, a.id, 7, ...many] }, { ...b, was: 'th-000000000001' }] }, 'lead-1')
+    const [a2, b2] = read.threads
+    expect(a2.was).toHaveLength(THREAD_WAS_MAX)
+    expect(a2.was?.slice(0, 2)).toEqual([b.id, many[0]])
+    expect(b2.was).toBeUndefined()
+    // b is still a thread of its own here: its id names it, whatever another thread's record says.
+    expect(threadIdNow(read, b.id)).toBe(b.id)
+    expect(threadIdNow(read, many[3])).toBe(a.id)
+    // The newest merge is kept when the record is full.
+    const full = { ...f, threads: [{ ...a, was: many.slice(0, THREAD_WAS_MAX) }, b] }
+    const merged = mergeThreads(full, b.id, a.id, 'task:lead-1', at(50)).thread
+    expect(merged.was).toHaveLength(THREAD_WAS_MAX)
+    expect(merged.was?.[0]).toBe(b.id)
+  })
+
+  it('a thread that lives here wins over the pointer a moved thread left, and a record that is no list names nothing', () => {
+    const f = file('one', 'two')
+    const [a, b] = f.threads
+    const moved = { closed: { at: at(60), by: 'task:lead-1' as const, how: 'moved' as const }, movedTo: { task: 'lead-2', title: 'Other', at: at(60) } }
+    // A pointer that still carries the record of what was merged into it, beside a live thread with the same record.
+    const pointer = { ...a, ...moved, was: ['th-00000000000a'] }
+    const live = { ...b, was: [a.id, 'th-00000000000a'] }
+    const both = { ...f, threads: [pointer, live] } as ThreadsFile
+    expect(threadIdNow(both, 'th-00000000000a')).toBe(b.id)
+    // The pointer's own id: the live thread it was merged into since.
+    expect(threadIdNow(both, a.id)).toBe(b.id)
+    // With no live thread for it, the pointer still answers (its own no-longer-here says where it went).
+    expect(threadIdNow({ threads: [pointer] as never }, a.id)).toBe(a.id)
+    expect(threadIdNow({ threads: [pointer] as never }, 'th-00000000000a')).toBe(a.id)
+    // Bad data: a record that is a string is never matched by a part of it.
+    expect(threadIdNow({ threads: [{ ...b, was: 'th-00000000000a th-00000000000b' }] as never }, 'th-00000000000a')).toBe('th-00000000000a')
   })
 
   it('a wrong merge is split back out: the message becomes its own thread, the rest stays', () => {

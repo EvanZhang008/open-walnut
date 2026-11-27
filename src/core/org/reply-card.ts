@@ -28,7 +28,7 @@ import { log } from '../../logging/index.js';
 import { readCardTags, type CardTag } from '../../lib/card-tag.js';
 import { cutEnd } from '../text-cut.js';
 import type { Task } from '../types.js';
-import { applyNeedsCard, needsKey, notOpenReason, upAlready } from './reply-card-decision.js';
+import { applyNeedsCard, cardsNow, cardsNowRead, needsKey, notOpenReason, upAlready } from './reply-card-decision.js';
 import type { StatusReport } from '../user-status.js';
 import {
   applyThreadLines, asksThreads, PROGRESS_MAX, staleAskTitle, wroteSinceAnswer,
@@ -233,10 +233,14 @@ export async function applyReplyCards(input: { task: Task; sessionId: string; re
     await stopCheckDone(sessionId);
     const mine = takeHeld(sessionId, input.now ?? Date.now());
     const read = readCardTags(input.reply);
-    // The turn's last message wins for a thread both name.
-    const last = new Set(read.cards.map((c) => c.thread));
-    const cards = [...mine.cards.filter((c) => !last.has(c.thread)), ...read.cards];
     const store = await import('./threads-store.js');
+    // Each line as it names a thread now (an id a merge put under another thread names that one).
+    const nowFile = await store.readThreads(task.id);
+    const saidNow = cardsNowRead(nowFile, read.cards);
+    const said = saidNow.cards;
+    // The turn's last message wins for a thread both name.
+    const last = new Set(said.map((c) => c.thread));
+    const cards = [...cardsNow(nowFile, mine.cards).filter((c) => !last.has(c.thread)), ...said];
     // What this turn's end saw of his messages: its lines are written from it, and the next
     // turn's check owes none for them.
     const saw: ReplySaw = { queued: await queuedThreads(sessionId), ...(input.endedAt ? { endedAt: input.endedAt } : {}) };
@@ -252,7 +256,8 @@ export async function applyReplyCards(input: { task: Task; sessionId: string; re
     }
     const by = `task:${task.id}` as const;
     const applied: string[] = [];
-    const refused: CardRefusal[] = [];
+    // Two lines of the reply named one thread, one of them by an id merged into it: one was written.
+    const refused: CardRefusal[] = saidNow.dropped.map((d) => ({ thread: d.thread, reason: `${d.thread} is under ${d.under} now, which another line of the reply names: one line per thread` }));
     const opened: Array<{ from: string; thread: string }> = [];
     const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
     for (const c of cards.filter((x) => x.merge)) {

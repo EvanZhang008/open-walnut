@@ -19,9 +19,33 @@ import type { CardTag } from '../../lib/card-tag.js';
 import { noteLineAsks } from '../sessions/status-thread-asked.js';
 import { staleAskTitle } from '../sessions/status-threads.js';
 import { returnLacks, wroteSinceNeeds, type ReturnLack } from './thread-return.js';
-import { patchHandsToUser, THREAD_ASK_MAX, THREAD_TITLE_MAX, type OrgThread, type ThreadPatch, type ThreadsFile } from './threads-model.js';
+import { linesNow, patchHandsToUser, THREAD_ASK_MAX, THREAD_TITLE_MAX, threadIdNow, type OrgThread, type ThreadPatch, type ThreadsFile } from './threads-model.js';
 
 const cut = (s: string, max: number) => s.slice(0, cutEnd(s, max));
+
+/**
+ * The cards as they name threads now: an id a merge put under another thread names that thread
+ * (threads-model.ts threadIdNow, linesNow), so a session that keeps the id it was given writes
+ * where the subject lives. A merge whose two ends are one thread now, through such an id, is done
+ * already: left out. One line per thread still: where two name one thread now, a decision stays
+ * before a state line, then the one that wrote the thread's own id, then the last (`dropped` names
+ * the others). Both readers of a reply's card lines (the check before the turn ends, the write
+ * after it) go through this. Pure.
+ */
+export function cardsNowRead(file: ThreadsFile, cards: readonly CardTag[]): { cards: CardTag[]; dropped: Array<{ thread: string; under: string }> } {
+  const open: CardTag[] = [];
+  for (const c of cards) {
+    const merge = c.merge ? threadIdNow(file, c.merge) : undefined;
+    const done = !!merge && merge === threadIdNow(file, c.thread) && (merge !== c.merge || merge !== c.thread);
+    if (!done) open.push(merge && merge !== c.merge ? { ...c, merge } : c);
+  }
+  const now = linesNow(file, open, (c) => c.thread, (c, thread) => ({ ...c, thread }), (c) => (c.state === 'needs' ? 1 : 0));
+  return { cards: now.lines, dropped: now.dropped.map((d) => ({ thread: d.line.thread, under: d.under })) };
+}
+
+export function cardsNow(file: ThreadsFile, cards: readonly CardTag[]): CardTag[] {
+  return cardsNowRead(file, cards).cards;
+}
 
 /** Why a line names no thread a line can write here, or null. Pure. */
 export function notOpenReason(file: ThreadsFile, id: string): string | null {

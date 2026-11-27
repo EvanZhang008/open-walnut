@@ -204,7 +204,17 @@ describe('a reply is its thread\'s reply', () => {
       expect(all.find((t) => t.id === gate && !t.closed && !t.mergedInto)).toBeUndefined()
       expect(all.find((t) => t.id === fence)!.messages.map((m) => m.text)).toContain(GATE_ASK)
     }, { timeout: 20_000, interval: 300 })
-  }, 40_000)
+    // 2026-11-27, real use: a session kept writing the id of a thread that had been merged into
+    // another, and each line was refused. The id names the thread it is under: the line is written there.
+    const later = await typeIntoChat('When is the gate hung?')
+    await turn(later, `On Tuesday.\n\n<walnut-card thread="${gate}" state="answered" summary="The gate is hung on Tuesday."/>`)
+    await vi.waitFor(async () => {
+      expect(await threadOf(fence)).toMatchObject({ state: 'answered', reply: 'The gate is hung on Tuesday.' })
+    }, { timeout: 20_000, interval: 300 })
+    expect((await threads()).find((t) => t.id === gate)).toBeUndefined()
+    const got = (await (await fetch(`${base}/api/v1/tasks/${leadId}/threads/${gate}`)).json()) as { thread: OrgThread }
+    expect(got.thread.id).toBe(fence)
+  }, 60_000)
 
   // A quiet turn (Walnut's own upkeep, sessions/quiet-turn.ts) runs no turn-end hook, so its words
   // are no reply to him and their card lines are never written (session-hooks/derive/session.ts).

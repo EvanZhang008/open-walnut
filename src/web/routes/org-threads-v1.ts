@@ -46,7 +46,7 @@ import { Router, type Request, type Response } from 'express'
 import type { Task } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { resolveThreadCaller, type ThreadCaller } from '../../core/org/thread-caller.js'
-import { movedAway, ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type OrgThread, type ThreadPatch, type ThreadSource, type ThreadState, type ThreadWriter } from '../../core/org/threads-model.js'
+import { movedAway, ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, threadIdNow, type OrgThread, type ThreadPatch, type ThreadSource, type ThreadState, type ThreadWriter } from '../../core/org/threads-model.js'
 import { isLineThreadId, lineThreads } from '../../core/org/line-threads.js'
 import { threadsForEveryTask } from '../../core/org/keeps-threads.js'
 import { fileThreadMessage, mergeThread, nodeView, openNodeThread, patchThread, readThreads, splitThread, withTaskAsks } from '../../core/org/threads-store.js'
@@ -117,6 +117,20 @@ function threadIdOf(req: Request): string {
   if (isLineThreadId(id)) throw new RouteError(409, 'line_thread', `${id} is one of the task's lines, not a stored thread: answer or snooze it as its Action needed item (line.item).`)
   if (!THREAD_ID_RE.test(id)) throw new RouteError(400, 'bad_request', `Not a thread id: ${id}`)
   return id
+}
+
+/**
+ * The thread the URL names on this node now: an id a merge put under another thread names that
+ * thread (threads-model.ts threadIdNow), so a caller that kept the id it was given reaches the
+ * subject where it lives. Every route with `:thread` reads its id here.
+ */
+async function threadNowOf(req: Request, taskId: string): Promise<string> {
+  return threadIdNow(await readThreads(taskId), threadIdOf(req))
+}
+
+/** `merge_into` as it names a thread on this node now (one on another task of the tree stays as given). */
+async function mergeIntoNow(taskId: string, id: string | undefined): Promise<string | undefined> {
+  return id === undefined || !THREAD_ID_RE.test(id) ? id : threadIdNow(await readThreads(taskId), id)
 }
 
 function str(b: Record<string, unknown>, k: string): string | undefined {
@@ -290,7 +304,7 @@ orgThreadsV1Router.get('/tasks/:id/threads/:thread', route(async (req, res) => {
     res.json({ task_id: task.id, thread: { ...line, shown: true } })
     return
   }
-  const id = threadIdOf(req)
+  const id = await threadNowOf(req, task.id)
   await ownerReads(req, task.id, [id])
   const view = await nodeView(task.id, (await readThreads(task.id)).threads)
   const all = await withKnownAwaits(view.threads)
@@ -370,7 +384,7 @@ async function savedPicturePaths(b: Record<string, unknown>): Promise<string[]> 
 orgThreadsV1Router.put('/tasks/:id/threads/:thread/follow-ups/:messageId', route(async (req, res) => {
   if (isFollower()) throw primaryOnly('reach')
   const task = await nodeTask(req)
-  const id = threadIdOf(req)
+  const id = await threadNowOf(req, task.id)
   const messageId = param(req.params.messageId)
   if (!/^qm-[A-Za-z0-9-]{1,64}$/.test(messageId)) throw new RouteError(400, 'bad_request', `Not a message id: ${messageId}`)
   // A task's thread shown here (threads_pop_up) or one that moved on is answered here too: the
@@ -415,10 +429,10 @@ async function projected(taskId: string, thread: OrgThread): Promise<OrgThread> 
 
 orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) => {
   const task = await nodeTask(req)
-  const id = threadIdOf(req)
+  const id = await threadNowOf(req, task.id)
   const b = body(req)
   const { by, source } = await callerOf(req)
-  const mergeInto = str(b, 'merge_into')
+  const mergeInto = await mergeIntoNow(task.id, str(b, 'merge_into'))
   const patch: ThreadPatch = {}
   for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why', 'user_kind_words', 'user_kind_about', 'design_review', 'same_ask_reason', 'ask_owner', 'user_words', 'place', 'place_why', 'since_you_wrote', 'decision', 'separate_reason'] as const) {
     const v = str(b, k)
@@ -462,6 +476,11 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   let mergedOn: { task: string; title: string } | undefined
   if (mergeInto) {
     if (!THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `Not a thread id: ${mergeInto}`)
+    // Both names are one thread now, through an id an earlier merge put under it: that merge is done.
+    if (mergeInto === id && (threadIdOf(req) !== id || str(b, 'merge_into') !== id)) {
+      const was = threadIdOf(req) !== id ? threadIdOf(req) : str(b, 'merge_into')
+      throw new ThreadError('same_thread', 400, `Thread ${was} is under ${id} already (it was merged there): nothing to merge, write ${id}.`)
+    }
     // A target on another task of this task's tree: this thread moves there and is merged there (thread-tree-merge.ts).
     const { mergeAcrossTree } = await import('../../core/org/thread-tree-merge.js')
     const across = await mergeAcrossTree({ from: task, threadId: id, intoId: mergeInto, by })
@@ -476,11 +495,11 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
 
 orgThreadsV1Router.post('/tasks/:id/threads/:thread/split', route(async (req, res) => {
   const task = await nodeTask(req)
-  const id = threadIdOf(req)
+  const id = await threadNowOf(req, task.id)
   const b = body(req)
   const message = str(b, 'message') ?? ''
   if (!THREAD_MESSAGE_ID_RE.test(message)) throw new RouteError(400, 'bad_request', 'message (a tm- id of this thread) is required')
-  const mergeInto = str(b, 'merge_into')
+  const mergeInto = await mergeIntoNow(task.id, str(b, 'merge_into'))
   if (mergeInto !== undefined && !THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `merge_into must be a thread id (th-...), not ${mergeInto}`)
   if (b.keep_open !== undefined && typeof b.keep_open !== 'boolean') throw new RouteError(400, 'bad_request', 'keep_open must be true or false.')
   const by = await writerOf(req)
@@ -498,7 +517,7 @@ orgThreadsV1Router.post('/tasks/:id/threads/:thread/split', route(async (req, re
 
 orgThreadsV1Router.post('/tasks/:id/threads/:thread/move', route(async (req, res) => {
   const task = await nodeTask(req)
-  const id = threadIdOf(req)
+  const id = await threadNowOf(req, task.id)
   const b = body(req)
   const to = (str(b, 'to') ?? '').trim()
   if (!to) throw new RouteError(400, 'bad_request', 'to (the node, a task in its team, a project or a VP\'s name) is required')

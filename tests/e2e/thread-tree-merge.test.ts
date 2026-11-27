@@ -76,6 +76,7 @@ beforeAll(async () => {
     asked('th-c00009', 'can the image ship Friday?', { state: 'needs' }),
     asked('th-c0000a', 'which base image?', { state: 'needs' }),
     asked('th-c0000b', 'ship the image Friday?', { state: 'needs' }),
+    asked('th-c0000c', 'is the image build fixed yet?'),
   ])
   await writeThreads(child, [
     asked('th-c00003', 'image build red on main'),
@@ -106,6 +107,34 @@ describe('merge_into a thread on another task of the same tree', () => {
     // His follow-up from a card of the old thread joins the merged one, never a new thread.
     const filed = await fileThreadMessage(parent, { text: 'any news on the build?', via: 'follow-up', threadId: 'th-c00001', at: new Date().toISOString() })
     expect(filed).toMatchObject({ node: child, thread: { id: 'th-c00003' }, created: false })
+  })
+
+  // 2026-11-27, real use: the task holding the merged thread kept the id it had been told, and
+  // every write of its with that id was refused as naming no thread of its own.
+  it('the old id names the merged thread on the task holding it: read, write, his follow-up, a merge', async () => {
+    expect((await stored(child, 'th-c00003'))?.was).toEqual(['th-c00001'])
+    const got = await api<{ thread: OrgThread }>('GET', `/tasks/${child}/threads/th-c00001`)
+    expect(got.status).toBe(200)
+    expect(got.json.thread.id).toBe('th-c00003')
+    const put = await api<{ thread: OrgThread }>('PATCH', `/tasks/${child}/threads/th-c00001`, { title: 'Image build red' })
+    expect(put.status).toBe(200)
+    expect(put.json.thread).toMatchObject({ id: 'th-c00003', title: 'Image build red' })
+    expect(await stored(child, 'th-c00001')).toBeUndefined()
+    // His words sent to the old id on that task join the thread, never a new one.
+    const filed = await fileThreadMessage(child, { text: 'is it green now?', via: 'follow-up', threadId: 'th-c00001', at: new Date().toISOString() })
+    expect(filed).toMatchObject({ node: child, thread: { id: 'th-c00003' }, created: false })
+    // Merging the two again is done already, and the answer names the id to write.
+    const again = await api<{ error?: { code?: string; message?: string } }>('PATCH', `/tasks/${child}/threads/th-c00001`, { merge_into: 'th-c00003' })
+    expect(again.status).toBe(400)
+    expect(again.json.error?.code).toBe('same_thread')
+    expect(again.json.error?.message).toContain('write th-c00003')
+    // A merge aimed at the old id from the task above reaches the thread it is under.
+    const more = await api<{ thread: OrgThread; merged_on?: { task: string } }>('PATCH', `/tasks/${parent}/threads/th-c0000c`, { merge_into: 'th-c00001' })
+    expect(more.status).toBe(200)
+    expect(more.json).toMatchObject({ merged_on: { task: child }, thread: { id: 'th-c00003' } })
+    expect((await stored(child, 'th-c00003'))?.was).toEqual(['th-c0000c', 'th-c00001'])
+    // An id nobody held is still no thread.
+    expect((await api('GET', `/tasks/${child}/threads/th-c0ffee`)).status).toBe(404)
   })
 
   it('up: a subtask\'s thread merges into its parent\'s', async () => {

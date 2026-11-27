@@ -30,7 +30,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { projectOrInbox, sameProject } from '../inbox-project.js';
 import { leadsAlso, orgDisplayTitle, pickLead, pickMain, successorOf } from './org-tree.js';
-import { isOpen, type MoveEnd, type OrgThread, type ThreadMoveKind, type ThreadWriter } from './threads-model.js';
+import { isOpen, threadIdNow, type MoveEnd, type OrgThread, type ThreadMoveKind, type ThreadWriter } from './threads-model.js';
 import { keepsThreads } from './keeps-threads.js';
 import { oneIdNow, oneIdOn, sameIdTaskLine, stayWords } from './thread-one-id.js';
 import { holdsHanded } from './thread-one-id-view.js';
@@ -197,21 +197,48 @@ export function planThreadFollows(nodes: ReadonlyArray<{ node: FollowTask; threa
 
 function end(t: FollowTask): MoveEnd { return { task: t.id, title: orgDisplayTitle(t as Task) }; }
 
+/** What the node a thread came to reads about it. */
+const cameInLine = (move: { from: FollowTask; threadId: string; title: string; why: string }): string =>
+  `Thread ${move.threadId} ${q(move.title)} moved to your Threads from ${orgDisplayTitle(move.from as Task)} (${move.from.id}), because ${move.why}: the user's messages and the answers came with it. It is yours now: keep it current with thread_update and answer him in it.`;
+
+/**
+ * The node a thread came to is told how a merge there ended, by the caller that made it
+ * (thread-tree-merge.ts; the move itself told that node nothing, `tellTo: false`). Merged: the
+ * line names the thread it is under now, never the id that is gone (2026-11-27, real use: the line
+ * said "Thread <old id> ... is yours now", the task wrote that id for a day, and each line was
+ * refused). Not merged after all: the plain line, the thread is open there under its own id. The
+ * org off: nobody is told. Never throws.
+ */
+export async function tellMergedIn(move: { from: Task; to: string; threadId: string; title: string; why: string }, into: { id: string; title: string } | null): Promise<void> {
+  try {
+    const { isOrgEnabled } = await import('./org-enabled.js');
+    if (!(await isOrgEnabled())) return;
+    const { leadSession } = await import('./org-store.js');
+    const { tellOrRide } = await import('../sessions/status-push.js');
+    const session = await leadSession(move.to);
+    if (!session) return;
+    await tellOrRide(session.claudeSessionId, `thread-moved-in:${move.threadId}`, into
+      ? `Thread ${move.threadId} ${q(move.title)} from ${orgDisplayTitle(move.from)} (${move.from.id}) was merged into your thread ${into.id} ${q(into.title)}: the user's messages and the answers on it are in ${into.id} now. Keep ${into.id} current and answer him in it; a line or call that names ${move.threadId} is read as ${into.id}.`
+      : cameInLine(move));
+  } catch (err) {
+    log.task.warn('org threads: merge not told', { threadId: move.threadId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 /** One line for each node, riding its next message (never a wake). The org off: nobody is told. */
-async function tellNodes(move: { from: FollowTask; to: FollowTask; threadId: string; title: string; why: string }, opts: { tellFrom: boolean; toLine?: string }): Promise<void> {
+async function tellNodes(move: { from: FollowTask; to: FollowTask; threadId: string; title: string; why: string }, opts: { tellFrom: boolean; toLine?: string; tellTo?: boolean }): Promise<void> {
   try {
     const { isOrgEnabled } = await import('./org-enabled.js');
     // A task's own line (threads_one_id) is told with the org off too: a task with Threads on keeps them without it.
     if (opts.toLine === undefined && !(await isOrgEnabled())) return;
     const { leadSession } = await import('./org-store.js');
     const { tellOrRide } = await import('../sessions/status-push.js');
-    const fromName = orgDisplayTitle(move.from as Task);
     const toName = orgDisplayTitle(move.to as Task);
     const toSession = await leadSession(move.to.id);
     // An empty `toLine`: the message that handed the work over already said it (thread-handoff.ts).
-    if (toSession && opts.toLine !== '') {
-      await tellOrRide(toSession.claudeSessionId, `thread-moved-in:${move.threadId}`, opts.toLine ??
-        `Thread ${move.threadId} ${q(move.title)} moved to your Threads from ${fromName} (${move.from.id}), because ${move.why}: the user's messages and the answers came with it. It is yours now: keep it current with thread_update and answer him in it.`);
+    // `tellTo: false`: the caller tells that node itself, once it knows how the move ended (tellMergedIn).
+    if (toSession && opts.toLine !== '' && opts.tellTo !== false) {
+      await tellOrRide(toSession.claudeSessionId, `thread-moved-in:${move.threadId}`, opts.toLine ?? cameInLine(move));
     }
     if (!opts.tellFrom) return;
     const fromSession = await leadSession(move.from.id);
@@ -346,10 +373,14 @@ export async function handOffThread(input: { callerSid?: string; target: string;
     const store = await import('./threads-store.js');
     const mine = (await store.readThreads(from.id)).threads;
     const open = mine.filter(isOpen);
-    const picked = input.threadId
-      ? open.filter((t) => t.id === input.threadId)
+    // The thread the caller named as it is here now: an id a merge put under another thread names that one.
+    const now = (id: string) => threadIdNow({ threads: mine }, id);
+    const named = input.threadId ? now(input.threadId) : undefined;
+    const told = input.told?.map(now);
+    const picked = named
+      ? open.filter((t) => t.id === named)
       : open.filter((t) => (t.tasks ?? []).includes(target.id));
-    const gone = input.threadId && !picked.length ? mine.find((t) => t.id === input.threadId)?.movedTo : undefined;
+    const gone = named && !picked.length ? mine.find((t) => t.id === named)?.movedTo : undefined;
     if (input.threadId && !picked.length) return refuse(gone ? `Thread ${input.threadId} is on ${gone.title}'s Threads already (${gone.task}): it was handed on before, so it stays there.` : `No open thread ${input.threadId} on your Threads: none was handed on.`);
     const to = handOffTo(from, target, p);
     const writer: ThreadWriter = `task:${from.id}`;
@@ -359,7 +390,7 @@ export async function handOffThread(input: { callerSid?: string; target: string;
       const why = `${orgDisplayTitle(from as Task)} handed it to ${q(target.title)}`;
       // threads_one_id: a thread named for a task of the caller's own team that keeps Threads goes to that task, same id.
       const same = oneId ? sameIdDecision({ from, target, thread: t, to, p }) : null;
-      const toLine = input.told?.includes(t.id) ? '' : sameIdTaskLine(t.id, t.title);
+      const toLine = told?.includes(t.id) ? '' : sameIdTaskLine(t.id, t.title);
       if (same?.move && await runMove({ from, to: target, threadId: t.id, title: t.title, why }, writer, { tellFrom: false, owners: ownersKey(t.tasks, p), toLine }, 'hand')) {
         out.moved.push({ id: t.id, title: t.title, to: end(target), same_card: true });
         continue;
@@ -389,7 +420,7 @@ export async function handOffThread(input: { callerSid?: string; target: string;
  * keeps its own Threads, a task whose team's node takes it, a project or a VP's name), from any
  * task that keeps Threads (moveTargetOf).
  */
-export async function moveThreadTo(input: { from: Task; threadId: string; to: string; by: ThreadWriter; why?: string }): Promise<{ thread: OrgThread; to: MoveEnd }> {
+export async function moveThreadTo(input: { from: Task; threadId: string; to: string; by: ThreadWriter; why?: string; tellTo?: boolean }): Promise<{ thread: OrgThread; to: MoveEnd }> {
   const { orgTasks, resolveOrgContact } = await import('./org-store.js');
   const { ThreadError } = await import('./threads-model.js');
   const p = orgPlaces(await orgTasks());
@@ -412,7 +443,7 @@ export async function moveThreadTo(input: { from: Task; threadId: string; to: st
   const listed = (await readThreads(from.id)).threads.find((t) => t.id === input.threadId)?.tasks;
   const thread = await moveThread({ from: end(from), to: end(to), threadId: input.threadId, by: input.by, why, kind: 'hand', owners: ownersKey(listed, p) });
   log.task.info('org thread moved by hand', { threadId: input.threadId, from: from.id, to: to.id, by: input.by });
-  await tellNodes({ from, to, threadId: input.threadId, title: thread.title, why }, { tellFrom: input.by === 'human' });
+  await tellNodes({ from, to, threadId: input.threadId, title: thread.title, why }, { tellFrom: input.by === 'human', ...(input.tellTo === false ? { tellTo: false } : {}) });
   return { thread, to: end(to) };
 }
 

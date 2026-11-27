@@ -14,7 +14,7 @@
  */
 import type { Task } from '../types.js';
 import { orgDisplayTitle } from './org-tree.js';
-import { checkMovable, mergeThreads, movedAway, moveThreadIn, ThreadError, type MoveEnd, type OrgThread, type ThreadWriter } from './threads-model.js';
+import { checkMovable, mergeThreads, movedAway, moveThreadIn, ThreadError, threadIdNow, type MoveEnd, type OrgThread, type ThreadWriter } from './threads-model.js';
 
 export interface TreeMergeResult {
   /** The merged thread, where it lives now. */
@@ -29,11 +29,11 @@ export interface TreeMergeResult {
  * own refusals apply). Throws no_thread, saying why, when no task of the tree holds the target.
  */
 export async function mergeAcrossTree(input: { from: Task; threadId: string; intoId: string; by: ThreadWriter }): Promise<TreeMergeResult | null> {
-  const { from, threadId, intoId, by } = input;
-  if (threadId === intoId) return null;
+  const { from, threadId, by } = input;
+  if (threadId === input.intoId) return null;
   const store = await import('./threads-store.js');
   const own = (await store.readThreads(from.id)).threads;
-  const here = own.find((t) => t.id === intoId);
+  const here = own.find((t) => t.id === input.intoId);
   const cur = own.find((t) => t.id === threadId);
   if ((here && !movedAway(here)) || !cur) return null;
   checkMovable(cur);
@@ -41,29 +41,40 @@ export async function mergeAcrossTree(input: { from: Task; threadId: string; int
   let holder: Task | undefined;
   let target: OrgThread | undefined;
   for (const t of await threadTreeOf(from.id, new Set(await store.threadTaskIds()))) {
-    target = (await store.readThreads(t.id)).threads.find((x) => x.id === intoId && !movedAway(x));
+    // An id a merge there put under another thread names that thread (threads-model.ts threadIdNow).
+    const there = await store.readThreads(t.id);
+    const now = threadIdNow(there, input.intoId);
+    target = there.threads.find((x) => x.id === now && !movedAway(x));
     if (target) { holder = t; break; }
   }
   if (!holder || !target) {
     const went = here?.movedTo
       ? ` It moved to ${here.movedTo.title} (${here.movedTo.task}), outside your tree: thread_move ${threadId} there first, then merge it there.`
       : ' For a thread elsewhere: thread_move yours to the task that holds it, then merge it there.';
-    throw new ThreadError('no_thread', 404, `No open thread ${intoId} on your Threads or on a task above or below yours that keeps Threads: merge_into reaches only your own task tree.${went}`);
+    throw new ThreadError('no_thread', 404, `No open thread ${input.intoId} on your Threads or on a task above or below yours that keeps Threads: merge_into reaches only your own task tree.${went}`);
   }
+  const intoId = target.id;
   const on: MoveEnd = { task: holder.id, title: orgDisplayTitle(holder) };
   const at = new Date().toISOString();
   const trial = moveThreadIn(await store.readThreads(holder.id), cur, { task: from.id, title: orgDisplayTitle(from) }, by, at);
   mergeThreads(trial.file, threadId, intoId, by, at);
-  const { moveThreadTo } = await import('./thread-follow.js');
-  const moved = await moveThreadTo({ from, threadId, to: holder.id, by, why: `merged into ${JSON.stringify(target.title)} there` });
+  const { moveThreadTo, tellMergedIn } = await import('./thread-follow.js');
+  const why = `merged into ${JSON.stringify(target.title)} there`;
+  // The node there is told once the merge has ended, with the id the thread is under then.
+  const moved = await moveThreadTo({ from, threadId, to: holder.id, by, why, tellTo: false });
+  const told = { from, to: holder.id, threadId, title: cur.title, why };
+  if (moved.to.task !== holder.id) await tellMergedIn({ ...told, to: moved.to.task }, null);
   if (moved.to.task !== holder.id) throw new ThreadError('bad_input', 409, `Thread ${threadId} moved to ${moved.to.title} (${moved.to.task}), not to ${on.title}: merge it there with thread_update.`);
   try {
     const thread = await store.mergeThread(holder.id, threadId, intoId, by);
     // His follow-up from a card of the old thread goes to the one it joined (review 2026-11-23).
     await store.markMergedThere(from.id, threadId, intoId).catch(() => undefined);
+    await tellMergedIn(told, { id: intoId, title: thread.title });
     return { thread, on };
   } catch (err) {
-    // Changed between the trial and the merge (the target closed meanwhile): the thread stays open where it went.
+    // Not merged (the target closed between the trial and the merge, or the write failed): the
+    // thread stays open where it went, and the node there hears so.
+    await tellMergedIn(told, null);
     if (!(err instanceof ThreadError)) throw err;
     throw new ThreadError(err.code, err.status, `${err.message} Your thread ${threadId} moved to ${on.title} (${on.task}) and stays open there.`);
   }

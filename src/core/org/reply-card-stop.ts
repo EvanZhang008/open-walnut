@@ -37,7 +37,7 @@ import { cardTagLine, CARD_TAG_FORM, readCardTags, type CardTag } from '../../li
 import { asksThreads } from '../sessions/status-threads.js';
 import { clause } from '../../utils/format.js';
 import { endsDecision, holdCards, noteStopCheck, noteUnreadDecisions, queuedThreads, readBefore } from './reply-card.js';
-import { applyNeedsCard, CardLineLacks, needsKey, notOpenReason, upAlready, type CardLack } from './reply-card-decision.js';
+import { applyNeedsCard, CardLineLacks, cardsNow, needsKey, notOpenReason, upAlready, type CardLack } from './reply-card-decision.js';
 import { noteLineAsks } from '../sessions/status-thread-asked.js';
 import { replyTagOn } from './reply-card-switch.js';
 import { mergeThreads, type OrgThread, type ThreadMessage } from './threads-model.js';
@@ -151,7 +151,7 @@ async function check(sid: string, tail: string, nowMs: number, turn: { gaveUp: b
   const good: CardTag[] = [];
   const asked: string[] = [];
   const named = new Set<string>();
-  for (const c of read.cards) {
+  for (const c of cardsNow(file, read.cards)) {
     named.add(c.thread);
     const gone = notOpenReason(file, c.thread);
     if (gone) { things.push({ key: `gone:${c.thread}`, kind: 'gone', thread: c.thread, line: CARD_STOP_LINES.gone(gone) }); continue; }

@@ -91,6 +91,8 @@ export const THREAD_ASK_MAX = 400;
 export const THREAD_REPLY_MAX = 2000;
 export const THREAD_MESSAGE_MAX = 8000;
 export const THREAD_TASKS_MAX = 12;
+/** How many ids of threads merged into one it keeps (OrgThread.was). */
+export const THREAD_WAS_MAX = 20;
 export const THREAD_IMAGES_MAX = 12;
 /** An answer kept whole up to this; the view folds it to a few lines. */
 export const THREAD_ANSWER_MAX = 16_000;
@@ -334,6 +336,13 @@ export interface OrgThread {
   titleHeld?: { title: string; like: string; at: string };
   /** Tasks the thread went to: shown with their live status. */
   tasks?: string[];
+  /**
+   * The ids of the threads merged into this one, newest first (at most THREAD_WAS_MAX): a card line
+   * or an op that still names one means this thread (threadIdNow). 2026-11-27, real use: a thread
+   * handed to a task was merged into the task's own thread there, the task kept the id it had been
+   * given, and five of its card lines in a day were refused as naming no thread of its own.
+   */
+  was?: string[];
   messages: ThreadMessage[];
   /** The closed thread this one asks again about. */
   follows?: string;
@@ -573,6 +582,10 @@ function normalizeThread(t: unknown): OrgThread | null {
   if (next.reactedAt !== undefined && !(isStr(next.reactedAt) && Number.isFinite(Date.parse(next.reactedAt)))) delete next.reactedAt;
   if (next.needsAt !== undefined && !(isStr(next.needsAt) && Number.isFinite(Date.parse(next.needsAt)))) delete next.needsAt;
   if (!validMove(next.movedTo)) delete next.movedTo;
+  if (next.was !== undefined) {
+    const was = Array.isArray(next.was) ? next.was.filter((id) => isStr(id) && id !== next.id).slice(0, THREAD_WAS_MAX) : [];
+    if (was.length) next.was = was; else delete next.was;
+  }
   if (!validMove(next.movedFrom)) delete next.movedFrom;
   if (next.askOwner && !(typeof next.askOwner === 'object' && isStr(next.askOwner.task) && next.askOwner.task && isStr(next.askOwner.at))) delete next.askOwner;
   if (next.ackedResult !== undefined && typeof next.ackedResult !== 'boolean') delete next.ackedResult;
@@ -669,6 +682,46 @@ function prune(threads: OrgThread[], at: string): OrgThread[] {
 export function sweepClosed(file: ThreadsFile, at: string): { file: ThreadsFile; dropped: number } {
   const threads = prune(file.threads, at);
   return { file: threads === file.threads ? file : { ...file, threads }, dropped: file.threads.length - threads.length };
+}
+
+/**
+ * The id `id` names on this node now: itself while a thread here has it, else the thread a merge
+ * put it under (OrgThread.was), else itself (unknown here: the caller's own no_thread says so).
+ * A thread that lives here wins over the pointer a moved thread left behind, by its own id and by
+ * its record alike. Every way in that takes a thread id from a node or a person reads it through
+ * this (the card lines of a reply, the status question's lines, the thread routes, a hand-off);
+ * the model's own functions take the id as it is. Pure.
+ */
+export function threadIdNow(file: Pick<ThreadsFile, 'threads'>, id: string): string {
+  const here = (t: OrgThread) => !movedAway(t);
+  const was = (t: OrgThread) => Array.isArray(t.was) && t.was.includes(id);
+  const all = file.threads;
+  return (all.find((t) => t.id === id && here(t)) ?? all.find((t) => here(t) && was(t)) ?? all.find((t) => t.id === id) ?? all.find(was))?.id ?? id;
+}
+
+/**
+ * Lines that each name a thread, as they name it now (threadIdNow), one line per thread. Where two
+ * name one thread now, the one with the higher `weight` stays (a decision before a state), then
+ * the one that wrote the thread's own id, then the last written. `dropped`: the lines left out,
+ * with the thread each is under. Both kinds of line go through this: a reply's card lines
+ * (reply-card-decision.ts cardsNow) and the status question's (sessions/status-threads.ts). Pure.
+ */
+export function linesNow<T>(file: Pick<ThreadsFile, 'threads'>, lines: readonly T[], idOf: (line: T) => string, withId: (line: T, id: string) => T, weight: (line: T) => number = () => 0): { lines: T[]; dropped: Array<{ line: T; under: string }> } {
+  const read = lines.map((line) => {
+    const id = threadIdNow(file, idOf(line));
+    const own = id === idOf(line);
+    return { line: own ? line : withId(line, id), given: line, id, own, weight: weight(line) };
+  });
+  const kept = new Map<string, number>();
+  read.forEach((x, i) => {
+    const k = kept.get(x.id);
+    const cur = k === undefined ? undefined : read[k];
+    if (!cur || x.weight > cur.weight || (x.weight === cur.weight && (x.own || !cur.own))) kept.set(x.id, i);
+  });
+  return {
+    lines: read.filter((x, i) => kept.get(x.id) === i).map((x) => x.line),
+    dropped: read.filter((x, i) => kept.get(x.id) !== i).map((x) => ({ line: x.given, under: x.id })),
+  };
 }
 
 function find(file: ThreadsFile, id: string): OrgThread {
@@ -1462,6 +1515,8 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
   const needsAt = [into.needsAt, from.needsAt].filter((x): x is string => !!x).sort().pop();
   const next: OrgThread = {
     ...into, messages, updatedAt: at, by,
+    // Its id, and the ids merged into it before, name the target from now on (threadIdNow).
+    was: [...new Set([fromId, ...(from.was ?? []), ...(into.was ?? [])])].filter((id) => id !== intoId).slice(0, THREAD_WAS_MAX),
     ...(watched ? { watched } : {}),
     ...(needsBuzzedAt ? { needsBuzzedAt } : {}),
     ...(needsAt ? { needsAt } : {}),
