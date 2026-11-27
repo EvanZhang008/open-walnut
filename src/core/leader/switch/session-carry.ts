@@ -29,7 +29,7 @@ import { carryTargetDir } from '../../standby/target-files.js'
 import type { SessionRecord } from '../../types.js'
 import { encodeProjectPath } from '../../session-file-reader.js'
 import { ARCHIVE_SUFFIX, MANIFEST_SUFFIX } from '../../../providers/transcript-archive-names.js'
-import { engineFolderName, engineOf, homeSessionRows, moveRefusal, realPath } from './home-sessions.js'
+import { engineFolderName, homeSessionRows, moveRefusal, realPath } from './home-sessions.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const UUID_JSONL = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i
@@ -69,7 +69,7 @@ export function carrySelection(records: readonly SessionRecord[], home: string):
   const own = homeEngineFolder(home)
   if (own) folders.add(own)
   for (const { rec, rel } of homeSessionRows(records, home)) {
-    if (engineOf(rec) !== 'claude' || moveRefusal(rec, rel, home)) continue
+    if (moveRefusal(rec, rel, home)) continue
     const f = engineFolderName(rec.cwd!)
     if (!f) continue
     folders.add(f)

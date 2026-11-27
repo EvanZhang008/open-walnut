@@ -32,6 +32,7 @@ import type { LeaderSwitchSessionStamp, SessionRecord, SessionRestartLoss } from
 import { homePathClass, isMachineRuntimePath } from '../../home-manifest/index.js'
 import { encodeProjectPath, isSafeForProjectEncoding } from '../../session-file-reader.js'
 import { execHostOf, judgedByHost } from '../../sessions/session-row-owner.js'
+import { engineCaps, isKnownEngine } from '../../agents/engine-registry.js'
 
 /** The ways a home's path is written: as configured (resolved) and its real path. */
 export function homeSpellings(home: string): string[] {
@@ -103,7 +104,8 @@ export function engineFolderName(cwd: string): string | null {
  */
 export function moveRefusal(rec: Pick<SessionRecord, 'engine' | 'provider' | 'cwd'>, rel: string, home?: string): string | null {
   const engine = engineOf(rec)
-  if (engine !== 'claude') return `its engine (${engine}) keeps its history on this machine, which a leader switch does not carry: only Claude Code sessions move with the leader`
+  // The carry takes the engine's own transcripts (engine-registry.ts historySource); an engine this build does not know is not carried.
+  if (!isKnownEngine(engine) || engineCaps(engine).historySource !== 'provider-jsonl') return `its engine (${engine}) keeps its history on this machine, which a leader switch does not carry: only Claude Code sessions move with the leader`
   // On the old leader: a folder under the home that is a link out of it runs (and keeps its history) outside the home.
   if (home && rec.cwd && relInHome(realPath(rec.cwd), [realPath(home)]) === null) {
     return `its folder ${rec.cwd} leads out of the data home (to ${realPath(rec.cwd)}), so its history is not the home's to carry`
