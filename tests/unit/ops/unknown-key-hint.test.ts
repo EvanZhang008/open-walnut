@@ -582,3 +582,33 @@ describe('every op in the registry', () => {
     expect(wrong, 'an op whose key of that name means another thing: give it its own KEY_NOTES line, or rename the key').toEqual([])
   })
 })
+
+// 2026-11-26 and 27 (real calls, both hosts' transcripts): a value of another kind than the key takes
+// was refused with the types alone, and memory_read's `query` was told "did you mean doc".
+describe('a value of the wrong kind names what its key takes', () => {
+  it('an object key given a string, and a choice given a list, get the key\'s own description', () => {
+    expect(refusal(op('host_exec'), { host: 'devbox', command: 'git log', wait_for: 'exit' }))
+      .toMatch(/wait_for: Invalid input: expected object, received string; wait_for is: Return as soon as one holds/)
+    expect(refusal(op('task_list'), { scope: 'all', fields: ['id', 'title', 'phase'] }))
+      .toContain('; fields is: list = slim rows (default); full = every field')
+  })
+
+  it('a choice given a wrong word keeps zod\'s list of options alone; a key left out is told it is required, as before', () => {
+    const sort = refusal(op('task_list'), { sort: 'updated' })
+    expect(sort).toContain('expected one of')
+    expect(sort).not.toContain('sort is:')
+    expect(refusal(op('host_exec'), { command: 'echo' })).not.toContain(' is: ')
+  })
+
+  it('a list where one comma-separated string goes keeps its own spelled-out line', () => {
+    const msg = refusal(op('task_list'), { ids: ['mw72orri-8a87'] })
+    expect(msg).toContain('ids takes one comma-separated string')
+    expect(msg).not.toContain('ids is:')
+  })
+
+  it('memory_read asked to search is sent to search, never to "doc"', () => {
+    const msg = refusal(op('memory_read'), { query: 'companion deploy' })
+    expect(msg).toContain('use search "q"')
+    expect(msg).not.toContain('did you mean "doc"')
+  })
+})

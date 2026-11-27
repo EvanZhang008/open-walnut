@@ -157,7 +157,8 @@ export async function testRoutineCheck(
   return answerOf((await waitTestRun<FinishedTest>(started, answerBy))!);
 }
 
-type FinishedTest = { result: TriggersTestResult; timeLimit: TestTimeLimit };
+/** `callsRefused`: the run's `walnut` calls an op refused for their arguments (check-call-refused.ts). */
+type FinishedTest = { result: TriggersTestResult; timeLimit: TestTimeLimit; callsRefused?: Array<{ op: string; message: string }> };
 
 /** The test run id a task's session's test runs under (trigger-caller.ts), or undefined for anyone else. */
 async function testCheckCallerFor(callerSid: string | undefined, host: string, limitSeconds: number): Promise<string | undefined> {
@@ -217,8 +218,12 @@ async function runTestOnce(
     });
   }
   const warning = limitWarning(use, 'This test run');
+  // The run's own calls an op refused for their arguments: a check that drops them never sees what it watches.
+  const { testRunRefusals } = await import('./check-call-refused.js');
+  const callsRefused = testRunRefusals(params.checkCaller);
   return {
     result,
+    ...(callsRefused.length ? { callsRefused } : {}),
     timeLimit: {
       seconds: limitS,
       ...(use ? { durationMs: use.durationMs, share: use.share, killed, line: limitUseLine(use) } : {}),

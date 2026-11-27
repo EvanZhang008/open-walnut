@@ -462,6 +462,7 @@ defineOp({
     }) as {
       result?: Record<string, unknown>; timeLimit?: { seconds?: number; line?: string; warning?: string }
       pending?: { testId: string; host?: string; limitSeconds?: number; runningForMs?: number }
+      callsRefused?: Array<{ op?: string; message?: string }>
     } | undefined
     // Run on this host while the server is away (a host's follower): its own words.
     const away = awayAnswer(body)
@@ -496,10 +497,20 @@ defineOp({
     const limit = body?.timeLimit
     const time = limit?.line ? ` It ${limit.line}.` : ''
     const timeWarning = limit?.warning ? ` WARNING: ${limit.warning}` : ''
+    // A walnut call of the check refused for its arguments never runs: an answer read from it is wrong.
+    const refused = (body?.callsRefused ?? []).filter((c) => c && typeof c.op === 'string')
+    const many = refused.length > 1
+    const refusedWarning = refused.length
+      ? ` WARNING: the check's walnut call${many ? 's' : ''} ${refused.map((c) => `${c.op} (${String(c.message ?? '').slice(0, 300)})`).join('; ')} `
+        + `${many ? 'were' : 'was'} refused for ${many ? 'their' : 'its'} arguments, so ${many ? 'they' : 'it'} never ran; `
+        + `an answer read from ${many ? 'them' : 'it'} is not what the check watches.`
+      : ''
     return withOutcome(
       framedTestRun({ ...(body ?? {}) }),
-      `${outcome}${time}${timeWarning}`,
-      !result.parsed
+      `${outcome}${time}${timeWarning}${refusedWarning}`,
+      refused.length
+        ? `Fix the refused call in the script (its arguments as the op takes them), test again, and let the script fail (non-zero exit) when a walnut call fails, so it never reads as "nothing yet".`
+      : !result.parsed
         ? 'Fix the script so its LAST stdout line is one JSON object with a boolean "fire", then test again.'
         : limit?.warning
           ? `Make it finish well inside its time limit (or pass a larger timeoutSeconds), test again, then ${armed

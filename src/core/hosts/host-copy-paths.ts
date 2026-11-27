@@ -29,6 +29,36 @@ export function taskDirGuess(taskId?: string): string {
 
 const TASK_DIR_NOTE = 'where XDG_STATE_HOME is not set; `echo "$WALNUT_TASK_DIR"` in your Bash shows yours, and on another host it is the taskDir a host_exec answer names'
 
+/** `clouddev:/home/x`: a path with a host in front, as scp writes it. */
+const HOST_PREFIX_RE = /^([A-Za-z0-9_][A-Za-z0-9_.-]{0,63}):(?=\/|~\/|~$)/
+
+/**
+ * A side written `host:/path`, as scp takes it, read as that side's host and its path (2026-11-26 and
+ * 27: 4 host_copy calls in a day wrote `clouddev:/home/...`, refused with a hint naming a wrong path).
+ * Only when the prefix names a host Walnut knows (`known`) and the side's own host key names no other
+ * host: an absolute path never starts with one. Returns the params to copy with.
+ */
+export async function withHostPrefixes<P extends { from?: unknown; to?: unknown; from_host?: unknown; to_host?: unknown }>(
+  params: P, known: (host: string) => Promise<string | null>,
+): Promise<P> {
+  const out = { ...params }
+  for (const side of ['from', 'to'] as const) {
+    const p = out[side]
+    const m = typeof p === 'string' ? HOST_PREFIX_RE.exec(p) : null
+    if (!m) continue
+    const named = await known(m[1]!)
+    if (!named) continue
+    const key = side === 'from' ? 'from_host' : 'to_host'
+    const given = typeof out[key] === 'string' ? (out[key] as string).trim() : ''
+    const rest = (p as string).slice(m[0].length)
+    if (given && (await known(given)) !== named) {
+      throw bad(`${side} names host ${m[1]} in front of its path, but ${key} is ${given}: name the host once, in ${key}, and write ${side} as the path alone ("${rest}").`)
+    }
+    Object.assign(out, { [key]: m[1], [side]: rest })
+  }
+  return out
+}
+
 /**
  * A path as a host's daemon takes it: absolute or under `~`, never relative (the daemon's own cwd).
  * A refusal says the path to write instead (2026-11-21: 37 of a week's host_copy calls had a bad
@@ -41,6 +71,12 @@ export function checkPath(p: unknown, what: 'from' | 'to', taskId?: string): str
   if (!(p === '~' || p.startsWith('~/') || p.startsWith('/'))) {
     const taskDir = /^\$(\{WALNUT_TASK_DIR\}|WALNUT_TASK_DIR\b)/.exec(p)
     const home = /^\$(\{HOME\}|HOME\b)/.exec(p)
+    // `name:/path` with a name that is no host Walnut knows (a known one is read as the host: withHostPrefixes).
+    const prefixed = HOST_PREFIX_RE.exec(p)
+    if (prefixed) {
+      throw bad(`${what} must be absolute or start with ~/: ${p}. "${prefixed[1]}" in front of it is no host Walnut knows (host_list names them); `
+        + `name the host in ${what}_host and write ${what} as the path alone ("${p.slice(prefixed[0].length)}").`)
+    }
     const fixed = taskDir ? `${taskDirGuess(taskId)}${p.slice(taskDir[0].length)}`
       : home ? `~${p.slice(home[0].length)}`
       : p.startsWith('$') ? null

@@ -256,6 +256,26 @@ describe('host_copy', () => {
     expect(gate.asked.map((a) => a.host)).toEqual(['macbox'])
   })
 
+  // 2026-11-26 and 27: four calls wrote `clouddev:/home/...` as scp does, refused with a hint naming a wrong path.
+  it('a side written host:path, as scp takes it, is that host and that path', async () => {
+    put('devbox', 'work/a.txt', 'scp style')
+    const r = await copyBetweenHosts({ from: 'devbox:~/work/a.txt', to: `macbox:${path.join(hosts.macbox!.home, 'in')}/` }, SID)
+    expect(r).toMatchObject({ from_host: 'devbox', to_host: 'macbox', from: '~/work/a.txt', to: path.join(hosts.macbox!.home, 'in', 'a.txt'), bytes: 9 })
+    expect(fs.readFileSync(path.join(hosts.macbox!.home, 'in', 'a.txt'), 'utf8')).toBe('scp style')
+    // The same host named in both places reads once.
+    const again = await copyBetweenHosts({ from: 'devbox:~/work/a.txt', to_host: 'macbox', to: 'macbox:~/in2/' }, SID)
+    expect(again).toMatchObject({ to_host: 'macbox', to: '~/in2/a.txt' })
+    // A name in front that is no host: the fix is named, never a path under the task directory.
+    const unknown = await refusal(copyBetweenHosts({ from: 'nosuchbox:/tmp/a', to_host: 'macbox', to: '~/y' }, SID))
+    expect(unknown).toMatchObject({ status: 400, code: 'bad_request' })
+    expect(unknown.message).toContain('"nosuchbox" in front of it is no host Walnut knows')
+    expect(unknown.message).toContain('write from as the path alone ("/tmp/a")')
+    expect(unknown.message).not.toContain('Most likely')
+    // Another host in front than the side's own key names: refused, nothing guessed.
+    expect(await refusal(copyBetweenHosts({ from_host: 'linuxbox', from: 'devbox:~/work/a.txt', to_host: 'macbox', to: '~/y' }, SID)))
+      .toMatchObject({ status: 400, code: 'bad_request', message: expect.stringContaining('name the host once, in from_host') })
+  })
+
   it('refuses what it cannot copy, before any byte is written', async () => {
     expect(await refusal(copyBetweenHosts({ from: '~/x', to: '~/y' }, undefined))).toMatchObject({ status: 403, code: 'session_only', message: expect.stringContaining('host_copy') })
     expect(await refusal(copyBetweenHosts({ from: '~/x', to: '~/y' }, SID))).toMatchObject({ status: 400, code: 'same_host' })

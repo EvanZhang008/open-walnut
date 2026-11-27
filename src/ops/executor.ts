@@ -40,7 +40,7 @@ import {
   LOCAL_ORIGIN, ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
 } from '../lib/caller-origin.js'
 import { selfCallRefusal } from './origin-policy.js'
-import { declaredKeysNote, inferRenames, invalidTypeHint, renameNote, unknownKeyHint, unknownKeyNotes } from './arg-hints.js'
+import { declaredKeysNote, inferRenames, invalidTypeHint, keyMeaningHint, renameNote, unknownKeyHint, unknownKeyNotes } from './arg-hints.js'
 import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
 import { runOnce } from './op-calls.js'
 import { heldAwayResult, isBareAwayQueued } from './outcome.js'
@@ -578,7 +578,8 @@ export function parseOpArgs(
         ? unknownKeyHint(op.input, input, i.path, i.keys, op.name, core)
           + unknownKeyNotes(op.input, i.path, i.keys, op.name)
           + declaredKeysNote(op.input, i.path, i.path.length ? `${op.name} ${i.path.join('.')}` : op.name)
-        : i.code === 'invalid_type' ? invalidTypeHint(op.input, input, i.path, i.expected) : ''
+        : i.code === 'invalid_type' ? invalidTypeHint(op.input, input, i.path, i.expected) || keyMeaningHint(op.input, input, i.path, i.code)
+        : keyMeaningHint(op.input, input, i.path, i.code)
       return `${i.path.join('.') || '(root)'}: ${i.message}${hint}`
     }).join('; ')
     return { ok: false, message: `Invalid arguments for ${op.name}: ${issues}`, invalidArgs: true }

@@ -105,6 +105,27 @@ function refused(message: string, code: string, data: Record<string, unknown> = 
 export async function triggerCallerInScope(now = Date.now()): Promise<Caller | null> {
   const h = held.get(scope.getStore(), now)
   if (!h) return null
+  return (await actsFor(h, now)).caller
+}
+
+/**
+ * Whom a check's call that `host`'s daemon relayed acts for, read from its raw `triggerCaller` as
+ * triggerCallerInScope reads a held one: null when no trigger or test run of that host stands
+ * behind it (routines/check-call-refused.ts: who hears a call the op refused).
+ */
+export async function vouchedCheckCaller(raw: unknown, host: string, now = Date.now()): Promise<{ kind: 'armed' | 'test'; id: string; taskId: string; name: string } | null> {
+  const ref = refOf(raw)
+  if (!ref || !host) return null
+  try {
+    const { caller, name } = await actsFor({ ref, host: normHost(host) }, now)
+    return caller.taskId ? { kind: ref.kind, id: ref.id, taskId: caller.taskId, name: name ?? ref.id } : null
+  } catch {
+    return null
+  }
+}
+
+/** The task a trigger reference relayed by its host acts for; throws the refusal when it acts for none. */
+async function actsFor(h: Held, now: number): Promise<{ caller: Caller; name?: string }> {
   const { getTask } = await import('../task-manager.js')
   // The caller is on the host its check runs on, under that host's own alias, whichever alias's
   // link relayed the call: the same-host checks downstream (host-exec-target, host-copy, grants)
@@ -120,7 +141,7 @@ export async function triggerCallerInScope(now = Date.now()): Promise<Caller | n
     if (!run || run.until <= now || !(await oneHost(h.host, run.host))) {
       throw refused('This test of a check is over, or ran on another host; nothing ran.', 'trigger_test_over')
     }
-    return titled(run.taskId, run.host)
+    return { caller: await titled(run.taskId, run.host) }
   }
   const { getRoutine } = await import('../routines/routines-core.js')
   const job = await getRoutine(h.ref.id).then((r) => r.job as Record<string, unknown>).catch(() => null)
@@ -140,7 +161,7 @@ export async function triggerCallerInScope(now = Date.now()): Promise<Caller | n
   if (!taskId) {
     throw refused(`Trigger ${h.ref.id}'s check was written by no task's session, so it runs nothing on other hosts; re-arm it from the task's session.`, 'trigger_no_task', { triggerId: h.ref.id })
   }
-  return titled(taskId, checkHost)
+  return { caller: await titled(taskId, checkHost), ...(typeof job.name === 'string' && job.name ? { name: job.name } : {}) }
 }
 
 /**

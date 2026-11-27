@@ -37,7 +37,7 @@ import path from 'node:path'
 import { log } from '../../logging/index.js'
 import { MAX_UPLOAD_FRAME_BYTES } from '../../providers/ssh-upload-budget.js'
 import { HostExecError, budgetLeft, callerOf, grantFor, hostName, type Caller } from './host-exec.js'
-import { checkPath, macPlace, macSide, planTarget, probe, refuseMacPlace, refuseProtected, sourceSize, trimSlashes, type MacSide } from './host-copy-paths.js'
+import { checkPath, macPlace, macSide, planTarget, probe, refuseMacPlace, refuseProtected, sourceSize, trimSlashes, withHostPrefixes, type MacSide } from './host-copy-paths.js'
 import { noteFinalAnswer } from './repeat-answers.js'
 import { clause } from '../../utils/format.js'
 
@@ -116,6 +116,14 @@ async function joinedRow(host: string): Promise<string> {
   const [{ getConfig }, { foundTwinAliasOf }] = await Promise.all([import('../config-manager.js'), import('./joined-twins.js')])
   const config = await getConfig()
   return foundTwinAliasOf(config.hosts ?? {}, config.net)(host) || host
+}
+
+/** The host row `name` is (an alias, `local`, a found twin), or null when Walnut knows no such host. */
+async function knownHost(name: string): Promise<string | null> {
+  const host = await joinedRow(name === 'local' ? LOCAL : name)
+  if (host === LOCAL) return host
+  const { getConfig } = await import('../config-manager.js')
+  return Object.hasOwn((await getConfig()).hosts ?? {}, host) ? host : null
 }
 
 /** One side's host: `def` when not named, else an alias or a `@tag` selector (a named found twin is its joined row). */
@@ -439,8 +447,9 @@ async function checkedPaths(params: CopyParams, callerSid: string | undefined): 
 }
 
 /** Copy one file between two hosts for the caller's task (see the file comment). */
-export async function copyBetweenHosts(params: CopyParams, callerSid: string | undefined): Promise<Record<string, unknown>> {
+export async function copyBetweenHosts(input: CopyParams, callerSid: string | undefined): Promise<Record<string, unknown>> {
   const t0 = Date.now()
+  const params = await withHostPrefixes(input, knownHost)
   const { from, to } = await checkedPaths(params, callerSid)
   const asked = typeof params.copy_id === 'string' && params.copy_id !== '' ? params.copy_id : null
   if (asked !== null && !COPY_ID_RE.test(asked)) throw new HostExecError('copy_id must be hc- and 4 to 64 letters, digits, - or _ (the walnut CLI picks one)', 400, 'bad_request')

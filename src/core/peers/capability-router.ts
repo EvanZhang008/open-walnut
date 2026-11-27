@@ -487,6 +487,13 @@ callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { caller
   if (!r.ok && r.lost) {
     return err('hub_timeout', `the Walnut server's own call to its API got no answer, so ${name} may have run: ${r.message}`, r.result === undefined ? undefined : { detail: r.result });
   }
+  // A trigger check's call the op refused for its arguments can never run as written, and a script
+  // that drops the error reads it as "nothing yet": its trigger's task, or the test's answer, hears it
+  // (routines/check-call-refused.ts).
+  if (!r.ok && r.invalidArgs && payload.triggerCaller) {
+    const { noteCheckCallRefused } = await import('../routines/check-call-refused.js');
+    void noteCheckCallRefused(payload.triggerCaller, host, name, r.message);
+  }
   // Arguments the op does not take are the caller's to fix (bad_request), never an internal fault.
   // The code stays what older CLIs already read; `opStatus` tells the relay's log the API answered.
   // `api` is how the API answered (its status and code), for a trigger check's machine faults

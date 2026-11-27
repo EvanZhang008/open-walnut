@@ -39,7 +39,8 @@
  * do instead (unknownKeyNotes): a key in another unit (`timeout` where the op
  * takes `timeout_ms`) is never read as it, it is told the key and its unit. A
  * list where the op takes one comma-separated string gets that string spelled
- * out (invalidTypeHint). No value is coerced.
+ * out (invalidTypeHint); any other value of the wrong kind gets the key's own
+ * description (keyMeaningHint). No value is coerced.
  */
 
 import type { z } from 'zod'
@@ -219,6 +220,13 @@ export const KEY_NOTES: readonly { keys: readonly string[]; declared?: string; o
     ops: ['board_get', 'board_set', 'board_edit', 'board_post', 'board_remind', 'board_lanes_set', 'board_card_set'],
     keys: ['id'],
     note: (key) => `"${key}" is no key here: the board's task is "task" (default: your team's board)`,
+  },
+  {
+    // 2026-11-27: memory_read called with a search; it reads one whole file.
+    ops: ['memory_read'],
+    keys: ['query', 'q', 'search', 'keyword', 'keywords', 'term', 'text'],
+    note: (key) => `"${key}" is no key here: memory_read reads one whole memory file ("doc": global or user); `
+      + 'to search memory, notes and past work, use search "q"',
   },
   {
     ops: ['host_load'],
@@ -409,6 +417,26 @@ function keyNote(shape: Shape, path: PropertyKey[], key: string, op: string | un
   return KEY_NOTES.find((n) => n.keys.includes(key)
     && (n.declared === undefined || Object.prototype.hasOwnProperty.call(shape, n.declared))
     && (n.ops === undefined || (path.length === 0 && op !== undefined && n.ops.includes(op))))
+}
+
+/**
+ * A value of another kind than its key takes (an object key given a string, a choice given a list):
+ * what the key is, from its own description, so the next call is right. `code` is zod's issue code:
+ * a choice given a string is told its options by zod already. 2026-11-26 and 27: host_exec
+ * `wait_for: "exit"` and task_list `fields: ["id", "title"]` were refused with the types alone.
+ */
+export function keyMeaningHint(root: Shape, data: unknown, path: PropertyKey[], code: string): string {
+  const key = path[path.length - 1]
+  if (typeof key !== 'string') return ''
+  const value = valueAt(data, path)
+  // A key left out is told it is required, as before; a choice given a string has its options from zod.
+  if (value === undefined || (code === 'invalid_value' && typeof value === 'string')) return ''
+  if (code !== 'invalid_type' && code !== 'invalid_value') return ''
+  const shape = shapeAt(root, path.slice(0, -1))
+  if (!shape || !Object.prototype.hasOwnProperty.call(shape, key)) return ''
+  const d = descriptionOf(shape[key]).trim()
+  if (!d) return ''
+  return `; ${key} is: ${d.length > 300 ? `${d.slice(0, 300)}…` : d}`
 }
 
 /** The field's description, read through its optional/default/pipe wrappers. */
