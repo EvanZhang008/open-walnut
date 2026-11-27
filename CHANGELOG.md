@@ -18,6 +18,7 @@ breaking changes).
 
 ### Fixed
 
+- The server no longer stands still for about three seconds a minute after each start: judging the ended real-use watches again reads only each target's own rows, and the server answers between two watches
 - A trigger check's Walnut call that Walnut refuses as written (arguments the tool does not take, a tool name that does not exist, bad JSON, a step only a person may take) is told to the task that wrote the check, for every tool and from every host, and `trigger_test` names it, so a check that drops the error no longer stays quiet and blind. A check on the Mac can now call a plugin's tool
 - The server no longer freezes for one to two seconds every hour: the session daemon's hourly cleanup of old pictures and logs, and its sweeps of old session streams, now read the disk without holding the server
 - A session daemon that keeps running after its port, pid and instance files were removed (a temp-folder cleanup) is found through its instance lock and used, then updated as usual; sessions no longer fail to start with "port file not created within 10s", on this machine or a remote host

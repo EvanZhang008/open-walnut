@@ -124,9 +124,8 @@ export function targetCovers(target: string, kind: UsageKind, name: string): boo
 /** The page requests named like a page target that went wrong on their way, over [since, until). */
 function pageRequestsOf(word: string, since: number, until: number): number {
   let n = 0
-  for (const r of readHours(Math.floor(since / HOUR_MS) * HOUR_MS, { kind: 'page' })) {
-    if (r.hour < until && r.name.includes(word) && pageRequestOf(r.name) !== null) n += r.agg.calls
-  }
+  const covers = (_k: UsageKind, name: string) => name.includes(word) && pageRequestOf(name) !== null
+  for (const r of readHours(Math.floor(since / HOUR_MS) * HOUR_MS, { kind: 'page', untilHour: until, covers })) n += r.agg.calls
   return n
 }
 
@@ -191,10 +190,9 @@ function mergedFor(target: string, since: number, until: number): Agg {
   // first whole hour; only one too short to hold a whole hour counts the hour it starts in.
   const next = Math.ceil(since / HOUR_MS) * HOUR_MS
   const from = next + HOUR_MS <= until ? next : Math.floor(since / HOUR_MS) * HOUR_MS
-  for (const r of readHours(from, { kind })) {
-    if (r.hour >= until || !targetCovers(target, r.kind, r.name)) continue
-    out = mergeAgg(out, r.agg)
-  }
+  // Only this target's rows are read (store.ts readHours): an op target names its one row a hour.
+  const only = target.startsWith('op:') ? { name: target.slice(3) } : { covers: (k: UsageKind, name: string) => targetCovers(target, k, name) }
+  for (const r of readHours(from, { kind, untilHour: until, ...only })) out = mergeAgg(out, r.agg)
   return out
 }
 

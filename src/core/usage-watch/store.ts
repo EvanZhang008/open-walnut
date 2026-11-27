@@ -153,16 +153,54 @@ export function addHoursOnce(batch: string, rows: ReadonlyArray<{ hour: number; 
   })
 }
 
-/** Every hour row from `sinceHour` on (epoch ms of the hour), optionally one kind and name. */
-export function readHours(sinceHour: number, filter?: { kind?: UsageKind; name?: string }): Array<{ hour: number; kind: UsageKind; name: string; agg: Agg }> {
+/** At most this many names in one `IN (...)` (SQLite's bound parameters per statement). */
+const NAMES_PER_READ = 500
+
+export interface HourFilter {
+  kind?: UsageKind
+  name?: string
+  /** Rows before this hour only (epoch ms of the hour). */
+  untilHour?: number
+  /** Only rows whose name this keeps: the names are read first, and only the kept rows' sums are read and parsed. */
+  covers?: (kind: UsageKind, name: string) => boolean
+}
+
+/**
+ * Every hour row from `sinceHour` on (epoch ms of the hour), optionally one kind, one name, a span and
+ * the names a caller covers. Runs on the server's loop: a reader of one target names it (`name` or
+ * `covers`), so it reads and parses that target's rows only, never every row of its kind (2026-11-27:
+ * the boot's judging of 67 watches read and parsed the 12,000 request rows once per target, and held
+ * the Mac's server 2.5 to 3.2 s at every start).
+ */
+export function readHours(sinceHour: number, filter: HourFilter = {}): Array<{ hour: number; kind: UsageKind; name: string; agg: Agg }> {
   return withStore([], (d) => {
     const where = ['hour >= ?']
     const args: unknown[] = [sinceHour]
-    if (filter?.kind) { where.push('kind = ?'); args.push(filter.kind) }
-    if (filter?.name) { where.push('name = ?'); args.push(filter.name) }
-    const rows = d.prepare(`SELECT hour, kind, name, agg FROM hours WHERE ${where.join(' AND ')}`).all(...args) as Array<{ hour: number; kind: UsageKind; name: string; agg: string }>
-    return rows.map((r) => ({ hour: r.hour, kind: r.kind, name: r.name, agg: parseAgg(r.agg) }))
+    if (filter.untilHour !== undefined) { where.push('hour < ?'); args.push(filter.untilHour) }
+    if (filter.kind) { where.push('kind = ?'); args.push(filter.kind) }
+    if (filter.name) { where.push('name = ?'); args.push(filter.name) }
+    type Raw = { hour: number; kind: UsageKind; name: string; agg: string }
+    const parsed = (rows: Raw[]) => rows.map((r) => ({ hour: r.hour, kind: r.kind, name: r.name, agg: parseAgg(r.agg) }))
+    const covers = filter.covers
+    if (!covers) return parsed(d.prepare(`SELECT hour, kind, name, agg FROM hours WHERE ${where.join(' AND ')}`).all(...args) as Raw[])
+    // The names alone come from the table's key; the sums only of the names kept.
+    const names = d.prepare(`SELECT DISTINCT kind, name FROM hours WHERE ${where.join(' AND ')}`).all(...args) as Array<{ kind: UsageKind; name: string }>
+    const kept = names.filter((n) => covers(n.kind, n.name))
+    const out: Array<{ hour: number; kind: UsageKind; name: string; agg: Agg }> = []
+    for (let i = 0; i < kept.length; i += NAMES_PER_READ) {
+      const part = kept.slice(i, i + NAMES_PER_READ)
+      const pairs = part.map(() => '(kind = ? AND name = ?)').join(' OR ')
+      const rows = d.prepare(`SELECT hour, kind, name, agg FROM hours WHERE ${where.join(' AND ')} AND (${pairs})`)
+        .all(...args, ...part.flatMap((n) => [n.kind, n.name])) as Raw[]
+      out.push(...parsed(rows))
+    }
+    return out
   })
+}
+
+/** The names recorded from `sinceHour` on, of one kind: no sums read. */
+export function readHourNames(sinceHour: number, kind: UsageKind): string[] {
+  return withStore([], (d) => (d.prepare('SELECT DISTINCT name FROM hours WHERE hour >= ? AND kind = ?').all(sinceHour, kind) as Array<{ name: string }>).map((r) => r.name))
 }
 
 /** One problem call, for the owner to read: no session or task id, no content. */

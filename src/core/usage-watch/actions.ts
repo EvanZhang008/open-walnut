@@ -8,7 +8,7 @@ import { readRange, usageReport, targetEvents, type ReportRow } from './report.j
 import { callerSide, ownFaults } from './agg.js'
 import { ERROR_GROUPS, toolErrorsReport, type ErrorGroup } from './tool-errors.js'
 import { isCountedPlace, pageTargetProblem, placeUseOf } from './page-uses.js'
-import { readHours, readPageUseKeys } from './store.js'
+import { readHourNames, readPageUseKeys } from './store.js'
 import { routeShape, servedRouteName } from './route-target.js'
 import { visitKeyOfTarget } from '../page-places.js'
 import {
@@ -286,11 +286,12 @@ function routeTargetProblem(target: string, now: number): string {
     return n
   }
   const names = new Map<string, number>()
-  for (const r of readHours(Math.floor((now - 7 * 86_400_000) / 3_600_000) * 3_600_000, { kind: 'http' })) {
-    if (names.has(r.name) || (method && !r.name.startsWith(`${method} `))) continue
-    const n = shared(r.name)
+  // The names only: no request's sums are read for a refusal's words.
+  for (const name of readHourNames(Math.floor((now - 7 * 86_400_000) / 3_600_000) * 3_600_000, 'http')) {
+    if (names.has(name) || (method && !name.startsWith(`${method} `))) continue
+    const n = shared(name)
     // More than the empty head and `api`: a route of the same area.
-    if (n > 2) names.set(r.name, n)
+    if (n > 2) names.set(name, n)
   }
   const near = [...names].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8).map(([n]) => `route:${n}`)
   return `"${target.slice(0, 120)}" is no route this server serves, so its watch could never see a use. Name the route as its server records it (route:<METHOD> <template>, the template its router matches)${near.length ? `; recorded lately: ${near.join(', ')}` : ''}.`

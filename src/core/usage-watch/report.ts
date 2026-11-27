@@ -67,8 +67,9 @@ export function usageReport(range: ReportRange, opts: { now?: number; target?: s
   const steps = span / step
   const per = new Map<string, { kind: UsageKind; name: string; agg: Agg; series: Array<{ at: number; uses: number; bad: number }> }>()
   let first: number | null = null
-  for (const r of readHours(from)) {
-    if (opts.target && !targetCovers(opts.target, r.kind, r.name)) continue
+  // One target's report reads that target's rows only (store.ts readHours).
+  const target = opts.target
+  for (const r of readHours(from, target ? { covers: (kind, name) => targetCovers(target, kind, name) } : {})) {
     if (first === null || r.hour < first) first = r.hour
     const key = `${r.kind}\t${r.name}`
     let p = per.get(key)

@@ -97,11 +97,19 @@ async function judgeInputs(): Promise<JudgeInputs> {
   }
 }
 
+/**
+ * Each watch is judged on the server's loop (its rows read and summed at once): between two, the
+ * loop answers what waits, so a batch of watches never holds it as one (2026-11-27: the boot's
+ * 67 watches judged back to back held the Mac's server 2.5 to 3.2 s at every start).
+ */
+const nextWatch = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
 /** A watch's check time came: judge it, keep the verdict, tell whoever still owns it. */
 async function checkDueWatches(now = Date.now()): Promise<void> {
   const due = listWatches({ states: ['watching'] }).filter((w) => w.checkAt <= now)
   const inputs = due.length ? await judgeInputs() : {}
   for (const w of due) {
+    await nextWatch()
     const v = judgeWatch(w, now, inputs)
     if (v.state === 'extended') {
       putWatch({ ...w, extended: true, checkAt: now + (w.checkAt - w.createdAt), result: v.results })
@@ -131,6 +139,7 @@ export async function rejudgeEndedWatches(now = Date.now()): Promise<void> {
     .filter((w) => (w.checkedAt ?? 0) >= now - REJUDGE_UNKNOWN_MS && (w.state === 'unknown' || passedOnNoUse(w)))
   const inputs = recent.length ? await judgeInputs() : {}
   for (const w of recent) {
+    await nextWatch()
     const v = rejudgeEnded(w, inputs)
     if (!v) continue
     // Read as before (each start judges the ones still short again): nothing to keep.
