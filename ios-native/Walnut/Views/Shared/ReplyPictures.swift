@@ -54,6 +54,7 @@ struct ReplyPictureButton: View {
                 // Beside a field (2 to 4 pt away, it keeps to its frame): 2 pt each side, 44 pt wide.
                 .walnutTouchTarget(WalnutTouchRoom(leading: 2, trailing: 2))
         }
+        .walnutMenuTouch()
         .disabled(disabled || full)
         .accessibilityLabel(images.isEmpty ? "Add a picture" : "Add a picture, \(images.count) attached")
         .accessibilityIdentifier("\(idPrefix).attach")

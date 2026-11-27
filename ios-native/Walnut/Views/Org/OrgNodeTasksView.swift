@@ -62,6 +62,7 @@ struct OrgNodeTasksView: View {
                         .frame(minHeight: 32)
                         .walnutTouchTarget()
                     }
+                    .walnutMenuTouch()
                     .accessibilityLabel("Group by \(mode.label)")
                     .accessibilityIdentifier("org.tasks.mode")
                 }

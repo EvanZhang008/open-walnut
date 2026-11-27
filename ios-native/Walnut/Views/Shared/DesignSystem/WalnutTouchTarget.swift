@@ -11,6 +11,8 @@ import UIKit
 /// - `.walnutTouchRoom(_:)` on a key, or on a row of keys: how far a touch may reach on each side
 ///   before it meets a neighbour's (`WalnutTouchRoom`). The family's styles (`WalnutButtonStyle`,
 ///   `WalnutChipStyle`, `walnutPickerKey`, `PillChip`) read it, so a tight row says it once.
+/// - `.walnutMenuTouch()` on a `Menu` around such a label: a Menu hit-tests only its own frame, so
+///   there the label grows its real frame and the Menu gives the room back outside it.
 /// - A UIKit button laid over a small drawing (`PillMenuUIButton`) takes the touch itself: SwiftUI
 ///   grows its frame past the drawing (`walnutTouchOutset`), and `WalnutTouchUIButton` keeps the
 ///   drawn rect for VoiceOver, XCUITest and its menu's preview.
@@ -83,15 +85,54 @@ struct WalnutTouchShape: Shape {
 private struct WalnutTouchTargetModifier: ViewModifier {
     var room: WalnutTouchRoom?
     @Environment(\.walnutTouchRoom) private var inherited
+    @Environment(\.walnutMenuTouch) private var menu
 
     func body(content: Content) -> some View {
-        content.contentShape(WalnutTouchShape(room: room ?? inherited))
+        let room = room ?? inherited
+        if let menu {
+            // Inside a Menu's label (`walnutMenuTouch()`): grow the real frame, since a Menu takes
+            // taps only inside its own frame; the drawing is measured before it grows.
+            content
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { menu.report($0, room) }
+                .padding(menu.reach)
+                .contentShape(Rectangle())
+        } else {
+            content.contentShape(WalnutTouchShape(room: room))
+        }
+    }
+}
+
+/// What `walnutMenuTouch()` hands the label inside its Menu: how far the label grows its frame,
+/// and where it reports the size it draws (and its room) so that reach can be worked out.
+struct WalnutMenuTouchLink {
+    var reach: EdgeInsets
+    var report: (CGSize, WalnutTouchRoom) -> Void
+}
+
+/// A system Menu takes a tap only inside its own frame: a hit shape inside its label cannot reach
+/// past it (2026-11-27, TouchTargetOrgUITests: a tap 6 pt above a 28 pt Snooze opened nothing). So
+/// the label (its `.walnutTouchTarget()`, or a family style's) grows its frame by its reach, and
+/// this gives that room back outside the Menu with a negative padding: the layout around it does
+/// not move, and the Menu itself is 44 pt to a finger.
+private struct WalnutMenuTouchModifier: ViewModifier {
+    @State private var reach = EdgeInsets()
+
+    func body(content: Content) -> some View {
+        let reach = reach
+        content
+            .environment(\.walnutMenuTouch, WalnutMenuTouchLink(reach: reach) { drawn, room in
+                let next = WalnutTouchTarget.reach(for: drawn, room: room)
+                if next != reach { self.reach = next }
+            })
+            .walnutTouchOutset(reach)
     }
 }
 
 extension EnvironmentValues {
     /// The room a key's touch has on this row (`walnutTouchRoom(_:)`).
     @Entry var walnutTouchRoom = WalnutTouchRoom.open
+    /// Set inside a Menu by `walnutMenuTouch()`; nil everywhere else.
+    @Entry var walnutMenuTouch: WalnutMenuTouchLink? = nil
 }
 
 extension View {
@@ -100,6 +141,13 @@ extension View {
     /// frame and fill; it replaces a `.contentShape(Rectangle())` there.
     func walnutTouchTarget(_ room: WalnutTouchRoom? = nil) -> some View {
         modifier(WalnutTouchTargetModifier(room: room))
+    }
+
+    /// On a `Menu` whose label draws smaller than a finger: its label's `.walnutTouchTarget()` (or
+    /// the family style's) then grows the Menu's own frame, given back outside so nothing moves.
+    /// Apply it to the Menu itself, before its other modifiers (`WalnutMenuTouchModifier`).
+    func walnutMenuTouch() -> some View {
+        modifier(WalnutMenuTouchModifier())
     }
 
     /// The room every small key in here has (`WalnutTouchRoom`), the family's styles included.

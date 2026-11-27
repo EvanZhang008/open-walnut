@@ -236,6 +236,7 @@ struct CalendarTabView: View {
             .frame(height: 32)
             .walnutTouchTarget(.gaps(horizontal: Self.headerKeyGap))
         }
+        .walnutMenuTouch()
         .accessibilityIdentifier("calendar.viewMenu")
     }
 

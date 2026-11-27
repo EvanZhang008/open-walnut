@@ -35,27 +35,50 @@ final class TouchTargetUITests: XCTestCase {
 
     private enum Side { case above, below, left }
 
-    /// Tap `points` past the drawn edge of `control` on `side`, at the middle of that edge. First
-    /// checks the drawing really is under 44 pt on that axis, so a pass proves a grown touch and
-    /// not a tap on the drawing itself.
-    private func tapOutside(_ control: XCUIElement, _ side: Side, by points: CGFloat, in app: XCUIApplication,
-                            file: StaticString = #filePath, line: UInt = #line) {
+    /// Tap past the drawn edge of `control` on `side`, at the middle of that edge, `points` out.
+    /// SwiftUI reports a plain Button's accessibility frame either as its drawing or as its whole
+    /// hit shape (the calendar header read 44 x 44 on 2026-11-27, the composer's `+` its 32 pt
+    /// circle), so the frame is read for what it is:
+    /// - under 44 pt on that axis, it is the drawing: the tap lands `points` past its edge;
+    /// - 44 pt or more, it is the grown touch itself: then `drawn` (the size the view draws on
+    ///   that axis) must be given, and the tap lands `points` past the drawing measured from the
+    ///   frame's centre (the reach is even on an axis with open room), still inside the frame.
+    /// Either way the point is outside the drawing, so a pass proves a grown touch.
+    private func tapOutside(_ control: XCUIElement, _ side: Side, by points: CGFloat, drawn: CGFloat? = nil,
+                            in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(waitToMatch(control, "isHittable == true", timeout: 20),
                       "\(control.identifier) never became hittable", file: file, line: line)
         waitStill(control)
         let frame = control.frame
+        let size = side == .left ? frame.width : frame.height
+        let edge: CGFloat
+        if size < 44 {
+            switch side {
+            case .above: edge = frame.minY
+            case .below: edge = frame.maxY
+            case .left: edge = frame.minX
+            }
+        } else {
+            guard let drawn else {
+                XCTFail("\(control.identifier) reports \(size) pt: give the size it draws", file: file, line: line)
+                return
+            }
+            XCTAssertLessThan(drawn + 2 * points, size + 0.5,
+                              "\(control.identifier): a tap \(points) pt past a \(drawn) pt drawing leaves its \(size) pt touch",
+                              file: file, line: line)
+            switch side {
+            case .above: edge = frame.midY - drawn / 2
+            case .below: edge = frame.midY + drawn / 2
+            case .left: edge = frame.midX - drawn / 2
+            }
+        }
         let point: CGVector
         switch side {
-        case .above:
-            XCTAssertLessThan(frame.height, 44, "\(control.identifier) draws 44 pt tall already", file: file, line: line)
-            point = CGVector(dx: frame.midX, dy: frame.minY - points)
-        case .below:
-            XCTAssertLessThan(frame.height, 44, "\(control.identifier) draws 44 pt tall already", file: file, line: line)
-            point = CGVector(dx: frame.midX, dy: frame.maxY + points)
-        case .left:
-            XCTAssertLessThan(frame.width, 44, "\(control.identifier) draws 44 pt wide already", file: file, line: line)
-            point = CGVector(dx: frame.minX - points, dy: frame.midY)
+        case .above: point = CGVector(dx: frame.midX, dy: edge - points)
+        case .below: point = CGVector(dx: frame.midX, dy: edge + points)
+        case .left: point = CGVector(dx: edge - points, dy: frame.midY)
         }
+        print("[touch] \(control.identifier) frame \(frame), tap at \(point)")
         app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(point).tap()
     }
 
@@ -188,7 +211,15 @@ final class TouchTargetUITests: XCTestCase {
 
         let filter = element(app, "calendar.filterButton")
         XCTAssertTrue(filter.waitForExistence(timeout: 10), "no filter key in the header")
-        tapOutside(filter, .left, by: 10, in: app)
+        // The funnel's reach is lopsided (most of it on its left), so a frame that is its whole
+        // touch is tapped 4 pt inside its left edge: about 14 pt left of the drawing.
+        if filter.frame.width >= 44 {
+            print("[touch] calendar.filterButton frame \(filter.frame)")
+            app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: filter.frame.minX + 4, dy: filter.frame.midY)).tap()
+        } else {
+            tapOutside(filter, .left, by: 10, in: app)
+        }
         XCTAssertTrue(element(app, "calendar.filterSheet").waitForExistence(timeout: 10),
                       "a tap 10 pt left of the funnel did not open the filter")
         element(app, "calendar.filter.done").tap()
@@ -196,35 +227,53 @@ final class TouchTargetUITests: XCTestCase {
 
         let add = element(app, "calendar.add")
         XCTAssertTrue(add.waitForExistence(timeout: 10), "no add key in the header")
-        tapOutside(add, .above, by: openReach(add.frame.height) - 2, in: app)
+        tapOutside(add, .above, by: openReach(32) - 2, drawn: 32, in: app)
         XCTAssertTrue(element(app, "calendar.create.title").waitForExistence(timeout: 10),
                       "a tap just above the add key did not open the create sheet")
         keepScreenshot("touch-calendar-add-above")
     }
+}
 
-    /// Main's chat bar (36 pt keys in a bar with 6 pt around them): a tap 2 pt above Threads opens
-    /// the Threads page. There, Snooze is the family's small tool (28 pt, `WalnutButtonStyle`, a
-    /// system Menu): a tap 6 pt above it opens its choices, so the style's reach works on a Menu.
+/// The org's small keys, on `ChatPlaceFixtureServer` with `OrgThreadsFixture` (a loopback server
+/// this runner hosts; the in-app demo has no org): the VP chat's bar (36 pt keys with 6 pt around
+/// them) and a thread card's Snooze, the family's small tool (28 pt, `WalnutButtonStyle`, a system
+/// Menu). Nothing here sends a message or writes a thread.
+final class TouchTargetOrgUITests: ThreadPushUITestCase {
+    override var shotPrefix: String { "touch" }
+
+    /// The point `out` pt above a key drawn `drawn` pt tall; its frame is either the drawing or,
+    /// 44 pt or more, the grown touch around it (see `TouchTargetUITests.tapOutside`).
+    private func above(_ frame: CGRect, drawn: CGFloat, by out: CGFloat) -> CGVector {
+        let top = frame.height < 44 ? frame.minY : frame.midY - drawn / 2
+        return CGVector(dx: frame.midX, dy: top - out)
+    }
+
+    private func tap(_ point: CGVector) {
+        app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(point).tap()
+    }
+
+    /// A tap 2 pt above Threads on the bar opens the VP's page; there, a tap 6 pt above Snooze
+    /// opens its choices, so the style's reach works on a Menu too.
     func testTheOrgBarAndSnoozeTakeATapAboveTheirDrawing() throws {
-        let app = launchDemo()
-        let chat = app.tab(.chat)
-        XCTAssertTrue(chat.waitForExistence(timeout: 60), "the demo never opened")
-        chat.tap()
-        app.openMainOrgChat()
-        let threads = element(app, "org.bar.threads")
-        tapOutside(threads, .above, by: 2, in: app)
-        XCTAssertTrue(element(app, "org.threads").waitForExistence(timeout: 15),
-                      "a tap 2 pt above Threads did not open the Threads page")
+        try launchToVPChat("bar")
+        let threads = el("org.bar.threads")
+        XCTAssertTrue(waitToMatch(threads, "isHittable == true", timeout: 20), "Threads on the bar is not hittable")
+        waitStill(threads)
+        print("[touch] org.bar.threads frame \(threads.frame)")
+        tap(above(threads.frame, drawn: 36, by: 2))
+        XCTAssertTrue(el("org.node.page").waitForExistence(timeout: 15),
+                      "a tap 2 pt above Threads did not open the VP's page")
+        XCTAssertTrue(cardTitle(ids[0]).waitForExistence(timeout: 20), "the page shows no threads")
 
         let snoozes = app.descendants(matching: .any).matching(identifier: "org.thread.snooze")
-        guard snoozes.firstMatch.waitForExistence(timeout: 15) else {
-            throw XCTSkip("no open thread with Snooze on Main's Threads page in the demo")
-        }
+        XCTAssertTrue(snoozes.firstMatch.waitForExistence(timeout: 15), "no Snooze on the VP's open threads")
         let snooze = try XCTUnwrap((0..<snoozes.count).map { snoozes.element(boundBy: $0) }.first { $0.isHittable },
                                    "no Snooze on screen")
-        tapOutside(snooze, .above, by: 6, in: app)
+        waitStill(snooze)
+        print("[touch] org.thread.snooze frame \(snooze.frame)")
+        tap(above(snooze.frame, drawn: 28, by: 6))
         XCTAssertTrue(app.buttons["In 3 hours"].waitForExistence(timeout: 10),
                       "a tap 6 pt above Snooze did not open its choices")
-        keepScreenshot("touch-snooze-above")
+        shot("snooze-above")
     }
 }

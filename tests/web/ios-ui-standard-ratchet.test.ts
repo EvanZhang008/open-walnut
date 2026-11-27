@@ -516,6 +516,20 @@ describe('iOS UI standard: one look per kind of control', () => {
       expect(offenders, `Keep a 44 pt touch with .walnutTouchTarget(room) on the drawn label (${HELPER}), or list the control in KEEPS_ITS_OWN with why:\n${offenders.join('\n')}`).toEqual([])
     })
 
+    it('a Menu drawn small grows its own frame with walnutMenuTouch()', () => {
+      // 2026-11-27 (TouchTargetOrgUITests on the simulator): a tap 6 pt above a 28 pt Snooze, a
+      // system Menu in the family's small tool style, opened nothing. A Menu takes taps only inside
+      // its own frame, so the hit shape its label grows does not reach past it; `.walnutMenuTouch()`
+      // grows the Menu's real frame and gives the room back outside it.
+      const menus = members.filter((m) => m.menu && !kept(m))
+      for (const id of ['"org.thread.snooze"', '"calendar.viewMenu"', '"org.tasks.mode"']) {
+        expect(menus.some((m) => m.text.includes(id)), id).toBe(true)
+      }
+      const bare = menus.filter((m) => !/\.walnutMenuTouch\(\)/.test(m.text)).map((m) => `${m.at} ${m.id}`)
+      expect(bare, `Put .walnutMenuTouch() on the Menu (${HELPER}):\n${bare.join('\n')}`).toEqual([])
+      expect(read(HELPER)).toMatch(/func walnutMenuTouch\(\) -> some View/)
+    })
+
     it('every control that keeps its own touch is still there and still drawn small', () => {
       const stale = KEEPS_ITS_OWN.filter((k) => !members.some((m) => m.rel === k.rel && m.text.includes(k.match) && !m.through))
       expect(stale.map((k) => `${k.rel}: ${k.match}`), 'gone or fixed: drop it from KEEPS_ITS_OWN').toEqual([])
@@ -555,6 +569,8 @@ describe('iOS UI standard: one look per kind of control', () => {
       // A made-up offender: a 32 pt key with a bare content shape.
       expect(bad(['Button { go() } label: {', '    Image(systemName: "plus")', '        .frame(width: 32, height: 32)', '        .contentShape(Rectangle())', '}', '.accessibilityIdentifier("x.add")'].join('\n'))).toBe(1)
       expect(bad(['Menu {', '    Button("A") { }', '} label: {', '    Text("Group")', '        .frame(minHeight: 32)', '}'].join('\n'))).toBe(1)
+      expect(one(['Menu {', '    Button("A") { }', '} label: {', '    Text("Group")', '        .frame(minHeight: 32)', '}'].join('\n'))[0]?.menu).toBe(true)
+      expect(one(['Button { } label: {', '    Text("Go").frame(minHeight: 32)', '}'].join('\n'))[0]?.menu).toBe(false)
       expect(bad(['Button(action: go) {', '    Image(systemName: "mic")', '        .frame(width: MessageBox.keySize, height: MessageBox.keySize)', '}'].join('\n'))).toBe(1)
       expect(bad(['Button { } label: {', '    Text("Row").frame(maxWidth: .infinity, minHeight: compact ? 44 : 36)', '}'].join('\n'))).toBe(1)
       // Through the helper, or a family style: fine.

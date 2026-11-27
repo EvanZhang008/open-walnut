@@ -396,6 +396,7 @@ struct ActionNeededView: View {
         } label: {
             WalnutMenuLabel(title: "Snooze")
         }
+        .walnutMenuTouch()
         .buttonStyle(.walnut(.tool, size: .small))
         .accessibilityIdentifier("action.snooze.\(item.id)")
     }

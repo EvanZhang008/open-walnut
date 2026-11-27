@@ -1077,6 +1077,7 @@ struct OrgThreadCard: View {
         } label: {
             WalnutMenuLabel(title: snoozed ? "Snoozed" : "Snooze")
         }
+        .walnutMenuTouch()
         .buttonStyle(.walnut(.tool, size: .small))
         .accessibilityIdentifier("org.thread.snooze")
     }

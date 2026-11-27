@@ -311,6 +311,8 @@ export interface TouchMember {
   /** Why it counts as drawn small. */
   small: string
   through: boolean
+  /** A system `Menu`: it takes taps only inside its own frame, so it needs `.walnutMenuTouch()`. */
+  menu: boolean
   /** The control's code (comments gone). */
   text: string
 }
@@ -359,7 +361,7 @@ export function touchMembers(rel: string, src: string): TouchMember[] {
     const small = (smallW && !bigW ? smallW : null) ?? (smallH && !bigH ? smallH : null) ?? style ?? null
     if (!small) return
     const id = text.match(/\.accessibilityIdentifier\(([^)]*(?:\([^)]*\)[^)]*)*)\)/)?.[1]?.trim() ?? line.trim()
-    out.push({ at: `ios-native/${rel}:${i + 1}`, rel, id, small, through: TOUCH_THROUGH.test(text), text })
+    out.push({ at: `ios-native/${rel}:${i + 1}`, rel, id, small, through: TOUCH_THROUGH.test(text), menu: /^\s*Menu\s*[({]/.test(line), text })
   })
   return out
 }
