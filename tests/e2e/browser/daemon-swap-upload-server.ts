@@ -76,7 +76,7 @@ Object.assign(process.env, {
   // program to drain. A deploy's restart of an in-process server is server-restart-upload.spec.ts.
   WALNUT_IN_PROCESS_DAEMON: '0',
 })
-process.argv.push('--_ephemeral-child')
+process.argv.push('--_ephemeral-child', '--_own-accounts')
 fs.mkdirSync(path.join(root, 'bundled-store'), { recursive: true })
 fs.mkdirSync(path.join(root, 'project'), { recursive: true })
 

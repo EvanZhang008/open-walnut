@@ -13,7 +13,7 @@
  *   route cannot be used to point a calendar write at an ordinary mail.
  */
 import { callProvider, MailServiceError } from './contract.js'
-import { assertOutwardDoor, leaderPermitActive } from '../../core/leader/switch/doors.js'
+import { accountDoorsGuarded, assertOutwardDoor } from '../../core/leader/switch/doors.js'
 import type { MailService } from './service.js'
 import type {
   MailAddress,
@@ -143,7 +143,7 @@ export class MailInvites {
       throw new MailServiceError('in-flight', 'Walnut is still sending your answer to this invite.', 409)
     }
     // The outward door: an invite answer is a mail to the organizer.
-    if (leaderPermitActive()) assertOutwardDoor('mail-write', `invite:${accountId}:${request.messageId}`)
+    if (accountDoorsGuarded()) assertOutwardDoor('mail-write', `invite:${accountId}:${request.messageId}`)
     this.answering.set(key, response)
     try {
       const answered = await callProvider(

@@ -40,7 +40,7 @@ process.env.HOME = tmpBase
 process.env.USERPROFILE = tmpBase
 // An empty bundled store: Rhythm is linked below, and must not also list as bundled.
 process.env.WALNUT_BUNDLED_STORE_DIR = path.join(tmpBase, 'bundled-store')
-process.argv.push('--_ephemeral-child')
+process.argv.push('--_ephemeral-child', '--_own-accounts')
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
 

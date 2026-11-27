@@ -12,7 +12,7 @@ const port = Number(process.env.PW_TEST_PORT ?? 3542)
 if (port === 3456) throw new Error('Production port is forbidden')
 const daemonBin = process.env.RESTART_FIXTURE_DAEMON_BIN
 if (!daemonBin || !fs.existsSync(daemonBin)) throw new Error('RESTART_FIXTURE_DAEMON_BIN is required')
-process.argv.push('--_ephemeral-child')
+process.argv.push('--_ephemeral-child', '--_own-accounts')
 
 const { localDaemon } = await import('../../../src/providers/local-daemon.js')
 ;(localDaemon as unknown as { findDaemonBinary: () => string }).findDaemonBinary = () => daemonBin

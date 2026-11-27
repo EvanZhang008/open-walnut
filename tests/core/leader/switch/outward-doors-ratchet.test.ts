@@ -16,7 +16,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { OUTWARD_DOORS, setOutwardDoorChecker } from '../../../../src/core/leader/switch/doors.js'
+import { DOOR_REACH, OUTWARD_DOORS, setOutwardDoorChecker } from '../../../../src/core/leader/switch/doors.js'
 import { guardSync, SYNC_METHOD_DOORS } from '../../../../src/core/private-tasks/sync-guard.js'
 import type { IntegrationSync } from '../../../../src/core/integration-types.js'
 
@@ -169,9 +169,13 @@ describe('every outward primitive is called only where a door guards it (source)
   })
 
   it('the mail server is changed (read flags, moves, invite answers) only behind the mail-write doors', () => {
-    expect(sites(/spec\.(markRead|markReadMany|moveMany|archiveMany|respondToInvite)(?:!|\?\.)\(/), NEW_SITE).toEqual({
+    // A provider reached by any name: `spec.x`, `provider(id).x`, `this.deps.service.provider(id).x`.
+    const via = String.raw`(?:\bspec|provider\([^()]*\))\s*`
+    const writes = Object.entries(MAIL_PROVIDER_METHODS).filter(([, w]) => w === 'write').map(([m]) => m).filter((m) => m !== 'send')
+    expect(sites(new RegExp(`${via}\\.(${writes.join('|')})(?:!|\\?\\.)?\\(`)), NEW_SITE).toEqual({
       'integrations/mail/service.ts': 2, 'integrations/mail/mail-filter-moves.ts': 2, 'integrations/mail/invites.ts': 1,
     })
+    expect(sites(new RegExp(`${via}\\.send(?:!|\\?\\.)?\\(`)), NEW_SITE).toEqual({ 'integrations/mail/sends.ts': 1 })
     // The IMAP provider's writes, reached only through those calls.
     expect(sites(/client\.(messageMove|messageFlagsAdd|messageFlagsRemove|mailboxCreate)(?:\?\.)?\(/), NEW_SITE)
       .toEqual({ 'integrations/mail-imap/provider.ts': 6 })
@@ -191,11 +195,57 @@ describe('every outward primitive is called only where a door guards it (source)
     expect(callSites('adoptOnce'), NEW_SITE).toEqual({ 'integrations/cloud-bridge-config.ts': 1 })
   })
 
+  it('an MCP tool runs only from McpConnection.call and a host\'s mcp.call, each behind its door', () => {
+    // Any 'tools/call' literal: a request from Walnut's server (connection.ts), a host's daemon
+    // (host-mcp-core.ts, which runs only what the server's hostMcpCall sends it), and Walnut's own
+    // MCP server answering one (walnut-mcp-stdio.ts, a `case`, which calls nothing).
+    expect(sites(/['"]tools\/call['"]/), NEW_SITE).toEqual({
+      'core/mcp-servers/connection.ts': 1, 'providers/host-mcp-core.ts': 1, 'providers/walnut-mcp-stdio.ts': 1,
+    })
+    expect(code(path.join(SRC, 'providers/walnut-mcp-stdio.ts'))).toMatch(/case 'tools\/call':/)
+    // The server asks a host to call a tool only from hostMcpCall.
+    expect(sites(/start\(caller, host, 'mcp\.call'/), NEW_SITE).toEqual({ 'core/hosts/host-mcp.ts': 1 })
+    expect(sites(/\.send(?:\?\.)?\('mcp\.call'|ask\([^)]*'mcp\.call'/), NEW_SITE).toEqual({})
+  })
+
   it('a host is issued its door credential only from issueOnce, and the old leader\'s machine only from prepareOldMachineAsHost', () => {
     // The credential is minted and sent to the host only after the door (session-channel/leader-issue.ts);
     // the leader switch mints the old machine's own after the same door (leader/switch/host-follow.ts).
     expect(callSites('mintHostCredential'), NEW_SITE).toEqual({ 'core/session-channel/leader-issue.ts': 1, 'core/leader/switch/host-follow.ts': 1 })
     expect(callSites('sendCredential'), NEW_SITE).toEqual({ 'core/session-channel/leader-issue.ts': 1 })
+  })
+})
+
+/**
+ * Every member of MailProviderSpec (src/integrations/mail/types.ts): 'write' changes the mail
+ * server (the test above pins each call to its mail-write or mail-send door), 'read' only reads
+ * it, 'local' touches this Walnut's own records (a removed account's own secrets), 'field' is data.
+ */
+const MAIL_PROVIDER_METHODS: Record<string, 'write' | 'read' | 'local' | 'field'> = {
+  id: 'field', label: 'field', capabilities: 'field', bodyRevision: 'field', identityRevision: 'field', refusalRevision: 'field', setup: 'field',
+  listUnread: 'read', unreadIds: 'read', accountCapabilities: 'read', listAccounts: 'read', health: 'read', listMailboxes: 'read',
+  poll: 'read', getBody: 'read', getAttachment: 'read', search: 'read', watch: 'read', categoryHints: 'read', fetchListHeaders: 'read',
+  inviteDetails: 'read',
+  markRead: 'write', markReadMany: 'write', archiveMany: 'write', moveMany: 'write', setFlag: 'write', respondToInvite: 'write',
+  send: 'write', saveDraft: 'write',
+  removeAccount: 'local',
+}
+
+describe('every MailProviderSpec member is classified for the mail doors', () => {
+  it('names every member of the interface, and no other', () => {
+    const src = fs.readFileSync(path.join(SRC, 'integrations/mail/types.ts'), 'utf-8')
+    const start = src.indexOf('export interface MailProviderSpec')
+    expect(start).toBeGreaterThan(-1)
+    let depth = 0
+    let body = ''
+    for (let i = src.indexOf('{', start); i < src.length; i++) {
+      if (src[i] === '{') depth++
+      else if (src[i] === '}' && --depth === 0) { body = src.slice(start, i); break }
+    }
+    const members = [...body.matchAll(/^ {2}(?:readonly\s+)?(\w+)\??\s*[(:<]/gm)].map((m) => m[1]!)
+    expect(members.length).toBeGreaterThan(20)
+    expect(members.filter((m) => !(m in MAIL_PROVIDER_METHODS)), 'classify these in MAIL_PROVIDER_METHODS: a write is pinned to a mail door above').toEqual([])
+    expect(Object.keys(MAIL_PROVIDER_METHODS).filter((m) => !members.includes(m)), 'MAIL_PROVIDER_METHODS names a member the interface no longer has').toEqual([])
   })
 })
 
@@ -345,6 +395,7 @@ const PRIMITIVE_OF: Record<string, RegExp | null> = {
   'core/org/lead-waits.ts#tellLead': /deliverToSession\(/,
   'core/private-tasks/sync-guard.ts#guardSync': /\.apply\(target/,
   'core/plugins/server-api.ts#fetch': /await fetch\(url/,
+  'core/plugins/copy-network-guard.ts#pluginNetworkRefusal': null,
   'integrations/git-sync.ts#syncInner': /gitSafeAsync\(`push/,
   'integrations/git-compaction.ts#compactionDoorRefusal': null,
   'core/cloud-ingest.ts#postToCloudIngest': /\bfetch\(/,
@@ -358,6 +409,8 @@ const PRIMITIVE_OF: Record<string, RegExp | null> = {
   'integrations/cloud-bridge-config.ts#revokeBridgeTokens': /\bfetch\(/,
   'core/session-channel/leader-issue.ts#issueOnce': /mintHostCredential\(/,
   'core/leader/switch/host-follow.ts#prepareOldMachineAsHost': /mintHostCredential\(/,
+  'core/mcp-servers/connection.ts#call': /client\.request\(/,
+  'core/hosts/host-mcp.ts#hostMcpCall': /start\(caller, host, 'mcp\.call'/,
 }
 
 /** A door call that acts: it asks the permission under a kind, and refuses. */
@@ -387,9 +440,15 @@ describe('every door function checks the door (source)', () => {
     // A door before an act refuses; a timer's query (no act of its own) may only ask.
     if (primitive) expect(body, `${door.fn} in ${door.file} must check the door before it acts (${door.onRefusal})`).toMatch(ACT_CALL)
     else expect(`${body.match(ACT_CALL) ?? ''}${body.match(QUERY_CALL) ?? ''}`, `${door.fn} in ${door.file} must ask the door (${door.onRefusal})`).not.toBe('')
-    // These ask whether a permit guards this process themselves.
+    // These ask whether a permit guards this process themselves. A door that reaches an account
+    // asks accountDoorsGuarded(), which a copy of the person's data answers too (closeAccountDoors);
+    // one that reaches only this Walnut asks leaderPermitActive().
     if (!/doorsClosed\(|doorTimerFloorMs\(|beginOutwardSend\(/.test(body)) {
-      expect(body, `${door.fn} checks the door only while a permit guards this process`).toMatch(/leaderPermitActive\(\)/)
+      if (DOOR_REACH[door.kind] === 'account') {
+        expect(body, `${door.fn} reaches an account: it checks the door while a permit or a copy's isolation guards this process (accountDoorsGuarded())`).toMatch(/accountDoorsGuarded\(\)/)
+      } else {
+        expect(body, `${door.fn} checks the door only while a permit guards this process`).toMatch(/leaderPermitActive\(\)/)
+      }
     }
     // A door that acts names its kind (the permit records it); a timer's query names none.
     if (ACT_CALL.test(body)) {

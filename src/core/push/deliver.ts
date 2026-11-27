@@ -17,7 +17,7 @@ import { updatePushTokens } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import type { PushTokenEntry } from '../types.js'
 import { sendApns, type ApnsTarget } from './apns.js'
-import { leaderPermitActive, outwardDoorRefusal } from '../leader/switch/doors.js'
+import { accountDoorsGuarded, outwardDoorRefusal } from '../leader/switch/doors.js'
 import { partitionByPairing, pruneUnpairedRows } from './paired-rows.js'
 import { apnsPayload, expoMessages, tokenKind, tokenTag, withoutTokens, type PushContent } from './send.js'
 
@@ -122,7 +122,7 @@ async function sendExpo(
   const messages = expoMessages(tokens, content)
   if (messages.length === 0) return { attempted: false, sent: 0, failed: 0, deadTokens: [] }
   // The outward door: a machine without the write permission posts nothing to Expo.
-  const refused = leaderPermitActive() ? outwardDoorRefusal('push', content.collapseId ?? 'expo') : null
+  const refused = accountDoorsGuarded() ? outwardDoorRefusal('push', content.collapseId ?? 'expo') : null
   if (refused) return { attempted: false, reason: refused, notPermitted: true, sent: 0, failed: 0, deadTokens: [] }
   try {
     const resp = await fetch(EXPO_PUSH_URL, {

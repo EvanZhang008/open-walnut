@@ -31,7 +31,7 @@ import {
 import {
   chooseLww, lwwMergeMessage, mergeTreeWriteTreeSupported, parseConflictStages, resolveDivergence, type DivergedResult, type LwwClock,
 } from './git-sync-merge.js';
-import { leaderPermitActive, outwardDoorRefusal } from '../core/leader/switch/doors.js';
+import { accountDoorsGuarded, outwardDoorRefusal } from '../core/leader/switch/doors.js';
 import {
   addListed,
   addTimeoutFor,
@@ -2809,7 +2809,7 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
     // Also skipped in disk pull-only mode: a push packs objects LOCALLY first,
     // which is exactly the write pressure the disk latch exists to stop).
     // The outward door: a machine without the write permission still pulls, and publishes nothing.
-    if (!guard.safeMode && !diskPullOnly && leaderPermitActive() && outwardDoorRefusal('git-push', branch)) {
+    if (!guard.safeMode && !diskPullOnly && accountDoorsGuarded() && outwardDoorRefusal('git-push', branch)) {
       log.git.debug('git-sync push skipped: this machine does not hold the write permission');
     } else if (!guard.safeMode && !diskPullOnly) {
       const pushResult = await gitSafeAsync(`push origin ${branch}`, { timeout: NETWORK_TIMEOUT });

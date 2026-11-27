@@ -12,6 +12,15 @@
  *
  * tests/core/leader/switch/outward-doors-ratchet.test.ts fails when a new outward door
  * appears without the check.
+ *
+ * The same doors keep a copy of the person's data off his real accounts. A server on such a copy
+ * (an ephemeral server, a snapshot the ephemeral launcher marked: accountIsolationReason in
+ * core/remote-sync-isolation.ts) holds its mail accounts, calendars, trackers and plugins with their
+ * live credentials, so
+ * at boot it closes every door that reaches an account (DOOR_REACH 'account', closeAccountDoors),
+ * whatever the permit says. Such a door asks `accountDoorsGuarded()` instead of
+ * `leaderPermitActive()`; tests/core/leader/switch/account-doors-isolation.test.ts holds it
+ * (2026-11-27: an ephemeral server's Mail page marked real Gmail messages read).
  */
 
 /** Every kind of door, one per choke point (OUTWARD_DOORS below names their files). */
@@ -32,6 +41,7 @@ export type OutwardDoorKind =
   | 'git-push'
   | 'companion-upload'
   | 'host-credential'
+  | 'mcp-write'
 
 /** One function that checks a door, and what a refusal there does. */
 export interface OutwardDoor {
@@ -97,6 +107,7 @@ export const OUTWARD_DOORS: readonly OutwardDoor[] = [
   { kind: 'session-wake', file: 'core/org/lead-waits.ts', fn: 'tellLead', onRefusal: 'wakes no lead session and leaves the note untold; the lead is told once the doors open' },
   { kind: 'task-sync', file: 'core/private-tasks/sync-guard.ts', fn: 'guardSync', onRefusal: 'every write method (SYNC_METHOD_DOORS) throws: a push stamps sync_error for the sync loop (no card), a create is not an attempt, a remote delete, a list rename and a moved copy run once the doors open (held on disk, cache/leader-deferred-work.json: a restart keeps them; a delete of a source with confirmRemoteDeleted is also retried by the sync loop from its tombstone)' },
   { kind: 'plugin-fetch', file: 'core/plugins/server-api.ts', fn: 'fetch', onRefusal: 'a write method throws to the plugin; reads still go' },
+  { kind: 'plugin-fetch', file: 'core/plugins/copy-network-guard.ts', fn: 'pluginNetworkRefusal', onRefusal: "a plugin's own fetch or node:http(s) write (installed on a copy only, guardPluginNetworkOnCopy) rejects or throws before anything leaves; reads and local hosts still go" },
   { kind: 'git-push', file: 'integrations/git-sync.ts', fn: 'syncInner', onRefusal: 'the push is skipped, the pull still runs' },
   { kind: 'git-push', file: 'integrations/git-compaction.ts', fn: 'compactionDoorRefusal', onRefusal: 'asked by the server before it forks the compaction worker (which ends in a force push): the run is skipped and the daily timer tries again' },
   { kind: 'companion-upload', file: 'core/cloud-ingest.ts', fn: 'postToCloudIngest', onRefusal: "answers 'failed' (never 'unsupported', which would take the bridge): the periodic sweep of a server that may send heals it" },
@@ -110,21 +121,103 @@ export const OUTWARD_DOORS: readonly OutwardDoor[] = [
   { kind: 'companion-upload', file: 'integrations/cloud-bridge-config.ts', fn: 'revokeBridgeTokens', onRefusal: 'deletes no companion device and answers every name as failed: the leader tries them again at its next ban read (session-channel/leader-issue.ts)' },
   { kind: 'host-credential', file: 'core/session-channel/leader-issue.ts', fn: 'issueOnce', onRefusal: 'throws before the credential is minted or sent: the host keeps what it holds, and the check runs again at its next link' },
   { kind: 'host-credential', file: 'core/leader/switch/host-follow.ts', fn: 'prepareOldMachineAsHost', onRefusal: 'answers not ok before the credential is minted: the handover is refused with that reason and this server leads on' },
+  { kind: 'mcp-write', file: 'core/hosts/host-mcp.ts', fn: 'hostMcpCall', onRefusal: "throws HostExecError 503 not_permitted before the host is dialed: no tool of that host's MCP servers runs, read-only ones included (the host lists no hints)" },
+  { kind: 'mcp-write', file: 'core/mcp-servers/connection.ts', fn: 'call', onRefusal: "throws McpCallError 'refused' (stage before-call) before the server is asked: a plugin's post, reaction or mark through walnut.mcp (Slack) is not sent; tools the server marks readOnlyHint still go" },
 ]
+
+/**
+ * What each kind of door reaches. 'account': an account of the person's outside this Walnut (his
+ * mailbox, calendar, phone, trackers, the data repo, his cloud companion, an MCP server's service):
+ * a server on a copy of his data never opens it (closeAccountDoors). 'walnut': this Walnut's own
+ * timers, sessions and daemons, which a copy runs on its own. What those run is not behind these
+ * doors: a session's own tools, a trigger's check script and a plugin job run outside the server
+ * (a copy starts no plugin jobs, plugin-jobs/index.ts). A new kind fails to compile until it is
+ * placed here.
+ */
+export const DOOR_REACH: Readonly<Record<OutwardDoorKind, 'account' | 'walnut'>> = {
+  'mail-send': 'account',
+  'mail-unsubscribe': 'account',
+  'mail-write': 'account',
+  push: 'account',
+  apns: 'account',
+  'calendar-write': 'account',
+  'task-sync': 'account',
+  'plugin-fetch': 'account',
+  'git-push': 'account',
+  'companion-upload': 'account',
+  'mcp-write': 'account',
+  'cron-fire': 'walnut',
+  'trigger-fire': 'walnut',
+  'trigger-arm': 'walnut',
+  'plugin-jobs': 'walnut',
+  'session-wake': 'walnut',
+  'host-credential': 'walnut',
+}
 
 export type OutwardDoorChecker = (kind: OutwardDoorKind, opId: string) => void
 
 let checker: OutwardDoorChecker | null = null
 let query: (() => boolean) | null = null
 
+/** Why this process never writes to the person's accounts (closeAccountDoors), or null. */
+let accountIsolation: string | null = null
+/** The account kinds a closed process still opens on purpose (closeAccountDoors `open`). */
+let accountKindsOpen: ReadonlySet<OutwardDoorKind> = new Set()
+
+/** A closed account door refuses `kind` now. */
+function accountDoorClosed(kind: OutwardDoorKind): boolean {
+  return accountIsolation !== null && DOOR_REACH[kind] === 'account' && !accountKindsOpen.has(kind)
+}
+
 /** Whether the write permission guards the outward doors in this process. */
 export function leaderPermitActive(): boolean {
   return checker !== null
 }
 
+/**
+ * Whether a door that reaches an account (DOOR_REACH 'account') must ask: the permit guards this
+ * process, or it runs on a copy of the person's data (closeAccountDoors). The check such a door
+ * makes before it acts, in place of `leaderPermitActive()`.
+ */
+export function accountDoorsGuarded(): boolean {
+  return checker !== null || accountIsolation !== null
+}
+
+/**
+ * A server on a copy of the person's data (core/remote-sync-isolation.ts accountIsolationReason)
+ * closes every door that reaches an account for the life of the process; the permit and the other
+ * doors are untouched. `why` is said in each refusal. `open` names account kinds kept open on
+ * purpose (task-sync while WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1, its documented end-to-end test of a
+ * sync plugin). Null opens them all again (each boot decides afresh; tests).
+ */
+export function closeAccountDoors(why: string | null, open: readonly OutwardDoorKind[] = []): void {
+  accountIsolation = why
+  accountKindsOpen = new Set(why === null ? [] : open)
+}
+
+/** Why the account doors are closed in this process (closeAccountDoors), or null. */
+export function accountDoorsClosedWhy(): string | null {
+  return accountIsolation
+}
+
 /** Throws (the permit's PermitNotHeld) when this machine may not act now. */
 export function assertOutwardDoor(kind: OutwardDoorKind, opId: string): void {
+  if (accountDoorClosed(kind)) throw isolationRefusal(kind, opId, accountIsolation!)
   checker?.(kind, opId)
+}
+
+/**
+ * A closed account door's refusal: the permit's kind (isPermitRefusal), so the door does what its
+ * onRefusal says, marked `isolated` so a route can say why (doorRefusalMessage).
+ */
+function isolationRefusal(kind: OutwardDoorKind, opId: string, why: string): Error {
+  const err = new Error(
+    `This Walnut is an isolated test server (${why}), so it never changes your real accounts:`
+    + ` it did not act (${kind} ${opId}).`,
+  )
+  err.name = 'PermitNotHeld'
+  ;(err as Error & { isolated?: true }).isolated = true
+  return err
 }
 
 /**
@@ -213,6 +306,7 @@ export function setOutwardSender(s: OutwardSender | null): void {
  * it and begin it, then reportOutwardSend once it ends. No-op while no permit guards this process.
  */
 export async function beginOutwardSend(kind: OutwardDoorKind, opId: string): Promise<void> {
+  if (accountDoorClosed(kind)) throw isolationRefusal(kind, opId, accountIsolation!)
   if (!checker) return
   if (!sender) { assertOutwardDoor(kind, opId); return }
   await sender.begin(kind, opId)
@@ -285,6 +379,19 @@ export function notifyOutwardDoorsOpened(): void {
  */
 export const NOT_LEADER_MESSAGE = 'This Walnut server does not hold the write permission right now (another server leads,'
   + ' or this one is still starting), so it did not act. Try again in a moment.'
+
+/**
+ * The sentence a route answers for a refused door: a closed account door (closeAccountDoors) says
+ * that this Walnut is a copy, any other the permit's NOT_LEADER_MESSAGE.
+ */
+export function doorRefusalMessage(err: unknown): string {
+  return isIsolationRefusal(err) ? (err as Error).message : NOT_LEADER_MESSAGE
+}
+
+/** A refusal of a closed account door (closeAccountDoors), not of the permit. */
+export function isIsolationRefusal(err: unknown): boolean {
+  return isPermitRefusal(err) && (err as { isolated?: unknown }).isolated === true
+}
 
 /** A refusal a door can tell from its own errors. */
 export function isPermitRefusal(err: unknown): boolean {

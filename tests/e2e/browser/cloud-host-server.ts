@@ -71,7 +71,7 @@ Object.assign(process.env, {
   WALNUT_EPHEMERAL_REMOTE_HOSTS: '1',
 })
 await fs.mkdir(process.env.HOME!, { recursive: true })
-process.argv.push('--_ephemeral-child')
+process.argv.push('--_ephemeral-child', '--_own-accounts')
 
 // A Mac the person already works on: one task of their own. An empty board with no Claude Code
 // (the probe is off here) is a first use, whose welcome card takes Home's place for the

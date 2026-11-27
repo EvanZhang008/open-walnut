@@ -1436,6 +1436,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // unkillable servers accumulated and starved the machine on 2026-08-09.
   installExitDiagnostics()
 
+  // A server on a copy of the person's data (an ephemeral server, a snapshot the ephemeral launcher
+  // marked) holds his accounts with their live credentials: every door that reaches one
+  // (mail, calendar, push, trackers, plugins, MCP writes, the data repo, the companion) stays closed
+  // for its whole life, whatever the permit says (core/leader/switch/doors.ts closeAccountDoors).
+  // Decided again on every boot, before anything syncs, sends or marks (2026-11-27: an ephemeral
+  // server's Mail page marked the person's real Gmail messages read).
+  {
+    const { accountIsolationReason } = await import('../core/remote-sync-isolation.js')
+    const why = accountIsolationReason()
+    // A sync plugin's documented end-to-end test (WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1) opens task sync only.
+    const open = process.env.WALNUT_ALLOW_REMOTE_SYNC_IN_TEST === '1' ? (['task-sync'] as const) : []
+    ;(await import('../core/leader/switch/doors.js')).closeAccountDoors(why, open)
+    if (why) {
+      // A plugin's own fetch and node:http(s) writes too, which pass no door of their own.
+      ;(await import('../core/plugins/copy-network-guard.js')).guardPluginNetworkOnCopy()
+      log.web.info('account doors closed: this server never writes to real accounts', { why, open })
+    }
+  }
+
   // An ephemeral server treats its data as a disposable copy (it clears every
   // session pid below), so it must never boot on the production Walnut's own
   // data dir (sessions/ephemeral-guard.ts). Checked before anything touches it.

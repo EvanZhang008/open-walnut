@@ -18,7 +18,7 @@
  * Callers that must not be fooled at all pass `{ force: true }`.
  */
 import { log } from '../../logging/index.js';
-import { assertOutwardDoor, leaderPermitActive } from '../../core/leader/switch/doors.js';
+import { accountDoorsGuarded, assertOutwardDoor } from '../../core/leader/switch/doors.js';
 // The error CLASS only, from its own leaf module: importing it from sources/eventkit.js
 // dragged the helper client and helper-build.js (Swift compile + codesign) into this
 // bundle. The source itself arrives through `core:calendar-source`, and classification goes
@@ -435,7 +435,7 @@ export class CalendarService {
   async updateEvent(id: string, patch: CalendarEventPatch, opts?: CalendarWriteOptions): Promise<CalendarEvent> {
     const member = this.sources.memberFor(id);
     this.assertUsable(member);
-    if (leaderPermitActive()) assertOutwardDoor('calendar-write', `update:${id}`);
+    if (accountDoorsGuarded()) assertOutwardDoor('calendar-write', `update:${id}`);
     await this.guardWrite(member, id, opts);
     this.writeGen++;
     // Only the fields an update may carry: nothing a caller adds can move it to another calendar.
@@ -451,7 +451,7 @@ export class CalendarService {
   /** No `calendarId` (absent or blank) creates on the configured default calendar. */
   async createEvent(input: CalendarEventCreateInput): Promise<CalendarEvent> {
     this.assertUsable(this.sources.primary, true);
-    if (leaderPermitActive()) assertOutwardDoor('calendar-write', `create:${input.start}:${input.title}`);
+    if (accountDoorsGuarded()) assertOutwardDoor('calendar-write', `create:${input.start}:${input.title}`);
     const calendarId = await this.createTarget(input.calendarId);
     const member = this.sources.memberFor(calendarId);
     this.assertUsable(member);
@@ -476,7 +476,7 @@ export class CalendarService {
   async deleteEvent(id: string, opts?: CalendarWriteOptions): Promise<void> {
     const member = this.sources.memberFor(id);
     this.assertUsable(member);
-    if (leaderPermitActive()) assertOutwardDoor('calendar-write', `delete:${id}`);
+    if (accountDoorsGuarded()) assertOutwardDoor('calendar-write', `delete:${id}`);
     await this.guardWrite(member, id, opts);
     this.writeGen++;
     await member.source.deleteEvent(id, opts);

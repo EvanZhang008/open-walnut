@@ -23,7 +23,7 @@ import zlib from 'node:zlib'
 import { log } from '../logging/index.js'
 import { fetchErrorCode, fetchErrorDetail, fetchErrorText, isFetchAbort } from '../lib/fetch-error.js'
 import { answered, noteRoundFailure, noteRoundReached } from './replication/round-outage.js'
-import { assertOutwardDoor, leaderPermitActive, outwardDoorRefusal } from './leader/switch/doors.js'
+import { accountDoorsGuarded, assertOutwardDoor, outwardDoorRefusal } from './leader/switch/doors.js'
 
 const gzip = promisify(zlib.gzip)
 /** The outage scope of this lane's pushes (round-outage.ts): its lines read `cloud ingest: ...`. */
@@ -126,7 +126,7 @@ export async function postToCloudIngest(
   // The outward door: a machine without the write permission uploads nothing (its copy may be
   // behind the leader's). 'failed', never 'unsupported' (that would send it down the bridge):
   // the self-heal sweep of a server that may send carries it.
-  if (leaderPermitActive() && outwardDoorRefusal('companion-upload', kind)) return 'failed'
+  if (accountDoorsGuarded() && outwardDoorRefusal('companion-upload', kind)) return 'failed'
   if (cloudIngestResting()) return 'unsupported'
   const ep = await resolveEndpoint()
   if (!ep) return 'unsupported' // no companion configured: the legacy lane decides
@@ -255,7 +255,7 @@ export async function cloudReplicaAvailable(): Promise<boolean> {
  */
 export async function postToCloudReplica(payload: Record<string, unknown>, opts: { timeoutMs?: number } = {}): Promise<CloudReplicaReply> {
   // The outward door: a machine without the write permission writes nothing into the companion's copy.
-  const refused = leaderPermitActive() ? outwardDoorRefusal('companion-upload', 'replica') : null
+  const refused = accountDoorsGuarded() ? outwardDoorRefusal('companion-upload', 'replica') : null
   if (refused) return { ok: false, outcome: 'failed', error: refused }
   if (Date.now() < replicaUnsupportedUntil || cloudIngestResting()) return { ok: false, outcome: 'unsupported' }
   const ep = await resolveEndpoint()
@@ -311,7 +311,7 @@ export async function postToCloudReplica(payload: Record<string, unknown>, opts:
 export async function postToCloudJournal(cmd: string, params: Record<string, unknown> = {}, opts: { timeoutMs?: number } = {}): Promise<Record<string, unknown>> {
   // The outward door: a machine without the write permission drains and acks nothing (the
   // records are the leader's); the throw keeps them for the handover's next run.
-  if (leaderPermitActive()) assertOutwardDoor('companion-upload', `journal:${cmd}`)
+  if (accountDoorsGuarded()) assertOutwardDoor('companion-upload', `journal:${cmd}`)
   if (cloudIngestResting()) throw new Error('the companion refused this Mac\'s credential')
   const ep = await resolveEndpoint()
   if (!ep) throw new Error('no cloud companion is set up')
@@ -358,7 +358,7 @@ export async function cloudHostReplicaAvailable(): Promise<boolean> {
  */
 export async function postToCloudHostReplica(cmd: string, params: Record<string, unknown> = {}, opts: { timeoutMs?: number } = {}): Promise<Record<string, unknown>> {
   // The outward door: a machine without the write permission writes nothing into the companion's copy.
-  const refused = leaderPermitActive() ? outwardDoorRefusal('companion-upload', `host-replica:${cmd}`) : null
+  const refused = accountDoorsGuarded() ? outwardDoorRefusal('companion-upload', `host-replica:${cmd}`) : null
   if (refused) return { ok: false, error: refused, errorKind: 'not-permitted' }
   if (Date.now() < hostReplicaUnsupportedUntil || cloudIngestResting()) return { ok: false, error: 'the companion does not take this copy now', errorKind: 'unsupported' }
   const ep = await resolveEndpoint()

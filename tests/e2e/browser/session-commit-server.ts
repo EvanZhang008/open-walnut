@@ -98,7 +98,7 @@ Object.assign(process.env, {
   MOCK_CLAUDE_PLAIN_ECHO: '1',
   MOCK_SNAPSHOT_TURN_DELAY_MS: '300',
 })
-process.argv.push('--_ephemeral-child')
+process.argv.push('--_ephemeral-child', '--_own-accounts')
 fs.mkdirSync(path.join(root, 'bundled-store'), { recursive: true })
 
 // The repo and its remote.

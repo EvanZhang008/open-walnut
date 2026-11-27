@@ -422,6 +422,7 @@ export function registerCommands(program: Command): void {
     .option('--ephemeral', 'Start an isolated ephemeral server (temp data copy, random port)')
     .addOption(new Option('--_ephemeral-child').hideHelp())
     .addOption(new Option('--_trial-start').hideHelp())
+    .addOption(new Option('--_own-accounts').hideHelp())
     .option('--replica', 'Run as a replica on this host that follows your Mac (started by this host\'s Walnut daemon)')
     .action(async (options: Record<string, unknown>) => {
       const { runWeb } = await import('./web.js');
@@ -435,6 +436,7 @@ export function registerCommands(program: Command): void {
     .addOption(new Option('--_headless').hideHelp())
     .addOption(new Option('--_root <path>').hideHelp())
     .addOption(new Option('--_ephemeral-child').hideHelp())
+    .addOption(new Option('--_own-accounts').hideHelp())
     .action(async (action: string | undefined, options: { _child?: boolean; _headless?: boolean; _root?: string }, cmd: Command) => {
       try {
         await (await import('./demo.js')).runDemo(action, options);

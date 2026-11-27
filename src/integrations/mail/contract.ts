@@ -10,7 +10,7 @@ import type {
   ProviderErrorCode,
 } from './types.js'
 import crypto from 'node:crypto'
-import { isPermitRefusal, NOT_LEADER_MESSAGE } from '../../core/leader/switch/doors.js'
+import { doorRefusalMessage, isIsolationRefusal, isPermitRefusal } from '../../core/leader/switch/doors.js'
 import type { PluginRouteRequest } from '../../core/plugins/plugin-route-adapter.js'
 
 /**
@@ -598,8 +598,8 @@ export function errorReply(walnut: { log: RouteErrorLog }, error: unknown) {
   if (error instanceof MailServiceError) {
     return { status: error.status, json: { error: error.code, message: error.message } }
   }
-  // An outward door refused it (leader switch): not a crash, so no error card.
-  if (isPermitRefusal(error)) return { status: 503, json: { error: 'not_leader', message: NOT_LEADER_MESSAGE } }
+  // An outward door refused it (leader switch, or a copy of the person's data): not a crash, so no error card.
+  if (isPermitRefusal(error)) return { status: 503, json: { error: isIsolationRefusal(error) ? 'isolated' : 'not_leader', message: doorRefusalMessage(error) } }
   const code = providerErrorCode(error)
   if (code) {
     // The provider said what went wrong in its own words, and those words are what the console

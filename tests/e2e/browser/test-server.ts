@@ -105,7 +105,7 @@ delete process.env.WALNUT_TASK_DIR
 // Companion wizard spec can start a REAL job (real state machine, real SSE) that
 // parks at `provision` instead of deploying anything. See providers/fake.ts.
 process.env.WALNUT_CLOUD_SETUP_FAKE = '1'
-process.argv.push('--_ephemeral-child')
+process.argv.push('--_ephemeral-child', '--_own-accounts')
 // The server's question-naming AI stub answers for these sessions (tests only).
 process.env.WALNUT_THREAD_AI_STUB = THREAD_AI_STUB_PREFIX
 // The mock CLI answers like a model here: the user's words echoed, none of the

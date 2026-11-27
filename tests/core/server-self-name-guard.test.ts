@@ -19,6 +19,7 @@ const ROOT = path.resolve(__dirname, '../..');
 
 const KNOWN: Record<string, { count: number; why: string }> = {
   'src/core/server-self-name.ts': { count: 1, why: 'the helper itself: "this test server" only when not the Demo' },
+  'src/core/leader/switch/doors.ts': { count: 1, why: 'a closed account door\'s refusal, said only on a copy of the data (accountIsolationReason): the Demo and the sandbox keep their doors open (--_own-accounts)' },
   'src/core/net/net-mac.ts': { count: 1, why: 'an IS_DEMO branch: the Demo reads "not in the Demo"' },
   'src/core/plugin-jobs/index.ts': { count: 1, why: 'an IS_DEMO branch: the Demo reads "plugin jobs do not run in the Demo"' },
   'src/core/sessions/host-connect-hint.ts': { count: 1, why: 'an IS_DEMO branch: the Demo reads its own sentence' },

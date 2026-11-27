@@ -15,6 +15,7 @@ import { EXTERNAL_CALLER_SID } from '../../providers/gateway-core.js'
 import { createRefusalLog } from '../../providers/gateway-refusal-log.js'
 import { log } from '../../logging/index.js'
 import { bootPolicy } from '../boot-policy.js'
+import { dataCopyReason } from '../remote-sync-isolation.js'
 import { isSecretKey } from '../config-secret-shape.js'
 import { semanticLaneDecision } from '../search/semantic-default.js'
 import { createJobBundler } from './bundle.js'
@@ -54,6 +55,9 @@ let offCache: string | null | undefined
 /** Why this server runs no plugin jobs, or null when it does. */
 export function pluginJobsOffReason(env: NodeJS.ProcessEnv = process.env): string | null {
   if (!bootPolicy('plugin-jobs')) return 'plugin jobs are shown and placed on the Mac'
+  // A snapshot of the person's data runs no plugin code against his accounts, opt-in or not.
+  const copy = dataCopyReason(WALNUT_HOME)
+  if (copy) return `plugin jobs do not run on ${copy}`
   if (env.WALNUT_PLUGIN_JOBS_IN_TEST === '1') return null
   if (offCache !== undefined) return offCache
   // The semantic lane's "is this a real install" test, without its own opt-in flag.

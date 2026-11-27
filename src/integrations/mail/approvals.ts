@@ -35,7 +35,7 @@ import {
   type MailApprovalNote,
 } from '../../core/human-inbox/walnut-letters/mail-approval.js'
 import type { MailService } from './service.js'
-import { assertOutwardDoor, isPermitRefusal, leaderPermitActive } from '../../core/leader/switch/doors.js'
+import { accountDoorsGuarded, assertOutwardDoor, isPermitRefusal, leaderPermitActive } from '../../core/leader/switch/doors.js'
 import { toSendDto } from './sends.js'
 import type { MailSends } from './sends.js'
 import type { AccountRow, DraftRow, MailStore, SendRow } from './store.js'
@@ -254,7 +254,7 @@ export class MailApprovals {
     this.assertRevision(first, revision)
     // The outward door before the revision bump and the freeze below, so a refusal leaves the
     // draft exactly as the caller found it.
-    if (leaderPermitActive()) assertOutwardDoor('mail-send', `${draftId}:${revision}`)
+    if (accountDoorsGuarded()) assertOutwardDoor('mail-send', `${draftId}:${revision}`)
     await this.requireActiveAccount(first.account_id)
     this.deps.drafts.assertSendable(
       first,
@@ -539,7 +539,7 @@ export class MailApprovals {
     const draftId = draft.draft_id
     // The outward door, before the approval is minted: a machine without the write permission
     // changes nothing, so an answered letter stays where the leader's reconcile resumes it.
-    if (leaderPermitActive()) assertOutwardDoor('mail-send', `${draftId}:${revision}`)
+    if (accountDoorsGuarded()) assertOutwardDoor('mail-send', `${draftId}:${revision}`)
     const approved = await this.deps.store.write.approveDraft(draftId, revision, this.now)
     if (approved === 0) {
       this.deps.log.info('mail approval was not minted, nothing sent', { draftId, revision })

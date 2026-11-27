@@ -13,7 +13,7 @@
  * failed push.
  */
 import { log } from '../../logging/index.js';
-import { assertOutwardDoor, leaderPermitActive } from '../leader/switch/doors.js';
+import { accountDoorsGuarded, assertOutwardDoor } from '../leader/switch/doors.js';
 import type { IntegrationSync } from '../integration-types.js';
 import type { Task } from '../types.js';
 import { matchPrivateWords } from './private-words.js';
@@ -202,7 +202,7 @@ export function guardSync(pluginId: string, sync: IntegrationSync): IntegrationS
       // permission changes nothing at the plugin's service. The push paths stamp the task for the
       // sync loop's retry (task-manager.ts); a remote delete stays pending in the ledger.
       const door = (args: unknown[]) => {
-        if (leaderPermitActive() && writesOut(prop)) {
+        if (accountDoorsGuarded() && writesOut(prop)) {
           assertOutwardDoor('task-sync', `${pluginId}:${prop}:${isTask(args[0]) ? args[0].id : ''}`);
         }
       };

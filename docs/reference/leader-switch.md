@@ -1296,7 +1296,12 @@ outward primitive appears without the check, or when the check comes after the c
 guards. Kinds: mail send, unsubscribe, mail writes (read flags, moves, invite answers),
 pushes, routine fires, trigger fires and arming, plugin jobs and plugin writes, calendar
 writes, session wakes (wait-until, promised follow-ups, lead wakes), task sync, git pushes
-(the data repo's compaction is asked before its worker forks) and companion uploads.
+(the data repo's compaction is asked before its worker forks), companion uploads and MCP tool
+calls the server does not mark read-only. `DOOR_REACH` places each kind: 'account' (it reaches
+an account of the person's outside this Walnut) or 'walnut'. A server on a copy of his data
+closes every 'account' door at boot whatever the permit says (`closeAccountDoors`); such a door
+asks `accountDoorsGuarded()` in place of `leaderPermitActive()`
+(`tests/core/leader/switch/account-doors-isolation.test.ts`).
 
 Only a Walnut with the experiment on **and** witnesses set up registers a checker; otherwise
 `leaderPermitActive()` is false, every door returns at once and no permit code is loaded

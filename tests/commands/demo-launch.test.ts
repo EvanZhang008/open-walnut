@@ -269,7 +269,7 @@ describe('runDemo launch', () => {
     expect(m.spawn).toHaveBeenCalledTimes(1)
     const [file, args, options] = m.spawn.mock.calls[0] as [string, string[], { cwd: string; env: NodeJS.ProcessEnv; detached: boolean }]
     expect(file).toBe(process.execPath)
-    expect(args.slice(-3)).toEqual(['demo', '--_child', '--_ephemeral-child'])
+    expect(args.slice(-4)).toEqual(['demo', '--_child', '--_ephemeral-child', '--_own-accounts'])
     const state = readState()
     expect(state.status).toBe('ready')
     expect(options.cwd).toBe(homeOf(state.generation))

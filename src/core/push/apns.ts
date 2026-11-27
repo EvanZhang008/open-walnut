@@ -33,7 +33,7 @@ import { connect, constants, type ClientHttp2Session } from 'node:http2'
 import { getConfig } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import { tokenTag, withoutTokens } from './send.js'
-import { leaderPermitActive, outwardDoorRefusal } from '../leader/switch/doors.js'
+import { accountDoorsGuarded, outwardDoorRefusal } from '../leader/switch/doors.js'
 
 /** The app's bundle id — the APNs topic, unless overridden. */
 export const DEFAULT_APNS_TOPIC = 'dev.openwalnut.ios'
@@ -383,7 +383,7 @@ export async function sendApns(
 ): Promise<ApnsSendOutcome> {
   if (targets.length === 0) return { attempted: false, reason: 'no registered device tokens', sent: 0, failed: 0, deadTokens: [] }
   // The outward door: a machine without the write permission sends nothing (never a throw).
-  const refused = leaderPermitActive() ? outwardDoorRefusal('apns', opts.collapseId ?? 'apns') : null
+  const refused = accountDoorsGuarded() ? outwardDoorRefusal('apns', opts.collapseId ?? 'apns') : null
   if (refused) return { attempted: false, reason: refused, notPermitted: true, sent: 0, failed: 0, deadTokens: [] }
 
   const s = await settings()

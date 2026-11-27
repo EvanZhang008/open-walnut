@@ -180,6 +180,8 @@ launch() {
   mkdir -p "$home_dir"
   echo "==> HOME=$home_dir  OPEN_WALNUT_HOME=$ROOT/.open-walnut  PORT=$PORT  bun=$BUN"
   # The server's bun leads its PATH too, so whatever it starts with `bun` is the same one.
+  # --_own-accounts: a fresh home, never a copy of the person's data, so an account connected in the
+  # sandbox may be written to (src/core/remote-sync-isolation.ts accountIsolationReason).
   env -i \
     HOME="$home_dir" \
     PATH="$(dirname "$BUN"):$path_val" \
@@ -189,7 +191,7 @@ launch() {
     WALNUT_DAEMON_DIR="$ROOT/daemon" \
     WALNUT_TASK_DIR_ROOT="$ROOT/task-dirs" \
     "$@" \
-    "$BUN" "$HERE/dist/cli.js" web --port "$PORT" > "$LOG" 2>&1 &
+    "$BUN" "$HERE/dist/cli.js" web --port "$PORT" --_own-accounts > "$LOG" 2>&1 &
   echo $! > "$PID_FILE"; disown
   echo "==> pid $(cat "$PID_FILE")  log: $LOG"
 }

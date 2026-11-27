@@ -28,7 +28,7 @@ process.env.WALNUT_DISABLE_SEARCH ??= '1'
 process.env.WALNUT_DISABLE_BACKGROUND_AI ??= '1'
 process.env.WALNUT_DAEMON_DIR ??= `${process.env.HOME}/daemon`
 process.env.WALNUT_STREAMS_DIR ??= `${process.env.HOME}/daemon-streams`
-process.argv.push('--_ephemeral-child')
+process.argv.push('--_ephemeral-child', '--_own-accounts') // a synthetic home: its accounts are fixtures
 
 // WALNUT_REHEARSAL_LOAD_TRAP=<file>: every module of src/core/leader/{switch,permit}/ this server
 // loads is written to <file>, one path a line: the proof that a Walnut with the experiment on

@@ -113,7 +113,7 @@ if (role === 'api') {
   process.env.WALNUT_DISABLE_BACKGROUND_AI = '1'
   process.env.HOME = home
   process.env.USERPROFILE = home
-  process.argv.push('--_ephemeral-child')
+  process.argv.push('--_ephemeral-child', '--_own-accounts')
   await provision(home)
 
   const { startServer, stopServer } = await import('../../../src/web/server.js')

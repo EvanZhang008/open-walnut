@@ -16,7 +16,7 @@
  *   than a mailbox-sized download.
  */
 import type { MailBodyStore } from './bodies.js'
-import { assertOutwardDoor, leaderPermitActive } from '../../core/leader/switch/doors.js'
+import { accountDoorsGuarded, assertOutwardDoor } from '../../core/leader/switch/doors.js'
 import { MailBodySnapshotError, MailBodyTooLargeError, MAX_BODY_BYTES, snippetOf } from './bodies.js'
 import { keyOfMessage } from './message-tasks.js'
 import {
@@ -803,7 +803,7 @@ export class MailService {
     }
     // The outward door, before the provider is asked: a server without the write permission
     // changes nothing at the mail server (the caller hears the refusal).
-    if (leaderPermitActive()) assertOutwardDoor('mail-write', `read:${accountId}:${messageId}`)
+    if (accountDoorsGuarded()) assertOutwardDoor('mail-write', `read:${accountId}:${messageId}`)
     await callProvider('a read flag', () => spec.markRead!(accountId, messageId, read))
     const flags = new Set(parseJson<string[]>(row.flags_json, []))
     const wasRead = flags.has('\\Seen')
@@ -836,7 +836,7 @@ export class MailService {
     }
     if (messageIds.length === 0) return []
     // The outward door, as in markRead.
-    if (leaderPermitActive()) assertOutwardDoor('mail-write', `read:${accountId}:${messageIds.length}`)
+    if (accountDoorsGuarded()) assertOutwardDoor('mail-write', `read:${accountId}:${messageIds.length}`)
     const outcomes = await callProvider('read flags', () => spec.markReadMany!(accountId, [...messageIds], read))
     const byId = new Map(outcomes.map((one) => [one.messageId, one]))
     const rows = await this.deps.store.messagesByIds(accountId, messageIds.filter((id) => byId.get(id)?.ok))

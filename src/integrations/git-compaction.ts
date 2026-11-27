@@ -20,7 +20,7 @@ import {
 } from './git-sync.js';
 import { deliverCompactedChain } from './git-compaction-deliver.js';
 import { buildCompactedChain } from './git-compaction-chain.js';
-import { leaderPermitActive, outwardDoorRefusal } from '../core/leader/switch/doors.js';
+import { accountDoorsGuarded, outwardDoorRefusal } from '../core/leader/switch/doors.js';
 import { log } from '../logging/index.js';
 
 // ---------------------------------------------------------------------------
@@ -554,7 +554,7 @@ export function markCompactionDone(repoDir = WALNUT_HOME): void {
  * the daily timer tries again, and the one that leads compacts.
  */
 export function compactionDoorRefusal(): string | null {
-  return leaderPermitActive() ? outwardDoorRefusal('git-push', 'compaction') : null;
+  return accountDoorsGuarded() ? outwardDoorRefusal('git-push', 'compaction') : null;
 }
 
 /**

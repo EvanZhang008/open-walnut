@@ -82,7 +82,7 @@ import type { TimelineSourceSpec } from '../time-tracking/timeline/types.js'
 import { jsonSchemaToZodShape } from '../../ops/schema-to-zod.js'
 import { LOCAL_ORIGIN } from '../../lib/caller-origin.js'
 import { labelPluginFetch } from './plugin-fetch-origin.js'
-import { assertOutwardDoor, leaderPermitActive } from '../leader/switch/doors.js'
+import { accountDoorsGuarded, assertOutwardDoor } from '../leader/switch/doors.js'
 import { registerOwnedMethod } from '../../web/ws/handler.js'
 import { registerOwnedAgent } from '../agent-registry.js'
 import { registerOwnedProviderAdapter } from '../../model/providers/registry.js'
@@ -1186,7 +1186,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       async fetch(url: string, init: { method?: string; headers?: Record<string, string>; body?: string | Uint8Array; timeoutMs?: number } = {}) {
         // The outward door for a write (any method but a read): a machine without the write
         // permission throws to the plugin, which retries as it retries any failed request.
-        if (leaderPermitActive() && !READ_METHODS.has((init.method ?? 'GET').toUpperCase())) {
+        if (accountDoorsGuarded() && !READ_METHODS.has((init.method ?? 'GET').toUpperCase())) {
           // The op id names no URL: a query string may carry a secret.
           assertOutwardDoor('plugin-fetch', `${pluginId}:${init.method}`)
         }

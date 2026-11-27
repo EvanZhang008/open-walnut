@@ -29,7 +29,7 @@ import { getConfig } from '../core/config-manager.js'
 import { MACHINE_PROOF_HEADER } from '../core/device-actor.js'
 import { log } from '../logging/index.js'
 import { isFollower } from '../core/server-role.js'
-import { leaderPermitActive, outwardDoorRefusal } from '../core/leader/switch/doors.js'
+import { accountDoorsGuarded, outwardDoorRefusal } from '../core/leader/switch/doors.js'
 
 export interface BridgeConfigPayload {
   enabled: boolean
@@ -129,7 +129,7 @@ function adoptOnce(localToken: string | undefined, cloud: { domain: string; toke
   if (!localToken || adoptionsSent.has(PRIMARY_DEVICE_NAME)) return
   // The outward door (leader switch: a no-op with the experiment off): a machine without the
   // write permission offers nothing, and the offer stays for its next mint or start.
-  if (leaderPermitActive() && outwardDoorRefusal('companion-upload', `bridge-adopt:${PRIMARY_DEVICE_NAME}`)) return
+  if (accountDoorsGuarded() && outwardDoorRefusal('companion-upload', `bridge-adopt:${PRIMARY_DEVICE_NAME}`)) return
   adoptionsSent.add(PRIMARY_DEVICE_NAME)
   const base = `${cloud.secure ? 'https' : 'http'}://${cloud.domain}`
   void fetch(`${base}/api/devices/${encodeURIComponent(PRIMARY_DEVICE_NAME)}/adopt`, {
@@ -170,7 +170,7 @@ async function mintMachineToken(
   // The outward door before the companion's devices are touched (a create, a revoke): a machine
   // without the write permission mints nothing and does not spend the re-mint window; the
   // periodic bridge push of the server holding the permission mints it.
-  if (leaderPermitActive()) {
+  if (accountDoorsGuarded()) {
     const refused = outwardDoorRefusal('companion-upload', `bridge-token:${deviceName}`)
     if (refused) {
       log.session.info('bridge: no machine token minted: this server does not hold the write permission', { hostAlias, deviceName })
@@ -387,7 +387,7 @@ export async function revokeBridgeTokens(hostAliases: readonly string[]): Promis
   if (keys.length === 0 || isFollower()) return { revoked: [], failed: [] }
   const cloud = await getCloudRemoteCredentialsAsync({ strict: true }).catch(() => null)
   if (!cloud) return { revoked: [], failed: [] }
-  if (leaderPermitActive() && outwardDoorRefusal('companion-upload', 'bridge-token:revoke')) return { revoked: [], failed: keys }
+  if (accountDoorsGuarded() && outwardDoorRefusal('companion-upload', 'bridge-token:revoke')) return { revoked: [], failed: keys }
   const cache = await readTokenCache()
   const proof = cache[PRIMARY_DEVICE_NAME]
   const headers: Record<string, string> = { Authorization: `Bearer ${cloud.token}`, ...(proof ? { [MACHINE_PROOF_HEADER]: proof } : {}) }

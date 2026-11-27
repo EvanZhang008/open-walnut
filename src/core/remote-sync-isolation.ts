@@ -45,11 +45,65 @@ export function remoteSyncIsolationReason(): string | null {
  * user's data holds his real mail accounts and real people.
  */
 export function throwawayServerReason(): string | null {
+  const copy = dataCopyReason()
+  if (copy) return copy
   if (process.argv.includes('--_ephemeral-child')) return 'an ephemeral server'
   if (process.env.VITEST || process.env.VITEST_WORKER_ID) return 'test runner (VITEST)'
   if (process.env.NODE_ENV === 'test') return 'NODE_ENV=test'
   if (isUnderTempDir(WALNUT_HOME)) return `data dir under the OS temp dir (${WALNUT_HOME})`
   return null
+}
+
+/**
+ * The file the ephemeral launcher writes into every snapshot of the person's data
+ * (commands/web-ephemeral.ts): whatever later serves that directory, and however it is
+ * started, it is a copy and never writes to his accounts (accountIsolationReason).
+ */
+export const DATA_COPY_MARKER = 'data-copy.json'
+
+/**
+ * argv flag of a server whose home is its own, never a copy of the person's data: a test fixture
+ * server (tests/e2e/browser/*-server.ts, fake mail and calendar providers), the Demo, the sandbox
+ * (scripts/walnut-sandbox.sh). Its account doors stay open for the accounts made or signed in
+ * there. On argv, never in the environment, so nothing it starts inherits it.
+ */
+export const OWN_ACCOUNTS_FLAG = '--_own-accounts'
+
+/**
+ * Why this server must never write to an account outside it (mail read flags, moves, sends,
+ * calendar events, pushes, trackers, a plugin's writes, MCP writes, the data repo, the companion),
+ * or null when it may. Read once at boot (web/server.ts closes the account doors with it,
+ * core/leader/switch/doors.ts closeAccountDoors). First match wins:
+ *   1. a snapshot of the person's data (DATA_COPY_MARKER in the home): always a copy;
+ *   2. a server on a home of its own (OWN_ACCOUNTS_FLAG: fixtures, the Demo, the sandbox);
+ *   3. an ephemeral server (--_ephemeral-child): it runs on a copy of the person's data.
+ * Anything else is not taken for a copy: a test runner's or a test cluster's server on a home it made
+ * under the temp dir holds fake accounts (plugin sync stays off there by remoteSyncIsolationReason),
+ * and a copy of the data dir made by hand is served with `bun run dev:ephemeral`, which marks it.
+ * 2026-11-27: an ephemeral server's Mail page marked the person's real Gmail messages read when a
+ * test script opened them.
+ */
+export function accountIsolationReason(): string | null {
+  const copy = dataCopyReason()
+  if (copy) return copy
+  if (process.argv.includes(OWN_ACCOUNTS_FLAG)) return null
+  if (process.argv.includes('--_ephemeral-child')) return 'an ephemeral server'
+  return null
+}
+
+/**
+ * Why this home is a snapshot of the person's data (DATA_COPY_MARKER), or null. Every "is this the
+ * person's real Walnut" test reads it first, so no fixture flag or test opt-in reopens a snapshot:
+ * account doors, the topics mail bridge and plugin jobs (plugin-jobs/index.ts). The one exception
+ * is task sync's documented end-to-end test, WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1, which opens that
+ * door alone (web/server.ts).
+ */
+export function dataCopyReason(home: string = WALNUT_HOME): string | null {
+  try {
+    return fs.existsSync(path.join(home, DATA_COPY_MARKER)) ? `a copy of your Walnut data at ${home}` : null
+  } catch {
+    return null
+  }
 }
 
 /**

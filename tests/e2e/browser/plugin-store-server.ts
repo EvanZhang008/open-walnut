@@ -64,7 +64,7 @@ process.env.HOME = tmpBase
 process.env.USERPROFILE = tmpBase
 // Honoured only for ephemeral children and tests (src/core/plugins/bundled-store.ts).
 process.env.WALNUT_BUNDLED_STORE_DIR = path.join(tmpBase, 'bundled-store')
-process.argv.push('--_ephemeral-child')
+process.argv.push('--_ephemeral-child', '--_own-accounts')
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
 

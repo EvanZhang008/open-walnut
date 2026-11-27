@@ -33,6 +33,7 @@ import { bunGlobal } from '../lib/runtime.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
 import { WALNUT_HOME, IS_EPHEMERAL, PLUGIN_STORES_DIR } from '../constants.js';
 import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
+import { notePluginCodeDir } from './plugins/copy-network-guard.js';
 import { getVersion, isVersionKnown } from './version.js';
 import { createSubsystemLogger } from '../logging/index.js';
 import { getConfig, migrateStoredConfig, updatePluginConfig } from './config-manager.js';
@@ -1787,6 +1788,9 @@ async function loadPlugin(
   removePluginDiagnostics(pluginId);
   const bundled = !isBuiltin && (origin?.bundled ?? existingSource?.bundled ?? false);
   sources.set(pluginId, { dir: pluginDir, isBuiltin, ...(bundled ? { bundled: true } : {}) });
+  // A plugin that is not built in may call the network itself: on a copy of the person's data its
+  // own writes are refused by where they come from (plugins/copy-network-guard.ts).
+  if (!isBuiltin) notePluginCodeDir(pluginDir);
   const originFields = bundled ? { bundled: true } : {};
 
   if (manifest.apiVersion !== undefined && manifest.apiVersion !== 1) {

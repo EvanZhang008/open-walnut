@@ -60,7 +60,7 @@ import {
   type UnsubscribeHttpSeam,
 } from './unsubscribe-http.js'
 import { parseUnsubscribeMailto } from './unsubscribe-mailto.js'
-import { assertOutwardDoor, isPermitRefusal, leaderPermitActive } from '../../core/leader/switch/doors.js'
+import { accountDoorsGuarded, assertOutwardDoor, isPermitRefusal } from '../../core/leader/switch/doors.js'
 import { holdDurablyUntilDoorsOpen, registerDeferredReplay } from '../../core/deferred-door-work.js'
 import { unsubscribeSentence, unsubscribeVerdict } from './unsubscribe-verdict.js'
 
@@ -331,7 +331,7 @@ export class MailUnsubscribe {
     const method = this.chooseRung(subject, request.method)
 
     // The outward door before the claim: a refusal takes no ledger row, so nothing waits on a lock.
-    if (leaderPermitActive()) assertOutwardDoor('mail-unsubscribe', `${subject.accountId}:${subject.messageId}`)
+    if (accountDoorsGuarded()) assertOutwardDoor('mail-unsubscribe', `${subject.accountId}:${subject.messageId}`)
     const startedAt = this.now
     // A mailto attempt's row is settled from its send first, and never reclaimed while that mail
     // may still go out: a second click would mint a second mail.

@@ -204,8 +204,9 @@ export async function runDemo(action?: string, options: { _child?: boolean; _hea
       await writeDemoState(paths, { v: 1, generation, token, controlPort: 0, pid: process.pid, startTime, status: 'starting' })
       await prepareDemoHome(paths)
       const logFile = await fs.open(path.join(paths.root, 'server.log'), 'a', 0o600)
-      const childArgs = singleFile() ? ['demo', '--_child', '--_ephemeral-child']
-        : [path.resolve(process.argv[1]!), 'demo', '--_child', '--_ephemeral-child']
+      // --_own-accounts: the Demo's home is its own, never a copy, so an account signed in there may be written to.
+      const childArgs = singleFile() ? ['demo', '--_child', '--_ephemeral-child', '--_own-accounts']
+        : [path.resolve(process.argv[1]!), 'demo', '--_child', '--_ephemeral-child', '--_own-accounts']
       const child = spawn(process.execPath, childArgs, {
         cwd: paths.home, env: { ...demoChildEnv(process.env, paths, token), ...(recovering ? { WALNUT_DEMO_RECOVER: '1' } : {}) },
         detached: true, stdio: ['ignore', logFile.fd, logFile.fd],

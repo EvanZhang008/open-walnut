@@ -21,7 +21,7 @@ import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { getQuiet, logQuietSkipOnce, onQuietChanged, quietSuppresses, type QuietState } from '../quiet/quiet-state.js'
 import { isFollower } from '../server-role.js'
 import { deliverPush } from './deliver.js'
-import { doorsClosed, holdUntilDoorsOpen, leaderPermitActive, outwardDoorRefusal } from '../leader/switch/doors.js'
+import { accountDoorsGuarded, doorsClosed, holdUntilDoorsOpen, outwardDoorRefusal } from '../leader/switch/doors.js'
 import { ACTIVE_LEASE_MS, parseMode, selectDevices } from './letter-push-policy.js'
 
 export interface HeldPush {
@@ -106,7 +106,7 @@ async function releaseHeld(): Promise<void> {
   if ((await getQuiet()).active) return
   // The outward door BEFORE the held items are cleared: a machine without the write permission
   // keeps them, and the release runs again when the permission arrives.
-  if (leaderPermitActive() && outwardDoorRefusal('push', 'walnut-quiet-catchup')) {
+  if (accountDoorsGuarded() && outwardDoorRefusal('push', 'walnut-quiet-catchup')) {
     releaseWhenDoorsOpen()
     return
   }

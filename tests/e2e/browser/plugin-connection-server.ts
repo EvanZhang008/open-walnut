@@ -45,7 +45,7 @@ process.env.WALNUT_APPROVALS_ASK ??= '1'
 process.env.WALNUT_SYNC_FIRST_TICK_MS = '1500'
 process.env.HOME = tmpBase
 process.env.USERPROFILE = tmpBase
-process.argv.push('--_ephemeral-child')
+process.argv.push('--_ephemeral-child', '--_own-accounts')
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
 

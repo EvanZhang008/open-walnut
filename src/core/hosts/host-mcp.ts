@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto'
 import { log } from '../../logging/index.js'
 import { HostExecError, assertStillGranted, budgetLeft, callerOf, dial, grantFor, redact, targetHost, type Caller } from './host-exec.js'
 import { saveCallImages } from './host-mcp-images.js'
+import { accountDoorsGuarded, outwardDoorRefusal } from '../leader/switch/doors.js'
 
 export const MAX_CALLS_PER_TASK = 4
 const SAME_HOST = 'call the MCP server with your own tools'
@@ -161,6 +162,13 @@ export async function hostMcpCall(params: { host: string; server: string; tool: 
   const timeoutMs = Math.min(typeof params.timeout_ms === 'number' && params.timeout_ms > 0 ? params.timeout_ms : 60_000, CALL_MAX_MS)
   const args = JSON.stringify(params.arguments ?? {})
   const preview = `MCP ${params.server}: ${params.tool} ${args.length > 300 ? `${args.slice(0, 300)}…` : args}`
+  // The outward door: a tool of the person's MCP servers on that host (Slack, mail) reaches his
+  // account there, so a copy of his data (closeAccountDoors) or a machine without the write
+  // permission calls none. The host lists no read-only hints, so a refused door refuses reads too.
+  if (accountDoorsGuarded()) {
+    const refused = outwardDoorRefusal('mcp-write', `host:${host}:${params.server}:${params.tool}`)
+    if (refused) throw new HostExecError(refused, 503, 'not_permitted')
+  }
   return start(caller, host, 'mcp.call', {
     server: params.server, tool: params.tool, arguments: params.arguments ?? {}, timeoutMs, ...(params.cwd ? { cwd: params.cwd } : {}),
   }, preview, timeoutMs, t0)

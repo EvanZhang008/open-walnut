@@ -181,13 +181,34 @@ server is isolated by construction, so nothing it does reaches the real Walnut:
   (`src/core/stt/voice-here.ts`, ratchet `tests/core/stt-voice-here-ratchet.test.ts`). Opt in with
   `WALNUT_SEARCH_V2_SEMANTIC=1` and `WALNUT_STT_AUTO_SETUP=1`.
 
-Plugins still load with the copied settings, so a test that sends mail or a chat message
-through one sends it for real.
+- it never writes to the person's real accounts, although it holds the copy's mail accounts,
+  calendars, trackers and plugins with their live credentials: every outward door that reaches an
+  account (mail read flags, moves, rules, invite answers, unsubscribes and sends; calendar writes;
+  pushes; task sync; a plugin's write requests; an MCP tool the server does not mark
+  `readOnlyHint`, which is how the Slack plugin posts; any `host_mcp_call`; the data repo; the
+  companion) is closed for the life of the process and answers 503 (`isolated`) with a sentence
+  saying this Walnut is an isolated test server
+  (`closeAccountDoors` in `src/core/leader/switch/doors.ts`, decided at boot by
+  `accountIsolationReason` in `src/core/remote-sync-isolation.ts`: a snapshot the launcher marked
+  with `data-copy.json`, or an ephemeral server; a server on a home of its own, a Playwright
+  fixture server, the Demo or `scripts/walnut-sandbox.sh`, keeps its doors open with
+  `--_own-accounts`). A copy of the data dir made by hand is served with `bun run dev:ephemeral`,
+  never with a plain `walnut web`, which would take it for a real home. The snapshot mark also keeps plugin jobs off, even with
+  `WALNUT_PLUGIN_JOBS_IN_TEST=1`. Reading still works: mail
+  syncs in, a message opens, a Slack channel reads. Ratchet:
+  `tests/core/leader/switch/account-doors-isolation.test.ts` (2026-11-27: opening messages in an
+  ephemeral server's Mail page marked them read in the person's real Gmail).
+
+Plugins still load with the copied settings. A plugin's own network code that passes none of
+Walnut's doors (no `walnut.http.fetch`, no `walnut.mcp`, no mail or calendar provider) is not
+stopped, and a session started there still loads your real MCP servers and CLIs from `~/.claude`,
+so a test must still never drive such a send.
 
 **Testing a task sync plugin.** No plugin syncs tasks on a test server, so tasks made there stay
 local, which is what almost every test wants. To test a sync plugin against its real service
 (Microsoft To Do, or one the user installed), start the server with
-`WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1 bun run dev:ephemeral`. It then writes to the user's real
+`WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1 bun run dev:ephemeral` (it opens the task sync door only;
+mail, calendar and every other account door stay closed). It then writes to the user's real
 account, and the real Walnut pulls those items back onto the user's board. Change only tasks you
 created there: the copied tasks are linked to real items, so editing, completing or deleting one
 changes the real item. Before you finish, clean up: delete each item you created from the test

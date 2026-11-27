@@ -21,6 +21,7 @@ import {
 import { redactSensitiveText, type SubsystemLogger } from '../../logging/index.js'
 import { mcpServerEnv } from './env.js'
 import { clause } from '../../utils/format.js'
+import { accountDoorsGuarded, outwardDoorRefusal } from '../leader/switch/doors.js'
 import {
   McpCallError, type McpCallOptions, type McpCallResult, type McpServerDefinition, type McpServerState,
   type McpServerStatus, type McpSessionAccess, type McpToolInfo,
@@ -234,6 +235,15 @@ export class McpConnection {
   }
 
   async call(tool: string, args: Record<string, unknown>, options: McpCallOptions = {}): Promise<McpCallResult> {
+    // The outward door for a tool that may write (the server does not mark it readOnlyHint): a
+    // post, a reaction or a mark made through an MCP server reaches the person's account there
+    // (Slack), so a copy of his data (closeAccountDoors) or a machine without the write permission
+    // never sends it. Reads still go.
+    // Asked first (cheap), so a server that may act never pays for the tool list.
+    if (accountDoorsGuarded()) {
+      const refused = outwardDoorRefusal('mcp-write', `${this.def.name}:${tool}`)
+      if (refused && !(await this.isReadOnly(tool, options))) throw new McpCallError('unavailable', refused, 'before-call')
+    }
     const client = await this.ensure()
     this.inFlight += 1
     this.disarmIdle()
@@ -257,6 +267,13 @@ export class McpConnection {
       this.inFlight -= 1
       this.armIdle()
     }
+  }
+
+  /** Whether the server marks `tool` readOnlyHint (from its tool list; a tool it does not list is not). */
+  private async isReadOnly(tool: string, options: McpCallOptions): Promise<boolean> {
+    if (options.signal?.aborted) return false
+    const tools = await this.listTools(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {})
+    return tools.some((one) => one.name === tool && one.readOnly)
   }
 
   private callFailure(tool: string, timeoutMs: number, error: unknown, signal?: AbortSignal): McpCallError {

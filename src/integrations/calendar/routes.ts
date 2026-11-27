@@ -36,7 +36,7 @@
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
 import type { PluginRouteReply, PluginRouteRequest } from '../../core/plugins/plugin-route-adapter.js'
 import { calendarErrorCode } from './api.js'
-import { isPermitRefusal, NOT_LEADER_MESSAGE } from '../../core/leader/switch/doors.js'
+import { doorRefusalMessage, isIsolationRefusal, isPermitRefusal } from '../../core/leader/switch/doors.js'
 import { ORIGIN_HEADER, LOCAL_ORIGIN } from '../../lib/caller-origin.js'
 import type { CalendarService } from './service.js'
 import type { CalendarInfo } from './types.js'
@@ -69,8 +69,8 @@ function errorReply(walnut: WalnutServerPluginApi, err: unknown): PluginRouteRep
       : 502
     return { status, json: { error: err instanceof Error ? err.message : String(err), code } }
   }
-  // An outward door refused the write (leader switch): not a crash, so no error card.
-  if (isPermitRefusal(err)) return { status: 503, json: { error: NOT_LEADER_MESSAGE, code: 'not-leader' } }
+  // An outward door refused the write (leader switch, or a copy of the person's data): not a crash, so no error card.
+  if (isPermitRefusal(err)) return { status: 503, json: { error: doorRefusalMessage(err), code: isIsolationRefusal(err) ? 'isolated' : 'not-leader' } }
   walnut.log.error('calendar route failed', { error: String(err).slice(0, 300) })
   return { status: 500, json: { error: 'internal calendar error' } }
 }

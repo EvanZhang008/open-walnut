@@ -24,7 +24,7 @@
  */
 import type { MailBodyStore } from './bodies.js'
 import { providerIdOf } from './contract.js'
-import { assertOutwardDoor, holdUntilDoorsOpen, isPermitRefusal, leaderPermitActive } from '../../core/leader/switch/doors.js'
+import { accountDoorsGuarded, assertOutwardDoor, holdUntilDoorsOpen, isPermitRefusal } from '../../core/leader/switch/doors.js'
 import type { MailProviderRegistry } from './provider-registry.js'
 import type { MailStore } from './store.js'
 import type { MoveRequest, MoveRow, SettleRow } from './store-moves.js'
@@ -285,7 +285,7 @@ export class MailFilterMover {
     }
     // The outward door, before the provider is asked: a refusal throws, so no row is settled (no
     // attempt counted) and the run waits for the permission (runNow).
-    if (leaderPermitActive()) assertOutwardDoor('mail-write', `move:${accountId}:${rows.length}`)
+    if (accountDoorsGuarded()) assertOutwardDoor('mail-write', `move:${accountId}:${rows.length}`)
     let clock: ReturnType<typeof setTimeout> | undefined
     try {
       const answer = await Promise.race([

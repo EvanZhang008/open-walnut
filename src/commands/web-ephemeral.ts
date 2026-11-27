@@ -31,6 +31,7 @@ import {
 import { ephemeralContendedIdleTtlMs, ephemeralIdleTtlMs, idleExitRule } from './ephemeral-idle.js'
 import { ephemeralExitLogFile, recordEphemeralExit, type EphemeralExitRule } from './ephemeral-exit-record.js'
 import { machineHold } from '../lib/machine-hold.js'
+import { DATA_COPY_MARKER } from '../core/remote-sync-isolation.js'
 import { ownerGone, processStartOf, resolveEphemeralOwner, startOwnerWatch, type EphemeralOwner } from './ephemeral-owner.js'
 import { EPHEMERAL_SLOT_FILE, acquireEphemeralSlot, ephemeralMaxServers, ephemeralSlotDir, ephemeralWaitMs, giveUpLines, releaseSlot, slotWanted, updateSlot, type HeldSlot } from './ephemeral-slots.js'
 import { copyDataSnapshot, dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTriage, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
@@ -131,6 +132,19 @@ export async function runEphemeralLauncher(): Promise<void> {
     snapshot = copyDataSnapshot(WALNUT_HOME, tmpDir)
   } catch (err) {
     process.stderr.write(`ephemeral: could not write the snapshot: ${err instanceof Error ? err.message : String(err)}\n`)
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+    removeEphemeralRuntimeDirsNow(runtimeDir) // no server ran: no terminal to end
+    unregisterEphemeralDir(registryFile, tmpDir)
+    process.exit(1)
+    return
+  }
+  // The snapshot says what it is, for whatever serves it later: a server on it closes its account
+  // doors, syncs no tasks and starts no plugin jobs (core/remote-sync-isolation.ts, which every one
+  // of those asks), even one started there with a test fixture's flag.
+  try {
+    fs.writeFileSync(path.join(tmpDir, DATA_COPY_MARKER), JSON.stringify({ copiedFrom: WALNUT_HOME, at: new Date().toISOString() }))
+  } catch (err) {
+    process.stderr.write(`ephemeral: could not mark the snapshot as a copy: ${err instanceof Error ? err.message : String(err)}\n`)
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
     removeEphemeralRuntimeDirsNow(runtimeDir) // no server ran: no terminal to end
     unregisterEphemeralDir(registryFile, tmpDir)
