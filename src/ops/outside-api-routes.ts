@@ -53,7 +53,7 @@ export const OUTSIDE_API_ROUTES: readonly OutsideApiRoute[] = [
   { prefix: '/api/mcp/servers/:server/call', source: 'mcp tool', why: 'an MCP tool\'s answer (mcp_call frames it)' },
   { prefix: '/api/v1/hosts/:host/http', source: 'fetched page', why: 'the body and headers of a URL a host fetched (host_http frames them)' },
   { prefix: '/api/v1/hosts/:host/mcp/:server/call', source: 'mcp tool', why: 'an MCP tool\'s answer on a host (host_mcp_call frames it)' },
-  { prefix: '/api/v1/hosts/:host/mcp-calls', source: 'mcp tool', why: 'a host MCP call\'s answer read later (host_mcp_result frames it)' },
+  { prefix: '/api/v1/hosts/:host/mcp-calls/:call_id', source: 'mcp tool', why: 'a host MCP call\'s answer read later (host_mcp_result frames it)' },
   { prefix: '/api/topics', source: 'topic messages', why: 'a topic\'s messages, a person member\'s among them, came by mail (topic_read and topic_list frame them)' },
 ]
 
