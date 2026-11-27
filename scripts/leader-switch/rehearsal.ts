@@ -438,6 +438,11 @@ export async function rehearseSwitchAndBack(root: string, print: (c: Check) => v
     const markerPath = path.join(w.a.home, 'local', 'leader-switch', 'handed-over.json')
     const saved = fs.readFileSync(markerPath)
     fs.rmSync(markerPath)
+    // The handed-over standby still runs on A's port: with its marker gone it ends (handed-over.ts). The control
+    // boots only once that standby is gone, so the answer it reads is the new process's, never the ending standby's
+    // (CI run 45998577601: the probe met the ending standby, then the status read found nothing: null).
+    const standbyGone = await waitFor('the standby to end once its marker is gone', async () => (await status(w, w.a)) === null, 60_000, 250).then(() => true, () => false)
+    c.add('control: the handed-over standby ends once its marker is gone', standbyGone, standbyGone ? 'A answers nothing before the control boots' : 'A still answers 60 s after the marker went')
     for (const x of w.witnesses) fs.renameSync(x.dir, `${x.dir}.off`)
     const keptBefore = await snapshotHome(w.a.home)
     const unmarked = await w.byHand(w.a, 'control-unmarked')
