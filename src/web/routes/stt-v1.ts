@@ -44,6 +44,8 @@ const ALLOWED_FORMATS = new Set(['webm', 'wav', 'mp3', 'ogg', 'mp4', 'm4a', 'fla
 // companion's own engine.
 const BRIDGE_MAX_AUDIO_B64 = 3 * 1024 * 1024
 const BRIDGE_STT_TIMEOUT_MS = 100_000
+/** A live draft is worth waiting for only while the person still talks. */
+const BRIDGE_DRAFT_TIMEOUT_MS = 15_000
 
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: { code, message } })
@@ -193,6 +195,24 @@ export function installingNotice(): string {
 }
 
 interface SttInput { audio: string; format: string; language?: string }
+
+/** The take (or a draft of it) heard on the Mac's engine, relayed by its daemon over the bridge. */
+async function relayToMac(input: SttInput & { preview?: true }, timeoutMs: number): Promise<SttOutput> {
+  let relayed: { ok?: unknown; text?: unknown; durationMs?: unknown; error?: unknown }
+  try {
+    const { bridgeRequest } = await import('../ws/bridge-registry.js')
+    relayed = await bridgeRequest('__local__', 'stt', { ...input }, timeoutMs)
+  } catch (err) {
+    // BridgeOfflineError / timeout: expected while the Mac sleeps.
+    throw new SttRelayError('unreachable', err instanceof Error ? err.message : String(err))
+  }
+  if (relayed.ok === true && typeof relayed.text === 'string') {
+    return { text: relayed.text, durationMs: typeof relayed.durationMs === 'number' ? relayed.durationMs : 0 }
+  }
+  // The Mac answered and said no. Its words travel as they are, so a verdict
+  // about the audio stays one: the relay is transport, not a relabel.
+  throw new SttRelayError('declined', typeof relayed.error === 'string' ? relayed.error : 'The Mac could not transcribe it')
+}
 interface SttOutput { text: string; durationMs?: number }
 
 /** The leader was asked: it could not be reached, or it answered and could not transcribe. */
@@ -220,22 +240,7 @@ export function sttEngines(config: Config, follower: boolean): Array<FeatureEngi
       id: 'bridge',
       // Bigger audio skips the relay: one bridge frame could not carry it.
       unavailable: (input) => (input.audio.length > BRIDGE_MAX_AUDIO_B64 ? 'too-big' : null),
-      async run(input) {
-        let relayed: { ok?: unknown; text?: unknown; durationMs?: unknown; error?: unknown }
-        try {
-          const { bridgeRequest } = await import('../ws/bridge-registry.js')
-          relayed = await bridgeRequest('__local__', 'stt', { ...input }, BRIDGE_STT_TIMEOUT_MS)
-        } catch (err) {
-          // BridgeOfflineError / timeout: expected while the Mac sleeps.
-          throw new SttRelayError('unreachable', err instanceof Error ? err.message : String(err))
-        }
-        if (relayed.ok === true && typeof relayed.text === 'string') {
-          return { text: relayed.text, durationMs: typeof relayed.durationMs === 'number' ? relayed.durationMs : 0 }
-        }
-        // The Mac answered and said no. Its words travel as they are, so a verdict
-        // about the audio stays one: the relay is transport, not a relabel.
-        throw new SttRelayError('declined', typeof relayed.error === 'string' ? relayed.error : 'The Mac could not transcribe it')
-      },
+      run: (input) => relayToMac(input, BRIDGE_STT_TIMEOUT_MS),
     })
   }
   engines.push({
@@ -350,10 +355,14 @@ const DRAFT_MAX_AUDIO_B64 = 3 * 1024 * 1024
  * The words of a take still being recorded, for the phone's voice mode to show
  * in its box while the person talks (the web's /api/stt/draft). A preview only:
  * nothing is kept, and the take's own /stt/transcribe is what gets sent. The
- * user's own engine on this server only: never the hosted API (a draft every
- * second or two would bill them for words nobody sends), and on the companion
- * never the relay to the Mac, so a companion with no engine of its own has no
- * live words.
+ * user's own engine only: never the hosted API (a draft every second or two
+ * would bill them for words nobody sends). On the companion it rides the relay
+ * to the Mac as a preview pass (a short one: the phone asks one at a time and
+ * stops after two failures), but only to a Mac daemon that carries the flag
+ * ('stt-preview-v1'); an older one would hand the Mac a full pass instead. A
+ * relayed draft cannot be dropped once the Mac runs it, so the take's own words
+ * may wait for the one draft still running there. The Mac's daemon comes from
+ * the Mac server's own build, so its flag means that server reads it.
  */
 sttV1Router.post('/stt/draft', async (req: Request, res: Response, next: NextFunction) => {
   const gone = new AbortController()
@@ -379,21 +388,24 @@ sttV1Router.post('/stt/draft', async (req: Request, res: Response, next: NextFun
     const { isFollower } = await import('../../core/server-role.js')
     const follower = isFollower()
     const config = await getConfig()
-    // Not the bridge either: the Mac answers a relayed request with a full pass it
-    // cannot drop, so drafts would queue ahead of the take's own words.
-    if (config.stt?.engine === 'openai') {
+    if (!follower && config.stt?.engine === 'openai') {
       sendError(res, 503, 'stt_unavailable', 'Live words need a voice engine on your own machine')
       return
     }
+    const { bridgeHasCapability } = await import('../ws/bridge-registry.js')
+    const previewRelay = follower && bridgeHasCapability('__local__', 'stt-preview-v1')
     const engines = sttEngines(config, follower)
-      .filter((engine) => engine.id !== 'openai' && engine.id !== 'bridge')
+      .filter((engine) => engine.id !== 'openai' && (engine.id !== 'bridge' || previewRelay))
       .map((engine) => ({
         ...engine,
-        // This server's own engine: a preview pass, dropped when the phone stops waiting.
-        async run(input: SttInput) {
-          const { transcribeAudio } = await import('../../core/stt/index.js')
-          return transcribeAudio(config, { ...input, preview: true, signal: gone.signal })
-        },
+        run: engine.id === 'bridge'
+          // The Mac's engine, told it is a draft (its daemon carries the flag).
+          ? (input: SttInput) => relayToMac({ ...input, preview: true }, BRIDGE_DRAFT_TIMEOUT_MS)
+          // This server's own engine: a preview pass, dropped when the phone stops waiting.
+          : async (input: SttInput) => {
+              const { transcribeAudio } = await import('../../core/stt/index.js')
+              return transcribeAudio(config, { ...input, preview: true, signal: gone.signal })
+            },
       }))
     if (!follower) {
       // A piece of a take heard ahead waits while a draft runs (take-ahead.ts).

@@ -3765,21 +3765,32 @@ export class DaemonConnection {
     const revoked = this.revokedReach('stt-request')
     if (revoked) { try { await this.send('stt-result', { relayId, error: revoked }) } catch { /* the daemon times it out */ } return }
     let reply: Record<string, unknown>
+    // A live draft from the phone's voice mode, relayed by the companion: a preview pass,
+    // and a piece of a take heard ahead waits while it runs (as /api/v1/stt/draft here).
+    const preview = event.preview === true
+    let drafted: (() => void) | undefined
     try {
       const { getConfig } = await import('../core/config-manager.js')
       const { transcribeAudio } = await import('../core/stt/index.js')
-      const result = await transcribeAudio(await getConfig(), {
+      const config = await getConfig()
+      // A draft every second or two would bill the hosted API for words nobody sends.
+      if (preview && config.stt?.engine === 'openai') throw new Error('Live words need a voice engine on your own machine')
+      if (preview) drafted = (await import('../core/stt/take-ahead.js')).noteLiveDraft()
+      const result = await transcribeAudio(config, {
         audio, format,
         language: typeof event.language === 'string' && event.language !== '' ? event.language : undefined,
+        ...(preview ? { preview: true } : {}),
       })
       log.session.info('DaemonConnection: stt relay transcribed', {
-        host: this.hostKey, relayId, chars: result.text.length, durationMs: result.durationMs,
+        host: this.hostKey, relayId, chars: result.text.length, durationMs: result.durationMs, preview,
       })
       reply = { relayId, text: result.text, durationMs: result.durationMs }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log.session.warn('DaemonConnection: stt relay failed', { host: this.hostKey, relayId, message })
       reply = { relayId, error: message }
+    } finally {
+      drafted?.()
     }
     try {
       await this.send('stt-result', reply)

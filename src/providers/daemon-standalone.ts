@@ -814,7 +814,7 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
  * prod daemon dir, as every test knob that changes what a daemon does (section 10).
  */
 const BRIDGE_HIDDEN_CAPS = KEEPS_SESSIONS ? [] : (daemonEnv.WALNUT_BRIDGE_HIDE_CAPS ?? '').split(',').map((x) => x.trim())
-const BRIDGE_CAPABILITIES = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1'].filter((c) => !BRIDGE_HIDDEN_CAPS.includes(c))
+const BRIDGE_CAPABILITIES = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1', 'stt-preview-v1'].filter((c) => !BRIDGE_HIDDEN_CAPS.includes(c))
 
 /**
  * What a follower socket (the host server) may ask ('follower-v1'): who leads,

@@ -30,8 +30,10 @@ vi.mock('../../../src/core/server-role.js', async (importOriginal) => ({
 }));
 
 const bridgeRequest = vi.fn();
+let macCaps: string[] = [];
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeRequest: (...args: unknown[]) => bridgeRequest(...args),
+  bridgeHasCapability: (_host: string, cap: string) => macCaps.includes(cap),
 }));
 
 import express from 'express';
@@ -53,6 +55,7 @@ describe('POST /api/v1/stt/draft', () => {
     ingestAudio.mockReset();
     bridgeRequest.mockReset();
     follower = false;
+    macCaps = [];
     await updateConfig({ stt: {} });
   });
 
@@ -94,7 +97,22 @@ describe('POST /api/v1/stt/draft', () => {
     expect(hostedTranscribe).not.toHaveBeenCalled();
   });
 
-  it('on the companion a draft never rides the relay to the Mac', async () => {
+  it('on the companion a draft rides the relay to a Mac whose daemon carries the draft flag, as a short preview', async () => {
+    follower = true;
+    macCaps = ['stt-preview-v1'];
+    bridgeRequest.mockResolvedValue({ ok: true, text: 'words from the Mac', durationMs: 12 });
+    const res = await request(makeApp()).post('/api/v1/stt/draft').send({ audio: 'aGVsbG8=', format: 'wav', language: 'en' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ text: 'words from the Mac', durationMs: 12 });
+    const [host, kind, payload, timeout] = bridgeRequest.mock.calls[0] as [string, string, Record<string, unknown>, number];
+    expect([host, kind]).toEqual(['__local__', 'stt']);
+    expect(payload).toMatchObject({ audio: 'aGVsbG8=', format: 'wav', language: 'en', preview: true });
+    expect(timeout).toBeLessThanOrEqual(15_000);
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(hostedTranscribe).not.toHaveBeenCalled();
+  });
+
+  it('on the companion a draft never rides the relay to a Mac daemon without the draft flag', async () => {
     follower = true;
     await updateConfig({ stt: { engine: 'mlx' } });
     transcribeAudio.mockResolvedValue({ text: 'companion words', durationMs: 5 });

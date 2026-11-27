@@ -118,8 +118,9 @@ afterAll(async () => {
 
 const closeOf = (frames: Array<Record<string, any>>, sid: string) => frames.find((f) => f.ev === 'stream-close' && f.sid === sid)
 // What the daemon tells the companion in the bridge hello (BRIDGE_CAPABILITIES; the send
-// and permission relays joined bridge-stream-v1 in 5408d5875, the feature-node relay in d4c4e3a63).
-const BRIDGE_CAPS = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1']
+// and permission relays joined bridge-stream-v1 in 5408d5875, the feature-node relay in d4c4e3a63,
+// the live-draft flag of the stt relay with the phone's hands-free voice mode).
+const BRIDGE_CAPS = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1', 'stt-preview-v1']
 
 describe.skipIf(!BUN)("standalone daemon: the companion's forward stream through the bridge", () => {
   it('the hello says bridge-stream-v1; a stream to the primary arrives from the companion and carries bytes both ways; never to the follower', async () => {

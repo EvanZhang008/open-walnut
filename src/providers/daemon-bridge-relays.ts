@@ -57,7 +57,7 @@ export function createDaemonBridgeRelays<W extends object>(deps: DaemonBridgeRel
   }>()
 
   function cmdSttRelay(ws: W, id: number, cmd: Record<string, unknown>) {
-    const { audio, format, language } = cmd as { audio?: string; format?: string; language?: string }
+    const { audio, format, language, preview } = cmd as { audio?: string; format?: string; language?: string; preview?: unknown }
     if (!audio || !format) {
       return sendError(ws, id, 'stt: missing audio or format')
     }
@@ -76,7 +76,8 @@ export function createDaemonBridgeRelays<W extends object>(deps: DaemonBridgeRel
     }, STT_RELAY_TIMEOUT_MS)
     sttRelayPending.set(relayId, { ws, id, timer, home })
     logMsg('info', 'stt: relaying to transcription host', { relayId, format, audioB64Len: audio.length })
-    sendEvent(target, 'stt-request', { relayId, audio, format, language })
+    // `preview`: a live draft of a take still recording ('stt-preview-v1'), never kept.
+    sendEvent(target, 'stt-request', { relayId, audio, format, language, ...(preview === true ? { preview: true } : {}) })
   }
 
   function cmdSttResult(ws: W, id: number, cmd: Record<string, unknown>) {

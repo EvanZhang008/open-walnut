@@ -325,7 +325,7 @@ describe('leader protocol: the daemon', () => {
   })
 
   it('the bridge hello says what the daemon does for the companion, and a test can hide it', () => {
-    expect(src).toMatch(/BRIDGE_CAPABILITIES = \['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1'\]\.filter\(/)
+    expect(src).toMatch(/BRIDGE_CAPABILITIES = \['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1', 'stt-preview-v1'\]\.filter\(/)
     expect(src).toMatch(/WALNUT_BRIDGE_HIDE_CAPS/)
     // The knob is refused for a daemon that keeps sessions (section 10: the prod dir, or a service set's runtime): read only off them.
     expect(src).toMatch(/BRIDGE_HIDDEN_CAPS = KEEPS_SESSIONS \? \[\] : \(process\.env\.WALNUT_BRIDGE_HIDE_CAPS/)
