@@ -162,7 +162,7 @@ export async function mergeGuidance(
   if (at) return { kind: 'same', line: at, text: lines[at - 1].text };
   // A line with its source note, or one the reflection remembers writing, is the reflection's; the rest are the user's.
   const written = new Set(state.written);
-  const targets = new Set(lines.flatMap((l, i) => (l.from || written.has(normalizeForQuote(l.text)) ? [i + 1] : [])));
+  const targets = new Set(lines.flatMap((l, i) => (reflectionsOwn(l, written) ? [i + 1] : [])));
   if (!targets.size) return { kind: 'failed', why: 'no line the reflection wrote' };
   const own = new Set(lines.map((_, i) => i + 1).filter((i) => !targets.has(i)));
   // The sessions read the lines in a hint of fixed size: a merge never pushes a line out of it (team-guidance-hint.ts).
@@ -206,14 +206,57 @@ const DROPPED_MD_RE = /^- Rule: none \(not added \((?:day_full|file_full)(?:; no
  * The lessons a full day or file dropped: those of the last BACKFILL_DAYS days, and those holding his own
  * words (the finding quoted him) of the last BACKFILL_OWN_WORDS_DAYS; his own first, each oldest first.
  */
-export async function droppedLessons(nodeId: string, nowMs: number): Promise<Array<{ text: string; date: string; own: boolean }>> {
-  const out: Array<{ text: string; date: string; own: boolean }> = [];
-  const push = (text: string, date: string, own: boolean) => {
+/**
+ * The only way a lesson is held for a step: kept out of the queue AND said in the day's record the node
+ * reads, so none is held silently (11-27 audit: the tidy's own hold wrote no reason). Guard:
+ * tests/core/org/reflection-audit6.test.ts (no other file writes stepHeld).
+ */
+export async function holdLesson(node: Task, nodeName: string, key: string, why: string, nowMs: number): Promise<void> {
+  await updateReflectionState(node.id, (s) => { s.stepHeld = [...new Set([...(s.stepHeld ?? []), key])].slice(-1000); }, nowMs);
+  await appendDayNote(node.id, nodeName, localDate(nowMs), why, nowMs).catch(() => {});
+}
+
+/**
+ * A line the reflection may rewrite: one with its source note or one it remembers writing, never a line
+ * the user wrote nor one that holds his own standing words (those are his, word for word). Pure.
+ */
+export function reflectionsOwn(l: GuidanceLine, written: ReadonlySet<string>): boolean {
+  if (l.text.startsWith(STANDING_LINE_HEAD)) return false;
+  return !!l.from || written.has(normalizeForQuote(l.text));
+}
+
+/** How a line of the user's own words begins (guidance-merge.ts standingWordsLine). */
+export const STANDING_LINE_HEAD = 'The user\'s own standing instruction';
+
+export const STANDING_SYSTEM = [
+  'USER WORDS are what the user wrote to an AI agent. Do they give a standing instruction: what agents should do every time for a kind of case from now on (who to tag or ask, where to post, what to always do)? A complaint, a question, a one-time order about one item, or a mood is not one.',
+  'Answer only YES or NO.',
+].join('\n');
+
+/**
+ * His own words as a guidance line, word for word and dated, when they are a standing instruction; null
+ * otherwise. His words are his own yes, for the cases they name and no wider: the line says so. Not put
+ * through the step check (the check holds what the reflection would have sessions do on ITS word).
+ */
+export async function standingWordsLine(quote: string, date: string, callModel: CallModel, nodeId: string): Promise<string | null> {
+  const q = quote.replace(/\s+/g, ' ').trim();
+  if (q.length < 12) return null;
+  const raw = await callModel(STANDING_SYSTEM, `USER WORDS: ${q}`, nodeId).catch(() => '');
+  if (!/^\W*YES\b/i.test(raw.trim())) return null;
+  return `${STANDING_LINE_HEAD} of ${date}, in his words, for the cases they name and no wider: "${q}"`;
+}
+
+/** A lesson the day records hold as not added: its text, its day, and the user's words it quotes (when it does). */
+export interface DroppedLesson { text: string; date: string; own: boolean; quote?: string }
+
+export async function droppedLessons(nodeId: string, nowMs: number): Promise<DroppedLesson[]> {
+  const out: DroppedLesson[] = [];
+  const push = (text: string, date: string, own: boolean, quote?: string) => {
     const t = text.trim();
     const at = out.findIndex((x) => normalizeForQuote(x.text) === normalizeForQuote(t));
     if (!t) return;
-    if (at < 0) out.push({ text: t, date, own });
-    else if (own) out[at].own = true;
+    if (at < 0) out.push({ text: t, date, own, ...(quote ? { quote } : {}) });
+    else if (own) { out[at].own = true; out[at].quote ??= quote; }
   };
   for (let i = BACKFILL_OWN_WORDS_DAYS - 1; i >= 0; i--) {
     const date = localDate(nowMs - i * 24 * 3600_000);
@@ -224,7 +267,7 @@ export async function droppedLessons(nodeId: string, nowMs: number): Promise<Arr
       for (const e of entries) {
         if (e.rule.kind !== 'none' || !DROPPED_TEXT_RE.test(e.rule.text) || !e.finding?.guidance) continue;
         const own = !!e.finding.user_quote?.trim();
-        if (own || recent) push(e.finding.guidance, date, own);
+        if (own || recent) push(e.finding.guidance, date, own, own ? e.finding.user_quote!.trim().slice(0, 300) : undefined);
       }
       continue;
     }
@@ -275,19 +318,24 @@ export async function backfillDropped(node: Task, nodeName: string, deps: MergeD
     let text = l.text;
     if (g.steps.length) {
       // Rewritten once: kept on the state, so a lesson that waits for room is not rewritten every pass.
-      const asked = !l.own ? null : state.askFirst?.[key]
+      let asked = !l.own ? null : state.askFirst?.[key]
         ?? await askFirstLesson(l.text, g.steps, deps.callModel, (t, id) => checkCached(id, t, check, nowMs), node.id);
-      // Its point is to act on his yes without asking again: "ask first" would turn it around. Held, and said
-      // in the day's record the node reads (review of 57063edbcd).
+      // Its point is to act on his yes without asking again: "ask first" would turn it around (review of
+      // 57063edbcd). When his own words are a standing instruction, they go in as his words, word for word
+      // and dated, for the cases they name (11-27 audit: "for all the cr, list them and tag ..." was held and
+      // found nowhere); otherwise it is held.
       if (asked === ASK_FIRST_CONFLICTS) {
-        await updateReflectionState(node.id, (s) => { s.stepHeld = [...new Set([...(s.stepHeld ?? []), key])].slice(-1000); }, nowMs);
-        await appendDayNote(node.id, nodeName, date, `A dropped lesson with the user's own words was not taken up: the step check held it (${g.steps.join(', ')}), and its point is to act on his yes without asking again, which a rewrite to ask first would reverse. Write it yourself if his words allow the step; its words: "${l.text.slice(0, 300)}".`, nowMs).catch(() => {});
-        continue;
+        const standing = l.quote ? await standingWordsLine(l.quote, l.date, deps.callModel, node.id) : null;
+        if (!standing) {
+          await holdLesson(node, nodeName, key, `A dropped lesson with the user's own words was not taken up: the step check held it (${g.steps.join(', ')}), and its point is to act on his yes without asking again, which a rewrite to ask first would reverse. Write it yourself if his words allow the step; its words: "${l.text.slice(0, 300)}".`, nowMs);
+          continue;
+        }
+        asked = standing;
       }
       const rewritten = asked;
       if (rewritten && !state.askFirst?.[key]) {
         await updateReflectionState(node.id, (s) => { s.askFirst = { ...(s.askFirst ?? {}), [key]: rewritten }; }, nowMs);
-        await appendDayNote(node.id, nodeName, date, `A dropped lesson with the user's own words was held by the step check (${g.steps.join(', ')}) and is taken up rewritten to ask first: "${rewritten}".`, nowMs).catch(() => {});
+        await appendDayNote(node.id, nodeName, date, `A dropped lesson with the user's own words was held by the step check (${g.steps.join(', ')}) and is taken up ${rewritten.startsWith(STANDING_LINE_HEAD) ? 'as his own words' : 'rewritten to ask first'}: "${rewritten}".`, nowMs).catch(() => {});
       }
       if (!rewritten) {
         // His words: tried again on later passes, held only after BACKFILL_TRIES_MAX rewrites that failed.
@@ -296,8 +344,7 @@ export async function backfillDropped(node: Task, nodeName: string, deps: MergeD
           await updateReflectionState(node.id, (s) => { s.backfillTries = { ...(s.backfillTries ?? {}), [key]: tries }; }, nowMs);
           continue;
         }
-        await updateReflectionState(node.id, (s) => { s.stepHeld = [...new Set([...(s.stepHeld ?? []), key])].slice(-1000); }, nowMs);
-        await appendDayNote(node.id, nodeName, date, `A dropped lesson was not taken up: the step check held it (${g.steps.join(', ')})${l.own ? `, and it could not be rewritten to ask first; its words: "${l.text.slice(0, 300)}"` : ''}.`, nowMs).catch(() => {});
+        await holdLesson(node, nodeName, key, `A dropped lesson was not taken up: the step check held it (${g.steps.join(', ')})${l.own ? `, and it could not be rewritten to ask first; its words: "${l.text.slice(0, 300)}"` : ''}.`, nowMs);
         continue;
       }
       text = rewritten;

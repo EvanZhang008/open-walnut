@@ -146,7 +146,7 @@ export function judgePrompt(input: JudgeInput): string {
       ? ['', 'THE USER\'S MESSAGES FROM 48 HOURS BEFORE THE ASK ON (in this task and its lead\'s threads: what he already said yes to or answered):', input.evidenceText || '(none)']
       : []),
     '', 'THE SESSION (oldest first):', input.turnsText || '(no turns)',
-    ...(input.laterText ? ['', 'LATER (the session\'s latest turns, written after the ones above, up to now: read them for already_fixed and for what the correction still misses, never as the moment judged; never quote them: session_quote comes from THE SESSION above):', input.laterText] : []),
+    ...(input.laterText ? ['', 'LATER (the session\'s latest turns and the messages other agents or Walnut sent it, after the ones above, up to now: read them for already_fixed, for what the correction still misses, and for a premise of the correction they withdraw or change (then the correction is not needed: already_fixed); never as the moment judged; never quote them: session_quote comes from THE SESSION above):', input.laterText] : []),
   ].join('\n');
 }
 

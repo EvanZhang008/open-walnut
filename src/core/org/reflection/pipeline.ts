@@ -16,7 +16,7 @@ import { judge, callModelDefault, normalizeForQuote, PRODUCT_DEFECT_KINDS, type 
 import { readTranscriptDefault, renderTurns, splitCardAnswers, turnsAround, turnsSince, type TurnText } from './context.js';
 import { parseCardAnswer, type ReflectionSignal, type SpokenMessage } from './signals.js';
 import { addGuidance, appendDayEntry, appendDayNote, dayNoteSaid, deletedSince, nearlySame, recordDayPass, readGuidance, readGuidanceStrict, writeFindingSkill, type DayEntry, type DayRule } from './records.js';
-import { CARD_CORRECTION_GAP_MS, claimCandidate, dailyCallsMax, DAILY_CALLS_RESERVED, localDate, markSeen, readReflectionState, recordBudgetLeft, takeChatSend, takeSkillWrite, updateReflectionState } from './state.js';
+import { CARD_CORRECTION_GAP_MS, CARD_CORRECTIONS_MAX, claimCandidate, dailyCallsMax, DAILY_CALLS_RESERVED, localDate, markSeen, readReflectionState, recordBudgetLeft, takeChatSend, takeSkillWrite, updateReflectionState } from './state.js';
 import { screenSkillWrite } from '../../memory-safety.js';
 import { managedTasks } from './team.js';
 import { collectCandidates, sessionNowOf, type Candidate, type CandidateDeps } from './candidates.js';
@@ -34,7 +34,7 @@ import { MOMENT_MAX_AGE_MS } from './candidates.js';
 import { askTidy, tellHeldLines } from './guidance-tidy.js';
 import { gatedPoint, heldPoint, holdCorrection, sendHeld } from './held-corrections.js';
 import { compactGuidance } from './guidance-compact.js';
-import { datedQuoteLine, handledSince, oldMomentLine, STALE_MOMENT_MS, quoteTimeOf, type AskNow, type LetterText, type TaskOutcome } from './moment-age.js';
+import { cardStillLacks, datedQuoteLine, handledSince, oldMomentLine, STALE_MOMENT_MS, quoteTimeOf, type AskNow, type LetterText, type TaskOutcome } from './moment-age.js';
 import { checkCached, checkStepOf, findingInstruction, gatedNote, gateText, resetForGateVersion, STEP_CHECK_FAILED, STEP_CHECK_HELD, stepWords, verdictOf as stepVerdict, type GateResult, type StepCheck } from './step-gate.js';
 
 /** The session's text turns read before the moment: anger is often about a run of turns, not the last one. */
@@ -118,8 +118,13 @@ export async function judgeInputOf(node: Task, c: Candidate, deps: Pick<ReflectD
   // A thread message reads the thread's own answers after it, never its node's session, which works on many
   // threads at once (2026-11-24 replay: the session's newest turns were about other threads).
   const seenTo = turns[turns.length - 1]?.at ?? c.to;
-  const later = c.context ? (c.later ?? []).filter((t) => t.at > seenTo)
-    : c.sessionId ? await turnsSince(c.sessionId, seenTo > c.to ? seenTo : c.to, deps.readTranscript).catch(() => []) : [];
+  // Mail other agents and Walnut sent the session since, for a thread too: a change withdrawn after the moment
+  // arrives that way (11-27 audit: a correction rested on a change withdrawn six minutes before it went out,
+  // told the node's session by the task that withdrew it; the judge read only the thread).
+  const since = seenTo > c.to ? seenTo : c.to;
+  const later = c.context
+    ? [...(c.later ?? []).filter((t) => t.at > seenTo), ...(c.sessionId ? await turnsSince(c.sessionId, since, deps.readTranscript, 4, ['agent']).catch(() => []) : [])].sort((a, b) => a.at.localeCompare(b.at))
+    : c.sessionId ? await turnsSince(c.sessionId, since, deps.readTranscript, undefined, ['assistant', 'agent']).catch(() => []) : [];
   return {
     signal: c.signal, ...(c.also?.length ? { also: c.also } : {}), taskTitle: c.task.title, ...(c.thread ? { threadTitle: c.thread.title } : {}),
     turnsText: renderTurns(turns), ...(later.length ? { laterText: renderTurns(later) } : {}), momentAt: c.to,
@@ -244,14 +249,22 @@ export async function reflectOnCandidate(
     // Keyed by its place only (the task and its thread): a card rewritten got a new decision id or words, and
     // so a new key, and one decision was corrected 4 times in 2 hours (2026-11-26 audit).
     const cardKey = c.signal === 'needs_ask' ? `${c.task.id}:${c.thread?.id ?? ''}` : '';
-    const lastCard = cardKey ? (await readReflectionState(node.id, now)).cardCorrected?.[cardKey] : undefined;
+    const cardState = cardKey ? await readReflectionState(node.id, now) : undefined;
+    const lastCard = cardKey ? cardState?.cardCorrected?.[cardKey] : undefined;
+    const lastCorrection = cardKey ? cardState?.cardCorrection?.[cardKey] : undefined;
     const heSince = (c.evidence ?? []).some((m) => lastCard && m.at > lastCard);
     // No known asking session: the task's current one reads it, told it is about a turn of the task
     // (2026-11-25 audit: two such corrections were never sent nor held, both tasks had live sessions).
     const sessionId = c.sessionId || (c.hold ? await sessionNowOf(c.task, deps).catch(() => '') : '');
     const route = async (): Promise<{ to: 'send'; check: SendCheck } | { to: 'held'; why: NonNullable<DayEntry['held']> } | { to: 'off'; why: NonNullable<DayEntry['notSent']> }> => {
       // The same card corrected a short while ago, with nothing from him since: not again (2026-11-25 audit).
-      if (lastCard && now - Date.parse(lastCard) < CARD_CORRECTION_GAP_MS && !heSince) return { to: 'off', why: 'card_corrected' };
+      // Unless the card was rewritten since and still lacks what that correction asked: then once more
+      // (11-27 audit: a rewritten card still had no link four hours on, and its second correction was held).
+      if (lastCard && now - Date.parse(lastCard) < CARD_CORRECTION_GAP_MS && !heSince) {
+        const again = c.to > lastCard && !!lastCorrection && lastCorrection.n < CARD_CORRECTIONS_MAX
+          && await cardStillLacks(c, lastCorrection.text, deps, node.id).catch(() => false);
+        if (!again) return { to: 'off', why: 'card_corrected' };
+      }
       if (!sessionId) return { to: 'held', why: c.hold ?? 'no_session' };
       // One a pass per task: a task's old session and its current one are the same reader now.
       if (thisPass.has(c.task.id)) return { to: 'held', why: 'one_per_pass' };
@@ -282,7 +295,13 @@ export async function reflectOnCandidate(
           const title = gated ? `${nodeName}'s reflection: a step to ask about, not to take` : `${nodeName}'s reflection: ${f.correct_action.slice(0, 120)}`;
           corrected = await deps.send(c.task, text, title).then((ok) => (ok ? 'sent' : 'failed'), () => 'failed' as const);
           if (r.check === 'session_changed') earlierSession = true;
-          if (corrected === 'sent' && cardKey) await updateReflectionState(node.id, (s) => { (s.cardCorrected ??= {})[cardKey] = new Date(now).toISOString(); }, now);
+          if (corrected === 'sent' && cardKey) {
+            const within = !!lastCard && now - Date.parse(lastCard) < CARD_CORRECTION_GAP_MS;
+            await updateReflectionState(node.id, (s) => {
+              (s.cardCorrected ??= {})[cardKey] = new Date(now).toISOString();
+              (s.cardCorrection ??= {})[cardKey] = { text: f.correction.slice(0, 1500), n: within ? (s.cardCorrection?.[cardKey]?.n ?? 1) + 1 : 1 };
+            }, now);
+          }
         }
       }
     }
@@ -296,6 +315,8 @@ export async function reflectOnCandidate(
   // The lesson and the skill are checked before they are written, a skill even when its line is listed already.
   const lessonBody = [f.same_as ? '' : f.guidance, f.skill ? [f.skill.name, f.skill.description, f.skill.text].join('\n') : ''].filter(Boolean).join('\n\n');
   const lessonGate = gated ?? (lessonBody && !twin ? await stepCheck(lessonBody) : null);
+  // The lesson's own pass by his rule is recorded too (11-27 audit: settledBy was never written).
+  if (lessonGate?.settled?.length && lessonGate !== gated) settledBy = [...(settledBy ?? []), ...lessonGate.settled];
   const lessonVerdict = lessonGate ? stepVerdict(lessonGate) : 'pass';
   const rule: DayRule = lessonVerdict === 'held'
     // Kept as a dropped lesson: the backfill rewrites one with his own words to ask first (guidance-merge.ts).

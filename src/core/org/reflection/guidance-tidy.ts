@@ -131,8 +131,9 @@ export async function askTidy(node: Task, nodeName: string, deps: TidyDeps, nowM
   const queued: string[] = [];
   for (const l of lessons) {
     const g = await checkCached(node.id, l, checkStepOf(deps), nowMs).catch(() => null);
+    // A held one is only not listed: the backfill holds it, rewrites it or writes his words, and says why
+    // (guidance-merge.ts holdLesson; 11-27 audit: a hold here wrote no reason and skipped the rewrite).
     if (g && verdictOf(g) === 'pass') queued.push(l);
-    else if (g && verdictOf(g) === 'held') await updateReflectionState(node.id, (s) => { s.stepHeld = [...new Set([...(s.stepHeld ?? []), normalizeForQuote(l)])].slice(-1000); }, nowMs);
   }
   // Once a day, the ones a line, his rules or an org skill already says leave the queue first.
   const settled = new Set((await settleCovered(node, queued, texts, deps, nowMs).catch(() => [])).map(normalizeForQuote));

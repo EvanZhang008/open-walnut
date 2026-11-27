@@ -83,9 +83,13 @@ export async function turnsAround(
 /** The session's newest turns, after `afterAt` and up to now: what it did since a late judgment's window ends. */
 export const LATER_TURNS = 2;
 const LATER_TEXT_MAX = 1500;
-export async function turnsSince(sessionId: string, afterAt: string, read: ReadTranscript = readTranscriptDefault, max = LATER_TURNS): Promise<TurnText[]> {
+export async function turnsSince(
+  sessionId: string, afterAt: string, read: ReadTranscript = readTranscriptDefault, max = LATER_TURNS,
+  roles: ReadonlyArray<'assistant' | 'agent'> = ['assistant'],
+): Promise<TurnText[]> {
   const turns = toTurns(await read(sessionId, { visible: 40 }));
-  return turns.filter((t) => t.role === 'assistant' && t.at > afterAt).slice(-max).map((t) => ({ ...t, text: clip(t.text, LATER_TEXT_MAX) }));
+  // 'agent': what other agents and Walnut told it since (a change withdrawn after the moment arrives that way).
+  return turns.filter((t) => (roles as readonly string[]).includes(t.role) && t.at > afterAt).slice(-max).map((t) => ({ ...t, text: clip(t.text, LATER_TEXT_MAX) }));
 }
 
 /** The session's last text turn before `at` (what he answered), or undefined. */

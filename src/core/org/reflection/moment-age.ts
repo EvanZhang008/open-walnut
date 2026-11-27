@@ -82,7 +82,7 @@ export interface HandledDeps {
 
 export const TAKEN_UP_SYSTEM = [
   'An automated reviewer wrote corrections for an AI agent session about what the user said, and is about to send them. LATER is what happened since the user said it: the session\'s answers, the user\'s own later messages, the state of the thread, and the tasks the work was handed to.',
-  'Name the corrections LATER shows were already taken up in full: the session (or the task it handed the work to) did the right way or answered what was missing, the card or letter he reads now already has what the correction says it lacks, or the user settled it himself (picked, answered or closed that very matter). A correction LATER does not touch, or touches only in part, is still needed.',
+  'Name the corrections LATER shows were already taken up in full: the session (or the task it handed the work to) did the right way or answered what was missing, the card or letter he reads now already has what the correction says it lacks, or the user settled it himself (picked, answered or closed that very matter). Name too a correction whose premise LATER shows no longer holds: what it relies on was withdrawn, reverted or decided otherwise since. A correction LATER does not touch, or touches only in part, is still needed.',
   'For each one taken up, copy the words of LATER that show it, exactly: they are checked word for word, and one without them counts as still needed.',
   'Answer only JSON: {"done": [{"n": the correction\'s number, "quote": "the words of LATER that show it"}]}',
 ].join('\n');
@@ -161,9 +161,20 @@ async function cardNow(c: Candidate, deps: HandledDeps): Promise<TurnText[] | nu
 }
 
 /**
+ * Whether the card as he reads it now still lacks what an earlier correction of it asked: true only when
+ * the card can be read and does not show that correction taken up (a card gone or unreadable: false).
+ */
+export async function cardStillLacks(c: Candidate, earlier: string, deps: HandledDeps, nodeId: string): Promise<boolean> {
+  const now = await cardNow(c, deps);
+  if (now === 'unknown' || now === null) return false;
+  const done = await takenUp([earlier], now, deps.callModel, nodeId, { quoteMin: CARD_QUOTE_MIN });
+  return done !== null && !done.includes(1);
+}
+
+/**
  * Whether a correction about an old moment was taken up since: 'handled' (the thread is closed, or
  * LATER shows it done), 'open', or 'unknown' (the check could not tell: it goes, marked as old).
- * A moment younger than STALE_MOMENT_MS is 'open' with no call.
+ * A moment younger than STALE_MOMENT_MS is 'open' with no call: the judge read what came since in the same pass.
  */
 export async function handledSince(
   c: Candidate, f: { correction: string; kind: FindingKind }, momentAt: string, nowMs: number, deps: HandledDeps, nodeId: string,
@@ -186,7 +197,9 @@ export async function handledSince(
     return verdict(await takenUp([correction], now, deps.callModel, nodeId, { quoteMin: CARD_QUOTE_MIN, quotes }));
   }
   // Only his words can be done since: an answer's language is about now.
-  if (!c.messages.length || c.signal === 'wrong_language' || nowMs - Date.parse(momentAt) < STALE_MOMENT_MS) return 'open';
+  if (!c.messages.length || c.signal === 'wrong_language') return 'open';
+  // Fresh words: the judge read what happened since in the same pass (pipeline.ts judgeInputOf LATER).
+  if (nowMs - Date.parse(momentAt) < STALE_MOMENT_MS) return 'open';
   // A defect of the product is not settled by a closed thread: he often says it once the work is done.
   const defect = PRODUCT_DEFECT_KINDS.has(f.kind);
   let later: TurnText[] = [];
@@ -203,7 +216,7 @@ export async function handledSince(
     // His own later words in the task (the judge read none after the moment), and the session's later turns.
     const his = (await deps.readMessages?.(c.task.id).catch(() => []) ?? []).filter((m) => m.at > c.to).slice(-LATER_MESSAGES)
       .map((m) => ({ role: 'user' as const, at: m.at, text: clip(m.text, 400) }));
-    const turns = c.sessionId ? await turnsSince(c.sessionId, c.to, deps.readTranscript, 4).catch(() => []) : [];
+    const turns = c.sessionId ? await turnsSince(c.sessionId, c.to, deps.readTranscript, 4, ['assistant', 'agent']).catch(() => []) : [];
     later = [...his, ...turns].sort((a, b) => a.at.localeCompare(b.at));
   }
   if (!later.length) return 'open';

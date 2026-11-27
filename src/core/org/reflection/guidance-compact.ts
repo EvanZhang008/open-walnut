@@ -18,7 +18,7 @@ import { appendDayNote, mergeTwoGuidanceLines, readGuidance, replaceGuidanceLine
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
 import { checkCached, checkStepOf, verdictOf } from './step-gate.js';
 import { guidanceRoomLeft } from './team-guidance-hint.js';
-import { MERGED_LINE_MAX, kept, type MergeDeps } from './guidance-merge.js';
+import { MERGED_LINE_MAX, kept, reflectionsOwn, type MergeDeps } from './guidance-merge.js';
 
 export const COMPACT_CALLS_PER_DAY_MAX = 4;
 /** Room below this, with lessons waiting, is made (the tidy's own threshold, guidance-tidy.ts TIDY_ROOM_MIN). */
@@ -144,7 +144,7 @@ export async function compactGuidance(node: Task, nodeName: string, waiting: num
     const state = await readReflectionState(node.id, nowMs);
     // A line with its source note, or one the reflection remembers writing, is the reflection's; the rest are the user's.
     const written = new Set(state.written);
-    const targets = new Set(lines.flatMap((l, i) => (l.from || written.has(normalizeForQuote(l.text)) ? [i + 1] : [])));
+    const targets = new Set(lines.flatMap((l, i) => (reflectionsOwn(l, written) ? [i + 1] : [])));
     if (!targets.size) break;
     const took = await updateReflectionState(node.id, (s) => {
       const c = s.compacts?.date === date ? s.compacts : { date, count: 0, freed: 0 };

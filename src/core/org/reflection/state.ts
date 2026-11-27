@@ -63,7 +63,7 @@ export interface ReflectionState {
   /** On a Main or lead task's own state: when a reflection's correction last went to its chat. */
   lastChatSendAt?: string;
   /** The step check's verdicts by text hash (step-gate.ts checkCached): a text is asked about once. */
-  stepChecked?: Record<string, { steps: string[]; why: string }>;
+  stepChecked?: Record<string, { steps: string[]; why: string; settled?: Array<{ step: string; rule: string }> }>;
   /** Waiting lessons the step check held (normalized): never written, listed or taken up again. */
   stepHeld?: string[];
   /** The step check's version its verdicts and held lessons were judged by (step-gate.ts GATE_VERSION). */
@@ -80,6 +80,8 @@ export interface ReflectionState {
   coveredChecked?: string;
   /** When an ask or card correction last went to a task, by `<task>:<thread, decision or 'ask'>` (CARD_CORRECTION_GAP_MS). */
   cardCorrected?: Record<string, string>;
+  /** The last correction each card got (its words) and how many it got within the gap (pipeline.ts). */
+  cardCorrection?: Record<string, { text: string; n: number }>;
 }
 
 /** One correction held for a later send: its task, its day entry (date and time) and the point it makes. */
@@ -129,6 +131,8 @@ export const CHAT_SEND_GAP_MS = 60 * 60_000;
  * one card was corrected 7 times in 7 hours for the same missing parts, most of them there by then).
  */
 export const CARD_CORRECTION_GAP_MS = 6 * 3600_000;
+/** Corrections one card gets within the gap: the first, and one more when it was rewritten and still lacks it. */
+export const CARD_CORRECTIONS_MAX = 2;
 /** Keys of `budgetLeft` kept; past it a pass that meets one counts it again. */
 export const BUDGET_LEFT_KEPT = 200;
 
@@ -175,6 +179,8 @@ function normalize(raw: unknown, nowMs: number): ReflectionState {
     ...(typeof r.callsFrom === 'string' ? { callsFrom: r.callsFrom } : {}),
     ...(Array.isArray(r.held) ? { held: r.held.filter((h): h is HeldCorrection => !!h && typeof h.taskId === 'string' && typeof h.at === 'string' && typeof h.text === 'string' && typeof h.date === 'string' && typeof h.entryAt === 'string').slice(-100) } : {}),
     ...(typeof r.lastChatSendAt === 'string' ? { lastChatSendAt: r.lastChatSendAt } : {}),
+    ...(r.cardCorrection && typeof r.cardCorrection === 'object' ? { cardCorrection: Object.fromEntries(Object.entries(r.cardCorrection as Record<string, unknown>)
+      .filter(([, v]) => !!v && typeof (v as { text?: unknown }).text === 'string' && Number.isFinite((v as { n?: unknown }).n)).slice(-200)) as ReflectionState['cardCorrection'] } : {}),
     ...(r.cardCorrected && typeof r.cardCorrected === 'object' ? { cardCorrected: Object.fromEntries(Object.entries(r.cardCorrected as Record<string, unknown>)
       .filter((e): e is [string, string] => typeof e[1] === 'string' && nowMs - Date.parse(e[1]) < CARD_CORRECTION_GAP_MS * 4)) } : {}),
     ...(r.backfillTries && typeof r.backfillTries === 'object' ? { backfillTries: Object.fromEntries(Object.entries(r.backfillTries).filter(([, n]) => Number.isFinite(n))) } : {}),

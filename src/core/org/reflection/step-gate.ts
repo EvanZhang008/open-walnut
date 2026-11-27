@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import type { CallModel, Finding } from './judge.js';
 import { normalizeForQuote, quoteHolds } from './judge.js';
 import { readReflectionState, updateReflectionState } from './state.js';
+import { log } from '../../../logging/index.js';
 
 export const GATED_STEPS = ['user_browser', 'user_account', 'in_his_name', 'production_write', 'cloud_account_write'] as const;
 export type GatedStep = typeof GATED_STEPS[number];
@@ -87,7 +88,7 @@ export interface GateResult { steps: GatedStep[]; why: string; by: 'words' | 'mo
  */
 const SETTLEABLE: ReadonlySet<GatedStep> = new Set(['user_browser', 'user_account']);
 /** Bumped when the check's rules change: verdicts and held lessons of an older version are judged again. */
-export const GATE_VERSION = 2;
+export const GATE_VERSION = 3;
 
 export const GATE_SYSTEM = [
   'You check one instruction an automated reviewer wants to send to an AI agent that works for a user.',
@@ -99,7 +100,7 @@ export const GATE_SYSTEM = [
   '- cloud_account_write: change, create or delete anything in a cloud account or any stage of a cloud service (test, beta and gamma stages included), permissions and roles included.',
   'Not a step: asking a person for it, or telling the agent to ask first and take the step only on that person\'s explicit yes to it; using, testing or recording the team\'s own product (its app, its web console, its test accounts, a copy of the user\'s data), or turning one of its own settings or flags on or off; reading, listing, checking or reporting (a read of a cloud account with the agent\'s own command-line access included; opening the user\'s browser is a step even to read); editing a card, a thread or a message to the user inside his own task tool; handing work to another agent\'s task; changing, testing, landing or deploying the agent\'s own code through its repository\'s own scripts; local commands that change nothing outside the machine.',
   'Answer only JSON: {"steps": [...the names above, none when it asks for none...], "why": "one short sentence", "settled": [{"step": "user_browser or user_account", "rule": "the words of USER RULES that tell agents to take that step themselves, copied exactly"}]}',
-  'settled is only for user_browser and user_account, and only when USER RULES (given below the instruction, when there are any) tell agents to take that very step themselves (a sign-in, his saved login); [] otherwise. Copy the rule exactly: it is checked word for word.',
+  'settled is only for user_browser and user_account, and only when USER RULES (given below the instruction, when there are any) tell agents to take that very step themselves (a sign-in, his saved login); [] otherwise. Give one entry for EACH step the rule covers: a rule telling agents to run things and logins on his machines themselves covers both his browser there and his logins. Never settle granting or changing a permission, an authorization, a key or a credential: those stay his whatever a rule seems to say. Copy the rule exactly: it is checked word for word.',
 ].join('\n');
 
 const ALL = new Set<string>(GATED_STEPS);
@@ -161,6 +162,8 @@ export async function gateText(text: string, callModel: CallModel, nodeId?: stri
   }
   const read = readGateAnswer(raw, rules);
   if (!read) return fixed ?? { steps: [], why: 'the check\'s answer could not be read', by: 'failed' };
+  // Each step his own rule let through is said in the log, with the rule (11-27 audit: none could be counted).
+  if (read.settled?.length) log.task.info('reflection: a step was let through by the user\'s own rule', { nodeId, settled: read.settled.map((x) => `${x.step}: ${x.rule.slice(0, 120)}`), text: text.slice(0, 160) });
   if (!fixed) return read;
   // The fixed words' steps stay held unless the answer settles each by his rule.
   const steps = [...new Set([...read.steps, ...fixed.steps.filter((st) => !read.settled?.some((x) => x.step === st))])];
@@ -186,11 +189,12 @@ export const STEP_CHECKS_KEPT = 600;
 export async function checkCached(nodeId: string, text: string, check: StepCheck, nowMs: number): Promise<GateResult> {
   const key = keyOf(text);
   const kept = (await readReflectionState(nodeId, nowMs)).stepChecked?.[key];
-  if (kept) return { steps: kept.steps as GatedStep[], why: kept.why, by: 'model' };
+  if (kept) return { steps: kept.steps as GatedStep[], why: kept.why, by: 'model', ...(kept.settled?.length ? { settled: kept.settled as GateResult['settled'] } : {}) };
   const g = await check(text, nodeId);
   if (g.by !== 'failed') {
     await updateReflectionState(nodeId, (s) => {
-      const all = { ...(s.stepChecked ?? {}), [key]: { steps: [...g.steps], why: g.why.slice(0, 200) } };
+      // What his own rule let through is kept with the verdict (11-27 audit: it could not be counted).
+      const all = { ...(s.stepChecked ?? {}), [key]: { steps: [...g.steps], why: g.why.slice(0, 200), ...(g.settled?.length ? { settled: g.settled } : {}) } };
       const keys = Object.keys(all);
       s.stepChecked = keys.length > STEP_CHECKS_KEPT ? Object.fromEntries(keys.slice(-STEP_CHECKS_KEPT).map((k) => [k, all[k]!])) : all;
     }, nowMs);

@@ -17,7 +17,7 @@ import { normalizeForQuote, quoteHolds, type CallModel } from './judge.js';
 import { sessionNowOf } from './candidates.js';
 import { guidanceFileOf, readGuidanceStrict } from './records.js';
 import { localDate, readReflectionState, updateReflectionState } from './state.js';
-import { contentTokens, kept } from './guidance-merge.js';
+import { contentTokens, kept, reflectionsOwn } from './guidance-merge.js';
 
 /** Flag calls a node may spend a day. */
 export const ALIGN_CALLS_PER_DAY_MAX = 6;
@@ -120,7 +120,7 @@ export async function alignGuidance(node: Task, nodeName: string, deps: AlignDep
   if (!file) return [];
   const written = new Set(state.written);
   // Only the reflection's own lines (a source note, or remembered as written) are flagged.
-  const check = new Set(file.flatMap((l, i) => (l.from || written.has(normalizeForQuote(l.text)) ? [i + 1] : [])));
+  const check = new Set(file.flatMap((l, i) => (reflectionsOwn(l, written) ? [i + 1] : [])));
   if (!changes.length || !check.size) { await keep(); return []; }
   const date = localDate(nowMs);
   const took = await updateReflectionState(node.id, (s) => {
