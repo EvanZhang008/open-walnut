@@ -65,10 +65,15 @@ export function isLongPoll(url: string): boolean {
 export class TemplateMatcher {
   private readonly seen = new Map<string, RegExp>()
   private resolver: ((method: string, url: string) => string | null) | null = null
+  private every: ((method: string, url: string) => string[]) | null = null
 
-  /** The server's own router, asked when no answered template matches (a request that never reached it). */
-  resolveWith(fn: ((method: string, url: string) => string | null) | null): void {
+  /**
+   * The server's own router, asked when no answered template matches (a request that never reached
+   * it); `every` names every route a path reaches, in the router's order (one may hand it on).
+   */
+  resolveWith(fn: ((method: string, url: string) => string | null) | null, every?: (method: string, url: string) => string[]): void {
     this.resolver = fn
+    this.every = fn ? every ?? null : null
   }
 
   add(method: string, template: string): void {
@@ -90,6 +95,20 @@ export class TemplateMatcher {
     }
     if (best || !this.resolver) return best
     try { return this.resolver(method, url) } catch { return null }
+  }
+
+  /**
+   * Every route the server's own router may serve `method url` with, first the one it tries first,
+   * asked alone (answered templates can miss a route nobody called lately): none when no route takes
+   * it, undefined with no router to ask.
+   */
+  routed(method: string, url: string): string[] | undefined {
+    if (!this.resolver) return undefined
+    try {
+      if (this.every) return this.every(method, url)
+      const one = this.resolver(method, url)
+      return one ? [one] : []
+    } catch { return [] }
   }
 }
 

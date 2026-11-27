@@ -120,7 +120,7 @@ let rejudged = false
 
 /**
  * Once a server start: watches that ended Unknown in the last week, or passed with a target of no use,
- * or ended short on a page target of no use, judged again (watches.ts rejudgeEnded, passedOnNoUse). A new verdict on an Unknown is kept and told as a fresh one
+ * or ended short on a page or route target of no use, judged again (watches.ts rejudgeEnded, passedOnNoUse). A new verdict on an Unknown is kept and told as a fresh one
  * is. One that had passed is kept quietly: its owner was told Nothing to do, and a lead hearing of
  * every page watch at once would be noise; the Real Use page shows it. One reading as before is left.
  */

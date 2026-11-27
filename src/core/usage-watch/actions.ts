@@ -8,7 +8,8 @@ import { readRange, usageReport, targetEvents, type ReportRow } from './report.j
 import { callerSide, ownFaults } from './agg.js'
 import { ERROR_GROUPS, toolErrorsReport, type ErrorGroup } from './tool-errors.js'
 import { isCountedPlace, pageTargetProblem, placeUseOf } from './page-uses.js'
-import { readPageUseKeys } from './store.js'
+import { readHours, readPageUseKeys } from './store.js'
+import { routeShape, servedRouteName } from './route-target.js'
 import { visitKeyOfTarget } from '../page-places.js'
 import {
   EXEMPT_KINDS, MAX_CHECK_AFTER_MS, MIN_CHECK_AFTER_MS, getWatch, listWatches, newWatch, putWatch, targetProblem,
@@ -155,6 +156,18 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
         const known = await countedPlaces(now)
         for (const t of targets) { const p = t.startsWith('page:') ? pageTargetProblem(t, known) : null; if (p) throw new UsageWatchError(400, 'bad_target', p) }
       }
+      // A route target names a route this server serves, kept as the name it records the requests under.
+      const renamed: string[] = []
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i]!
+        if (!t.startsWith('route:')) continue
+        // Real use records only the API's requests (web/middleware/request-logger.ts).
+        if (!t.slice(6).replace(/^[A-Z]+ /, '').startsWith('/api/')) throw new UsageWatchError(400, 'bad_target', `"${t.slice(0, 120)}" is no /api/ route: real use records only the API's requests, so its watch could never see a use. Watch the op or the /api/ route that serves it.`)
+        const served = servedRouteName(t.slice(6))
+        if (served === null) throw new UsageWatchError(400, 'bad_target', routeTargetProblem(t, now))
+        // A target with no method keeps its path (it covers every method of it).
+        if (served && served !== t.slice(6) && !t.slice(6).startsWith('/')) { targets[i] = `route:${served}`; renamed.push(`${t} is recorded as route:${served}`) }
+      }
       const span = parseSpan(body.check_after ?? '24h')
       if (span === null || span < MIN_CHECK_AFTER_MS || span > MAX_CHECK_AFTER_MS) throw new UsageWatchError(400, 'bad_check_after', 'check_after is a time from 1h to 14d, like "24h" or "3d".')
       const checks = readChecks(body.checks)
@@ -169,7 +182,7 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
       putWatch(w)
       return {
         watch: watchView(w),
-        outcome: `Watch ${w.id} armed on ${[...targets, ...(trigger ? [`trigger ${trigger}`] : [])].join(', ')} until ${new Date(w.checkAt).toISOString().slice(0, 16)} UTC.`,
+        outcome: `Watch ${w.id} armed on ${[...targets, ...(trigger ? [`trigger ${trigger}`] : [])].join(', ')} until ${new Date(w.checkAt).toISOString().slice(0, 16)} UTC.${renamed.length ? ` Named as their server records them: ${renamed.join('; ')}.` : ''}`,
         next: 'An alarm on these targets comes to this task until then; at the check time each target is judged and the result comes here.',
       }
     }
@@ -255,4 +268,30 @@ export async function runUsageWatchAction(body: Record<string, unknown>, ctx: Ac
     default:
       throw new UsageWatchError(400, 'bad_action', 'action is one of set, exempt, get, drop, list, report, errors, ship, probe, help.')
   }
+}
+
+/**
+ * Why a route target names no route this server serves, with the routes it records that look most like
+ * it (2026-11-27: watches named routes their servers record under other names, and read "No use").
+ */
+function routeTargetProblem(target: string, now: number): string {
+  const want = target.slice(6)
+  const [method, path = ''] = want.includes(' ') ? want.split(' ') : ['', want]
+  // The recorded routes sharing the most leading parts with it (parameters' names left out), at most 8.
+  const parts = routeShape(path).split('/')
+  const shared = (name: string): number => {
+    const theirs = routeShape(name.slice(name.indexOf(' ') + 1)).split('/')
+    let n = 0
+    while (n < parts.length && n < theirs.length && parts[n] === theirs[n]) n++
+    return n
+  }
+  const names = new Map<string, number>()
+  for (const r of readHours(Math.floor((now - 7 * 86_400_000) / 3_600_000) * 3_600_000, { kind: 'http' })) {
+    if (names.has(r.name) || (method && !r.name.startsWith(`${method} `))) continue
+    const n = shared(r.name)
+    // More than the empty head and `api`: a route of the same area.
+    if (n > 2) names.set(r.name, n)
+  }
+  const near = [...names].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8).map(([n]) => `route:${n}`)
+  return `"${target.slice(0, 120)}" is no route this server serves, so its watch could never see a use. Name the route as its server records it (route:<METHOD> <template>, the template its router matches)${near.length ? `; recorded lately: ${near.join(', ')}` : ''}.`
 }

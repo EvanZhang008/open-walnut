@@ -3258,8 +3258,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // A request a page says failed before it reached the server is named by the route it would take.
   {
     const { answeredTemplates } = await import('../core/usage-watch/record.js')
-    const { routeTemplateOf } = await import('./route-template-of.js')
-    answeredTemplates.resolveWith((method, url) => routeTemplateOf(app.router, method, url))
+    const { routeTemplateOf, routeTemplatesOf } = await import('./route-template-of.js')
+    answeredTemplates.resolveWith((method, url) => routeTemplateOf(app.router, method, url), (method, url) => routeTemplatesOf(app.router, method, url))
   }
   // Every plugin's settings for an AI: the plugin_settings ops.
   app.use('/api/v1', (await import('./routes/plugin-settings-v1.js')).pluginSettingsV1Router)

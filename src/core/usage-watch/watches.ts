@@ -16,6 +16,7 @@ import { RECORDED_NON_OPS } from './counters.js'
 import { sleptBetween } from '../../lib/sleep-ledger.js'
 import { PAGE_ALIASES, pageOfPart, targetOfVisitKey, visitKeyOfTarget } from '../page-places.js'
 import { isCountedPlace, placeUseOf } from './page-uses.js'
+import { routeTargetCovers } from './route-target.js'
 
 const HOUR_MS = 3_600_000
 export const MIN_CHECK_AFTER_MS = HOUR_MS
@@ -110,11 +111,9 @@ export function targetProblem(t: string): string | null {
  */
 export function targetCovers(target: string, kind: UsageKind, name: string): boolean {
   if (target.startsWith('op:')) return kind === 'op' && name === target.slice(3)
-  if (target.startsWith('route:')) {
-    if (kind !== 'http') return false
-    const want = target.slice(6)
-    return want.includes(' ') ? name === want : name.endsWith(` ${want}`)
-  }
+  // A route target is the route its server records the requests under, whatever its parameters
+  // are named (route-target.ts).
+  if (target.startsWith('route:')) return kind === 'http' && routeTargetCovers(target.slice(6), name)
   // A page Walnut counts visits of is judged by its own rows (page-uses.ts); an older target's words
   // name page errors, as before.
   const key = visitKeyOfTarget(target)
@@ -270,12 +269,13 @@ export const REJUDGE_UNKNOWN_MS = 7 * 86_400_000
 
 /**
  * A watch that passed with a target of no use (judged before a page's visits were its uses), or ended
- * with too little use on a page target of no use (its name may be one a page now answers for: an alias,
- * every Settings pane, a part read by its page's days). 2026-11-25 and 26.
+ * with too little use on a page or route target of no use: its name may be one a page now answers for
+ * (an alias, every Settings pane, a part read by its page's days: 2026-11-25 and 26), or a route its
+ * server records under other parameter names (route-target.ts, 2026-11-27).
  */
 export function passedOnNoUse(w: Watch): boolean {
   if (w.state === 'passed') return (w.result ?? []).some((r) => r.uses === 0)
-  return w.state === 'too_little_use' && (w.result ?? []).some((r) => r.uses === 0 && r.target.startsWith('page:'))
+  return w.state === 'too_little_use' && (w.result ?? []).some((r) => r.uses === 0 && (r.target.startsWith('page:') || r.target.startsWith('route:')))
 }
 
 /**
@@ -349,7 +349,9 @@ export function judgeWatch(w: Watch, now = Date.now(), inputs: JudgeInputs = {})
   if (short.length) {
     // A target nobody used verified nothing: never a pass (2026-11-25: 31 watches passed on page targets of 0 uses).
     const none = short.some((r) => r.uses === 0)
-    const words = short.map((r) => `${r.target}: ${r.uses} use${r.uses === 1 ? '' : 's'} (needs ${leastUses(w.checks, r.target)})${r.uses === 0 && r.notes.length ? `, ${r.notes.join('; ')}` : ''}`).join(' · ')
+    // A route no client called may be one only Walnut's tools call: those calls count under the tool's op.
+    const opHint = (r: TargetResult) => (r.uses === 0 && r.target.startsWith('route:') ? ' (calls a Walnut tool makes count under its op:<tool>, not its route)' : '')
+    const words = short.map((r) => `${r.target}: ${r.uses} use${r.uses === 1 ? '' : 's'} (needs ${leastUses(w.checks, r.target)})${r.uses === 0 && r.notes.length ? `, ${r.notes.join('; ')}` : ''}${opHint(r)}`).join(' · ')
     const head = none ? 'No use, cannot judge' : 'Too little use'
     return w.extended ? { state: 'too_little_use', results, summary: `${head}: ${words}` } : { state: 'extended', results, summary: `${head} so far, checked again: ${words}` }
   }

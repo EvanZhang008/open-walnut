@@ -10,7 +10,7 @@ defineOp({
   title: 'Watch a shipped change in real use',
   description:
     'Real use of Walnut\'s tools, requests and pages (Settings > Diagnostics > Real Use). '
-    + '`set`: after you ship a change, name what real use should show: `targets` (op:<tool>, route:<METHOD> <route template>, page:<page>: page:home, page:session-panel, page:task-detail, page:settings:<pane id>, page:app:<app id>; a page\'s uses are its visits, its own errors fail it), '
+    + '`set`: after you ship a change, name what real use should show: `targets` (op:<tool>, route:<METHOD> <route template> (an /api/ route, kept as its server records it; one no route serves is refused), page:<page>: page:home, page:session-panel, page:task-detail, page:settings:<pane id>, page:app:<app id>; a page\'s uses are its visits, its own errors fail it), '
     + '`checks` ({max_answer_chars, max_fail_pct, no_new_codes, max_p95_ms, min_uses}; defaults 20000, 5, true, 2000, 20 (a page: 1 visit); a target with no use is never Passed; failures and new codes are Walnut\'s own errors and timeouts, while bad arguments and designed refusals come apart as caller_side), `who` ("this task" or an open task id), '
     + '`check_after` ("24h", 1h to 14d), or a `trigger` aimed at another open task for a check only a script can make. Until then an alarm on a target '
     + 'comes to that task, and at the check time each target is judged (Passed, Failed, Too little use, Unknown). A task that shipped cannot complete without one. '

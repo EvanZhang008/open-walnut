@@ -27,12 +27,12 @@ function handles(route: RouteLike, method: string): boolean {
 }
 
 /**
- * The route `method path` reaches in `stack`, as Express dispatches it: a router's mount matches a
- * head of the path and its own stack the rest. The mount part is the path's own text, as
- * `req.baseUrl` is. Matchers only read the path (Layer.prototype.match would store params on the
- * shared layer).
+ * Every route `method path` reaches in `stack`, in the order Express tries them: a router's mount
+ * matches a head of the path and its own stack the rest. The mount part is the path's own text, as
+ * `req.baseUrl` is. A route registered as a pattern yields null. Matchers only read the path
+ * (Layer.prototype.match would store params on the shared layer).
  */
-export function routeOf(stack: readonly LayerLike[], method: string, path: string, base = ''): { baseUrl: string; routePath: string } | null {
+export function* routesOf(stack: readonly LayerLike[], method: string, path: string, base = ''): Generator<{ baseUrl: string; routePath: string } | null> {
   for (const layer of stack) {
     const route = layer.route
     if (route) {
@@ -40,7 +40,9 @@ export function routeOf(stack: readonly LayerLike[], method: string, path: strin
       const paths = Array.isArray(route.path) ? route.path : [route.path]
       const matchers = layer.matchers ?? []
       for (let i = 0; i < matchers.length; i++) {
-        if (matchers[i]!(path)) return typeof paths[i] === 'string' ? { baseUrl: base, routePath: paths[i] as string } : null
+        if (!matchers[i]!(path)) continue
+        yield typeof paths[i] === 'string' ? { baseUrl: base, routePath: paths[i] as string } : null
+        break
       }
       continue
     }
@@ -50,9 +52,13 @@ export function routeOf(stack: readonly LayerLike[], method: string, path: strin
     for (const m of layer.slash ? [] : layer.matchers ?? []) { const hit = m(path); if (hit) { head = hit.path; break } }
     if (head === null) continue
     const rest = path.slice(head.length)
-    const found = routeOf(inner, method, rest.startsWith('/') ? rest : `/${rest}`, base + head)
-    if (found) return found
+    yield* routesOf(inner, method, rest.startsWith('/') ? rest : `/${rest}`, base + head)
   }
+}
+
+/** The first route `method path` reaches in `stack`, as Express dispatches it (routesOf). */
+export function routeOf(stack: readonly LayerLike[], method: string, path: string, base = ''): { baseUrl: string; routePath: string } | null {
+  for (const found of routesOf(stack, method, path, base)) return found
   return null
 }
 
