@@ -175,8 +175,8 @@ test('R3-04 R3-17: a leader move says who and when in full, and turning Changed 
   const id = plainIdle()[2]
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/cards/${id}`, { lane: 'mitigating' }, leaderHeaders())
   const label = card(pane, id).getByTestId('kanban-card-changed')
-  await expect(label).toHaveText(/^Moved by the leader \d{2}:\d{2}$/, { timeout: 15_000 })
-  await expect(label).toHaveAttribute('title', /^Moved from Investigating by the leader \u00b7 \d{2}:\d{2}$/)
+  await expect(label).toHaveText(/^Moved by the leader \d{1,2}:\d{2} [AP]M$/, { timeout: 15_000 })
+  await expect(label).toHaveAttribute('title', /^Moved from Investigating by the leader \u00b7 \d{1,2}:\d{2} [AP]M$/)
   // Who and when are whole: the text is not cut and the time ends inside the card.
   expect(await label.locator('.kanban-card-foot-change-text').evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
   const at = (await label.getByTestId('kanban-card-changed-at').boundingBox())!
@@ -186,7 +186,7 @@ test('R3-04 R3-17: a leader move says who and when in full, and turning Changed 
   // The card's own worker writing its summary is "the worker" in full, never its own title cut short.
   const own = plainIdle()[3], ownLabel = card(pane, own).getByTestId('kanban-card-changed')
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/cards/${own}`, { summary: 'Worker note: the retry storm is contained, watching the error rate.' }, { 'x-walnut-caller-sid': team.sessions[own] })
-  await expect(ownLabel).toHaveText(/^Summary by the worker \d{2}:\d{2}$/, { timeout: 15_000 })
+  await expect(ownLabel).toHaveText(/^Summary by the worker \d{1,2}:\d{2} [AP]M$/, { timeout: 15_000 })
   expect(await ownLabel.locator('.kanban-card-foot-change-text').evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
   await pane.getByTestId('kanban-chip-changed').click()
   await expect(pane.getByTestId('kanban-mark-seen')).toBeVisible()

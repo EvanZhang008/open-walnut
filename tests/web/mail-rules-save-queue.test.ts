@@ -145,9 +145,9 @@ describe('mail rules panel sentences', () => {
 
   it('places a file error on its line, or names the rule when no line is known', () => {
     expect(fileErrorSentence({ line: 7, message: 'then must name a group or Important', since }))
-      .toBe('Line 7: then must name a group or Important. Walnut is still using the rules from 10:42.');
+      .toMatch(/^Line 7: then must name a group or Important\. Walnut is still using the rules from 10:42\sAM\.$/);
     expect(fileErrorSentence({ rule: { index: 2, id: 'r-7f3a2c' }, message: 'then must name a group or Important.', since }))
-      .toBe('Rule 3 (r-7f3a2c): then must name a group or Important. Walnut is still using the rules from 10:42.');
+      .toMatch(/^Rule 3 \(r-7f3a2c\): then must name a group or Important\. Walnut is still using the rules from 10:42\sAM\.$/);
     const missing = { message: 'The rules file is missing. Walnut is still using the rules from 10:42.', since };
     expect(fileErrorSentence(missing)).toBe(missing.message);
     expect(isMissingFileError(missing)).toBe(true);
@@ -155,9 +155,9 @@ describe('mail rules panel sentences', () => {
   });
 
   it('says where a rule came from only when Walnut learned it, and its note whoever wrote it', () => {
-    expect(provenanceLine({ source: 'learned', created: '2026-09-28', note: 'Club newsletters; I read them on Sundays' }))
-      .toBe('Learned Sep 28 \u00b7 Club newsletters; I read them on Sundays');
-    expect(provenanceLine({ source: 'learned', created: '2026-09-28' })).toBe('Learned Sep 28');
+    expect(provenanceLine({ source: 'learned', created: '2025-09-28', note: 'Club newsletters; I read them on Sundays' }))
+      .toBe('Learned Sep 28, 2025 \u00b7 Club newsletters; I read them on Sundays');
+    expect(provenanceLine({ source: 'learned', created: '2025-09-28' })).toBe('Learned Sep 28, 2025');
     // Every rule there is the user's unless it says otherwise: no line for one without a note.
     expect(provenanceLine({ source: 'user' })).toBe('');
     expect(provenanceLine({ source: 'user', note: 'CI noise' })).toBe('CI noise');

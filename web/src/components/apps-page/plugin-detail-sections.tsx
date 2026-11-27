@@ -19,7 +19,7 @@ import { copyText } from '@/components/settings/PluginProvenanceFlyout'
 import { CLOUD_LINKED_NOTE, plainText, updateButtonMode } from '@/components/settings/plugin-update-view'
 import { RESTART_PENDING_STATE } from '@/components/settings/plugin-update-types'
 import { firstSentence, providerFallbackState } from '@/components/settings/sections/plugin-row-view'
-import { formatAbsoluteTime } from '@/components/settings/sections/addons-format'
+import { pointInTime } from '@/utils/time'
 import { homeDirFor, type PluginStore } from './usePluginStore'
 import { AutoUpdateRows } from './AutoUpdateRows'
 import { supportsAutoUpdate } from '@/components/settings/plugin-auto-update-view'
@@ -115,7 +115,7 @@ export function VersionSection({ store, row }: { store: PluginStore; row: Regist
       <SettingsRow label="Version" control={<span className="apps-fact-value">{row.version ? `v${row.version}` : 'Unknown until it starts'}</span>} />
       <SettingsRow
         label="Update"
-        help={updateRow?.checkedAt ? `Checked ${formatAbsoluteTime(updateRow.checkedAt)}` : undefined}
+        help={updateRow?.checkedAt ? `Checked ${pointInTime(updateRow.checkedAt)}` : undefined}
         control={
           <span className="settings-addons-inline">
             <PluginUpdateChip

@@ -25,7 +25,7 @@ let clock = 1_000_000
 vi.mock('@/hooks/useHostStatus', () => ({ serverNow: () => clock }))
 vi.mock('@/api/config', () => ({ fetchServerRole: async () => ({ replica: false, capabilities: [] }) }))
 
-const { RemoteHostReadiness, agoText } = await import('../../web/src/components/settings/sections/RemoteHostReadiness')
+const { RemoteHostReadiness } = await import('../../web/src/components/settings/sections/RemoteHostReadiness')
 const { FIX_NOTE_MS } = await import('../../web/src/utils/host-readiness')
 
 const base = {
@@ -183,9 +183,7 @@ describe('RemoteHostReadiness: notes, receipts, last checked (C41, C77)', () => 
   it('the same result after Check again says so; afterwards "Last checked" stays', () => {
     const s = statusWith({ checkedAt: clock - 120_000, claude: claudeOther, problems: [OUTDATED] })
     expect(text(render(s, { receipt: 'Checked just now: still 2.1.220', lastTriedAt: clock }))).toContain('Checked just now: still 2.1.220')
-    expect(text(render(s, { lastTriedAt: clock }))).toContain('Last checked 2m ago')
-    expect(agoText(30_000)).toBe('just now')
-    expect(agoText(3_700_000)).toBe('1h ago')
+    expect(text(render(s, { lastTriedAt: clock }))).toContain('Last checked 2 min ago')
   })
 
   it('an unknown sign-in keeps a conditional login instruction and Check again, without an installer', () => {

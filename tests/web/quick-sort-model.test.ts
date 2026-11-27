@@ -139,14 +139,19 @@ describe('Snooze presets', () => {
     expect([quarter.getMonth(), quarter.getDate()]).toEqual([3, 30]);
     const mon = new Date(2026, 10, 9, 8, 0).getTime();
     expect(new Date(snoozePresets(mon)[1].date).getDate()).toBe(16);
+    // The hints read as every time does: a clock, then days.
+    expect(snoozePresets(mon).map(p => p.hint)).toEqual(['9:00 AM', 'Nov 16', 'Dec 9', 'Feb 9, 2027']);
+    // A hint is its own cell, so a near day starts capitalized: next Monday seen on a Sunday.
+    const sun = new Date(2026, 10, 15, 8, 0).getTime();
+    expect(snoozePresets(sun)[1].hint).toBe('Tomorrow');
   });
 });
 
 describe('Snooze words', () => {
   it('reads a day the way a person says it', () => {
     const now = new Date(2026, 10, 7, 15, 0).getTime();
-    expect(snoozeUntilText(new Date(2026, 10, 8, 9, 0).toISOString(), now)).toBe('tomorrow 9:00');
-    expect(snoozeUntilText('2026-11-10', now)).toBe('Tue Nov 10');
-    expect(snoozeUntilText('2027-02-09', now)).toBe('Tue Feb 9 2027');
+    expect(snoozeUntilText(new Date(2026, 10, 8, 9, 0).toISOString(), now)).toBe('tomorrow 9:00 AM');
+    expect(snoozeUntilText('2026-11-10', now)).toBe('Nov 10');
+    expect(snoozeUntilText('2027-02-09', now)).toBe('Feb 9, 2027');
   });
 });

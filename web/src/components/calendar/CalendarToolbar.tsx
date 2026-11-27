@@ -1,5 +1,6 @@
 import { memo } from 'react';
-import { addDays, formatDateOnly, weekRange } from '@/utils/calendar-date';
+import { addDays, formatDateOnly } from '@/utils/calendar-date';
+import { calendarTitle } from '@/utils/calendar-grid-labels';
 import { CalendarGridControls } from './CalendarGridControls';
 import { SegmentedControl, type SegmentedOption } from '@/components/controls';
 import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
@@ -21,21 +22,6 @@ interface Props {
   onToggleRail: () => void;
   /** Opens the in-view calendar visibility popover, anchored to the button. */
   onOpenCalendars?: (anchorEl: HTMLElement) => void;
-}
-
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
-function title(view: CalendarViewKind, anchor: Date): string {
-  if (view === 'month') return `${MONTHS[anchor.getMonth()]} ${anchor.getFullYear()}`;
-  if (view === 'day') {
-    return `${MONTHS[anchor.getMonth()]} ${anchor.getDate()}, ${anchor.getFullYear()}`;
-  }
-  const days = weekRange(anchor);
-  const [a, b] = [days[0], days[6]];
-  const ma = MONTHS[a.getMonth()].slice(0, 3);
-  const mb = MONTHS[b.getMonth()].slice(0, 3);
-  if (a.getMonth() === b.getMonth()) return `${ma} ${a.getDate()} – ${b.getDate()}, ${b.getFullYear()}`;
-  return `${ma} ${a.getDate()} – ${mb} ${b.getDate()}, ${b.getFullYear()}`;
 }
 
 const STEP: Record<CalendarViewKind, number> = { day: 1, week: 7, month: 0 };
@@ -84,7 +70,7 @@ export const CalendarToolbar = memo(function CalendarToolbar({
             {ICON_CHEVRON_RIGHT}
           </button>
         </div>
-        <h2 className="pane-title cal-title" data-fit-title="">{title(view, anchor)}</h2>
+        <h2 className="pane-title cal-title" data-fit-title="">{calendarTitle(view, anchor)}</h2>
       </div>
       <div className="cal-toolbar-right">
         {view !== 'month' && <CalendarGridControls />}

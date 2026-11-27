@@ -2,7 +2,7 @@
  * The words on Phones & Cloud's device rows and its pairing dialog (pure, so the
  * helpers are unit-tested apart from the pane; DevicesSection re-exports them).
  */
-import { formatAbsoluteTime } from '../addons-format';
+import { pointInTime } from '@/utils/time';
 import type { DeviceEntry, DeviceSelfInfo } from './useDevicesData';
 import type { PairTargetKind } from './usePairDevice';
 
@@ -37,8 +37,8 @@ export function describeMacRow(d: DeviceEntry): string {
   return [
     ...(model && model !== 'Computer' ? [model] : []),
     ...(d.info?.appVersion ? [`Walnut ${d.info.appVersion}`] : []),
-    `paired ${formatAbsoluteTime(d.createdAt)}`,
-    ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
+    `paired ${pointInTime(d.createdAt)}`,
+    ...(d.lastUsedAt ? [`last used ${pointInTime(d.lastUsedAt)}`] : []),
   ].join(', ');
 }
 

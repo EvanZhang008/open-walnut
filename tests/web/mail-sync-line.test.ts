@@ -22,6 +22,7 @@
 import { describe, it, expect } from 'vitest';
 import type { MailAccountDto, MailboxDto } from '../../web/src/api/mail';
 import { syncLineFor, type MailSyncLineInput } from '../../web/src/apps/mail/mail-sync-line';
+import { fullTime } from '../../web/src/utils/time';
 import {
   DRAFTS_MAILBOX,
   SMART_ACCOUNT,
@@ -108,7 +109,7 @@ describe('the mail pane sync line', () => {
     // Absolute first, because a relative age cannot be compared with anything; then one clause per
     // account, because one line cannot say which half of a two account console is stale.
     expect(answer.title).toBe(
-      `Last checked ${new Date(NOW - 2 * MINUTE).toLocaleString()}`
+      `Last checked ${fullTime(NOW - 2 * MINUTE)}`
       + ` · ${A_LABEL}: 2 min ago · ${B_LABEL}: 14 min ago`,
     );
   });
@@ -125,7 +126,7 @@ describe('the mail pane sync line', () => {
     expect(answer.text).toBe('Checked 2 min ago');
     expect(answer.at).toBe(NOW - 2 * MINUTE);
     expect(answer.title).toBe(
-      `Last checked ${new Date(NOW - 2 * MINUTE).toLocaleString()}`
+      `Last checked ${fullTime(NOW - 2 * MINUTE)}`
       + ` · ${A_LABEL}: 2 min ago · ${B_LABEL}: 14 min ago`,
     );
 
@@ -327,7 +328,7 @@ describe('the mail pane sync line', () => {
     })!;
     expect(one.text).toBe('Checked 2 min ago');
     // No per-account clause: with one account it would repeat the sentence already on screen.
-    expect(one.title).toBe(`Last checked ${new Date(NOW - 2 * MINUTE).toLocaleString()}`);
+    expect(one.title).toBe(`Last checked ${fullTime(NOW - 2 * MINUTE)}`);
 
     // No accounts is no line at all, not an empty sentence with a hairline above it.
     expect(syncLineFor({ accounts: [], mailboxes: {}, selected: null, folderFetch: {}, now: NOW }))

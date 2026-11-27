@@ -32,7 +32,7 @@ import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { resolveTaskToken } from '@/stores/entity-label-store';
 import { log } from '@/utils/log';
 import { useOpenTask } from '@/hooks/useOpenTask';
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import runtimeCore from './board-runtime.frame.js?raw';
 import runtimeMarkdown from './board-markdown.frame.js?raw';
 import runtimeElements from './board-elements.frame.js?raw';
@@ -608,7 +608,7 @@ export function TaskBoardPane({ taskId, barRightSlot, onSendToSession, renderSes
           <BoardViewToggle view={shownView} hasPage={hasPage} attention={toggleAttention} onPick={pickView} />
         )}
         {board && shownView === 'custom' && (
-          <span className="task-board-bar-sub" data-fit-sub="" title={new Date(board.updated_at).toLocaleString()} data-testid="board-meta">
+          <span className="task-board-bar-sub" data-fit-sub="" title={fullTime(board.updated_at)} data-testid="board-meta">
             v{board.version} · updated {timeAgo(board.updated_at, { long: true })} by {boardWriterLabel(board.updated_by, ownerId)}
           </span>
         )}

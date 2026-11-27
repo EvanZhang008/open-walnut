@@ -8,7 +8,7 @@ import { usePersistentState } from '@/hooks/usePersistentState';
 import { useUsageCosts } from '@/hooks/useUsageCosts';
 import type { TimeSelection } from '@/hooks/useUsageOverview';
 import { formatTokens as formatTokenCount } from '@/utils/format';
-import { timeAgo } from '@/utils/time';
+import { dayDate, pointInTime, timeAgo } from '@/utils/time';
 import { UsageBreakdownCard } from '@/components/usage/UsageBreakdownCard';
 import { UsageAccounts } from '@/components/usage/UsageAccounts';
 import { EngineCompareCard } from '@/components/usage/EngineCompareCard';
@@ -245,7 +245,7 @@ function TaskList({ report, heading }: { report: CostReport; heading: string }) 
 
 function HowCounted({ report }: { report: CostReport }) {
   const hostName = useHostDisplayLabels();
-  const asOf = report.prices.asOf ? new Date(report.prices.asOf).toLocaleDateString('en-US') : undefined;
+  const asOf = report.prices.asOf ? dayDate(report.prices.asOf) : undefined;
   return (
     <details className="settings-group usage-how" data-testid="usage-how">
       <summary>How this is counted</summary>
@@ -254,7 +254,7 @@ function HowCounted({ report }: { report: CostReport }) {
           title={`From the ${report.prices.source === 'litellm' ? 'LiteLLM' : 'built-in'} price list${asOf ? `, ${asOf}` : ''}.`} />
         <SettingsRow label="Sources" help="Claude Code from each host's transcripts, Codex and OpenCode from their session records, Walnut from its own records." />
         <SettingsRow label="Up to date" help={report.countedUntil.length
-          ? <span {...META_LINE}>{report.countedUntil.map((u) => `${hostName(u.host)}: ${u.until ? new Date(u.until).toLocaleString('en-US') : 'not read yet'}`).join(' · ')}</span>
+          ? <span {...META_LINE}>{report.countedUntil.map((u) => `${hostName(u.host)}: ${u.until ? pointInTime(u.until) : 'not read yet'}`).join(' · ')}</span>
           : 'Nothing read yet. Update now reads every host.'} />{/* empty-state-ok: row help text */}
         {report.checks.filter((c) => c.source === 'Canonical transcript' || c.source === 'Upstream token log' || c.source === 'Host collection').map((c) => (
           <SettingsRow key={`${c.host}:${c.source}`} label={<span {...META_LINE}>{`${c.source} · ${hostName(c.host)}`}</span>}

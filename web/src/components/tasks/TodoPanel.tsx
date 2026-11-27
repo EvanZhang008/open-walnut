@@ -24,7 +24,7 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useTaskUndo } from '@/undo/TaskUndoContext';
 import { useWatchReorder } from './WatchToggle';
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import { landOnRow } from '@/utils/scroll-land';
 import { completeToggleTitle, resolveTaskSessionId, phasePickerChoices, taskNeedsAction, taskUserState } from '@/utils/session-status';
@@ -2208,8 +2208,8 @@ interface RecentCardProps {
 
 /** A Recent row's time tooltip: "Opened" and the full local date. */
 function openedTitle(at: string | undefined): string {
-  const t = at ? new Date(at) : null;
-  return t && !isNaN(t.getTime()) ? `Last used ${t.toLocaleString()}` : '';
+  const when = fullTime(at);
+  return when ? `Last used ${when}` : '';
 }
 
 // ── SortableRecentCard — a draggable row of the Recent list, with its kebab menu ──

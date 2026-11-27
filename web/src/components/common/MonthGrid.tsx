@@ -6,14 +6,8 @@
  */
 import { useState } from 'react';
 import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from './Icons';
-
-const WEEKDAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
-/** The local calendar day as YYYY-MM-DD. */
-export function isoDay(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
+import { dayCellName, monthTitle, WEEKDAYS_NARROW } from '@/utils/calendar-grid-labels';
+import { ymdOf } from './date-time-pick';
 
 /** The weeks of one month, Sunday first; a day outside the month is null. */
 export function monthWeeks(year: number, month: number): (Date | null)[][] {
@@ -37,7 +31,7 @@ export function MonthGrid({ selected, onPick, min, now = new Date() }: {
 }) {
   const start = selected ? new Date(Number(selected.slice(0, 4)), Number(selected.slice(5, 7)) - 1, 1) : now;
   const [view, setView] = useState({ y: start.getFullYear(), m: start.getMonth() });
-  const today = isoDay(now);
+  const today = ymdOf(now);
   const step = (by: number) => setView(({ y, m }) => {
     const d = new Date(y, m + by, 1);
     return { y: d.getFullYear(), m: d.getMonth() };
@@ -46,18 +40,18 @@ export function MonthGrid({ selected, onPick, min, now = new Date() }: {
     <div className="dp-month" data-testid="dp-month" data-month={`${view.y}-${String(view.m + 1).padStart(2, '0')}`}>
       <div className="dp-month-head">
         <button type="button" className="dp-month-step" data-testid="dp-month-prev" aria-label="Previous month" onClick={(e) => { e.stopPropagation(); step(-1); }}>{ICON_CHEVRON_LEFT}</button>
-        <span className="dp-month-name" aria-live="polite">{MONTHS[view.m]} {view.y}</span>
+        <span className="dp-month-name" aria-live="polite">{monthTitle(view.y, view.m)}</span>
         <button type="button" className="dp-month-step" data-testid="dp-month-next" aria-label="Next month" onClick={(e) => { e.stopPropagation(); step(1); }}>{ICON_CHEVRON_RIGHT}</button>
       </div>
-      <div className="dp-month-grid" role="grid" aria-label={`${MONTHS[view.m]} ${view.y}`}>
+      <div className="dp-month-grid" role="grid" aria-label={monthTitle(view.y, view.m)}>
         <div className="dp-month-row" role="row">
-          {WEEKDAYS.map((w) => <span key={w} className="dp-month-dow" role="columnheader">{w}</span>)}
+          {WEEKDAYS_NARROW.map((w) => <span key={w} className="dp-month-dow" role="columnheader">{w}</span>)}
         </div>
         {monthWeeks(view.y, view.m).map((week, i) => (
           <div key={i} className="dp-month-row" role="row">
             {week.map((d, j) => {
               if (!d) return <span key={j} className="dp-month-day is-blank" role="gridcell" />;
-              const day = isoDay(d);
+              const day = ymdOf(d);
               const cls = `dp-month-day${day === selected ? ' is-selected' : ''}${day === today ? ' is-today' : ''}${day < today ? ' is-past' : ''}`;
               const off = !!min && day < min;
               return (
@@ -67,7 +61,7 @@ export function MonthGrid({ selected, onPick, min, now = new Date() }: {
                     className={cls}
                     data-testid="dp-month-day"
                     data-date={day}
-                    aria-label={d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                    aria-label={dayCellName(d)}
                     aria-pressed={day === selected}
                     disabled={off}
                     onClick={(e) => { e.stopPropagation(); onPick(day); }}

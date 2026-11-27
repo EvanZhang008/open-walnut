@@ -150,7 +150,7 @@ export function KebabDateRow({ label, date, display, onChange, extra, testId, cl
  *  watch (an armed trigger) a Waiting task waits on. Empty when neither. */
 export function snoozeDisplay(task: Pick<Task, 'start_date' | 'phase' | 'user_status'>): string {
   const start = task.start_date ? formatStartDateDisplay(task.start_date) : '';
-  // A timed snooze says its hour ("Sun 3:30 PM"), a date-only one its day words as before.
+  // A timed snooze says its hour ("tomorrow 3:30 PM"), a date-only one its day words as before.
   const time = start && start !== 'Started' ? (snoozeWhenWords(task.start_date!) ?? start) : '';
   const on = task.phase === 'WAITING' ? task.user_status?.waitingOn ?? '' : '';
   const watch = /^A watch:\s*/i.test(on) ? on.replace(/^A watch:\s*/i, '') : '';

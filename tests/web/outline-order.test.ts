@@ -8,7 +8,8 @@
  * Placement by the message's timestamp puts it where the conversation has it.
  */
 import { describe, it, expect } from 'vitest';
-import { outlineTimeLabel, placePins, unloadedSlot } from '@/components/sessions/outline-order';
+import { placePins, unloadedSlot } from '@/components/sessions/outline-order';
+import { pointInTime } from '@/utils/time';
 import type { SessionPinnedMessage } from '@/types/session';
 
 const T0 = Date.parse('2026-09-17T08:00:00Z');
@@ -122,24 +123,21 @@ describe('placePins', () => {
   });
 });
 
-describe('outlineTimeLabel', () => {
-  const now = new Date('2026-09-18T18:30:00');
+// The outline row writes its time with pointInTime (SessionPinnedToc.tsx): a bare "3:08 PM"
+// on a row from two days ago read as this afternoon, which made a mis-ordering look impossible.
+describe('outline row time (pointInTime)', () => {
+  const now = new Date('2026-09-18T18:30:00').getTime();
 
-  it('shows only the clock for a row from today', () => {
-    const label = outlineTimeLabel('2026-09-18T13:08:00', now);
-    expect(label).toMatch(/1:08/);
-    expect(label).not.toMatch(/Sep/);
+  it('says "today" and the clock for a row from today', () => {
+    expect(pointInTime('2026-09-18T13:08:00', { now })).toBe('today 1:08 PM');
   });
 
-  it('adds the date for a row from another day (a bare clock read as today)', () => {
-    const label = outlineTimeLabel('2026-09-16T15:08:00', now);
-    expect(label).toMatch(/Sep/);
-    expect(label).toMatch(/16/);
-    expect(label).toMatch(/3:08/);
+  it('adds the date for a row from another day', () => {
+    expect(pointInTime('2026-09-16T15:08:00', { now })).toBe('Sep 16, 3:08 PM');
   });
 
   it('is empty for a missing or unparsable stamp', () => {
-    expect(outlineTimeLabel(undefined, now)).toBe('');
-    expect(outlineTimeLabel('nope', now)).toBe('');
+    expect(pointInTime(undefined, { now })).toBe('');
+    expect(pointInTime('nope', { now })).toBe('');
   });
 });

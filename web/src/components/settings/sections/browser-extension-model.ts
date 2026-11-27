@@ -4,6 +4,7 @@
  * and whether agents may use it. Pure, so the words are tested once for every install kind.
  */
 import { AGENTS_IN_BROWSER } from './browser-labels'
+import { timeAgo } from '@/utils/time'
 
 export type InstallKind = 'walnut-folder' | 'unpacked' | 'store' | 'other'
 
@@ -30,16 +31,6 @@ export interface ExtRowModel {
 
 /** The extension checks in every 10 minutes (self-update.ts); a little more than that still reads as connected. */
 export const LIVE_MS = 15 * 60_000
-
-function ago(iso: string | undefined, now: number): string {
-  if (!iso) return 'not yet'
-  const t = new Date(iso).getTime()
-  if (!Number.isFinite(t)) return ''
-  const min = Math.round((now - t) / 60_000)
-  if (min < 1) return 'just now'
-  if (min < 60) return `${min} min ago`
-  return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-}
 
 /**
  * How this copy updates. Builds change without a new version number, so only a named build is
@@ -81,8 +72,9 @@ export function extRows(devices: ExtDevice[], seen: ExtSeen[], polling: Readonly
     const heard = s ? new Date(s.at).getTime() : NaN
     const live = polling.has(d.name) || (Number.isFinite(heard) && now - heard < LIVE_MS)
     const update = updateOf(s, shipped)
+    const heardAt = s?.at ?? d.lastUsedAt
     const parts = [
-      live ? 'Connected' : `Last heard ${ago(s?.at ?? d.lastUsedAt, now)}`,
+      live ? 'Connected' : `Last heard ${heardAt ? timeAgo(heardAt, { long: true, now }) : 'not yet'}`,
       s?.version ? `Version ${s.version}, ${UPDATE_WORDS[update]}` : 'Version not reported yet',
       !polling.has(d.name) ? AGENTS_IN_BROWSER.none : polling.get(d.name)!.includes('handed-tabs-only') ? AGENTS_IN_BROWSER.shared : AGENTS_IN_BROWSER.all,
     ]

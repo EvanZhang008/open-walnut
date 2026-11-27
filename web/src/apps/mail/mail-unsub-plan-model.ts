@@ -12,6 +12,7 @@ import type {
   MailUnsubscribePlan,
   MailUnsubscribePlanItem,
 } from '@/api/mail-groups';
+import { dayDate } from '@/utils/time';
 import { formatCount } from './mail-format';
 
 /** A plan item; a mailto the account cannot send carries its address (`mailto`), for the copy button. */
@@ -66,15 +67,11 @@ export function submitLabel(ticked: number): string {
   return ticked > 0 ? `Unsubscribe from ${formatCount(ticked)}` : 'Unsubscribe';
 }
 
-function shortDate(at: number): string {
-  return new Date(at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
 /** `Already unsubscribed: Tide Tables (Sep 12), Harbour Notes (Sep 3)`, or null. */
 export function alreadyLine(items: PlanItem[]): string | null {
   const done = items.filter((one) => one.done);
   if (done.length === 0) return null;
-  return `Already unsubscribed: ${done.map((one) => `${one.label} (${shortDate(one.done!.at)})`).join(', ')}`;
+  return `Already unsubscribed: ${done.map((one) => `${one.label} (${dayDate(one.done!.at)})`).join(', ')}`;
 }
 
 /**

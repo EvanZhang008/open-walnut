@@ -22,8 +22,9 @@ describe('phone empty day', () => {
     expect(isDayEmpty(next, day)).toBe(true);
   });
 
-  it('the line names today, or the weekday and date of another day', () => {
+  it('the line names today, tomorrow, or the date of another day', () => {
     expect(emptyDayLine('2026-10-14', '2026-10-14')).toBe('Nothing scheduled today.');
-    expect(emptyDayLine('2026-10-16', '2026-10-14')).toBe('Nothing scheduled on Friday, October 16.');
+    expect(emptyDayLine('2026-10-15', '2026-10-14')).toBe('Nothing scheduled tomorrow.');
+    expect(emptyDayLine('2026-10-16', '2026-10-14')).toBe('Nothing scheduled on Oct 16.');
   });
 });

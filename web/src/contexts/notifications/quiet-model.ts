@@ -17,6 +17,7 @@
  * new attention renderer outside a page that does not go through them.
  */
 import { IS_PERSISTENT, type NotificationKind } from './types';
+import { clockTime } from '@/utils/time';
 import { holdLetsTaskThrough, normalizeScope, scopeIsEmpty, type FocusScope, type ScopeTaskLookup } from '@open-walnut/focus-scope';
 
 export interface QuietHold {
@@ -124,7 +125,7 @@ export function quietLabel(q: QuietState, now = Date.now()): string {
   if (!e.active) return 'Notifications';
   const parts = e.holds.map((h) => {
     const until = h.until
-      ? ` until ${new Date(h.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+      ? ` until ${clockTime(h.until)}`
       : '';
     return `${holdName(h)}${until}`;
   });

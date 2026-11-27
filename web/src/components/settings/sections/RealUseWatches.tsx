@@ -7,7 +7,8 @@ import { Link } from 'react-router-dom';
 import type { UsageNote, UsageWatch } from '@/api/usage-watch';
 import { NoticeStatus } from '@/components/common/NoticeCard';
 import { taskPath } from '@/utils/task-path';
-import { DEFAULT_WATCH_CHECKS, checksText, noteRecipientName, noteStatus, stamp, targetResultText, watchStatus, watchWhen } from './real-use-model';
+import { lineStart, pointInTime } from '@/utils/time';
+import { DEFAULT_WATCH_CHECKS, checksText, noteRecipientName, noteStatus, targetResultText, watchStatus, watchWhen } from './real-use-model';
 import { EmptyState } from '@/components/common/EmptyState';
 
 /** Task id to title, from the watches (the only titles the report carries). */
@@ -29,7 +30,7 @@ function WatchRow({ w, now, titles }: { w: UsageWatch; now: number; titles: Map<
     <tr className="ru-watch-row" data-watch={w.id} data-state={w.state}>
       <td>
         <Link className="health-task-link" to={taskPath(w.taskId)}>{w.taskTitle ?? w.taskId}</Link>
-        {w.shipAt !== undefined && <span className="ru-sub">shipped {stamp(w.shipAt, now)}</span>}
+        {w.shipAt !== undefined && <span className="ru-sub">shipped {pointInTime(w.shipAt, { now })}</span>}
       </td>
       <td>
         {w.exempt
@@ -79,7 +80,7 @@ function NoteRow({ n, now, titles }: { n: UsageNote; now: number; titles: Map<st
   const status = noteStatus(n, now);
   return (
     <li className="ru-note-row" data-note={n.id} data-state={n.state}>
-      <span className="ru-when">{stamp(n.sentAt ?? n.dueAt, now)}</span>
+      <span className="ru-when">{lineStart(pointInTime(n.sentAt ?? n.dueAt, { now }))}</span>
       <span className="ru-note-text">
         To <TaskLink id={n.recipient} titles={titles} fallback={noteRecipientName(n)} />: {n.items} alarm{n.items === 1 ? '' : 's'}
         {n.titles.length > 0 && <> ({n.titles.join('; ')})</>}

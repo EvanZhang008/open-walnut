@@ -280,7 +280,7 @@ describe('TaskActionMenuItems with the draft props', () => {
   it('TaskSnoozeRow reads what is set now (a time, a watch, or nothing) and opens both kinds of snooze', async () => {
     const future = new Date(Date.now() + 8 * 3_600_000).toISOString();
     // A timed snooze says its hour, never "8h" (2026-11-11); a date-only one keeps its day words.
-    expect(snoozeDisplay({ start_date: future, phase: 'TODO' })).toMatch(/^(Today|Tomorrow) \d{1,2}:\d{2} (AM|PM)$/);
+    expect(snoozeDisplay({ start_date: future, phase: 'TODO' })).toMatch(/^(today|tomorrow) \d{1,2}:\d{2} (AM|PM)$/);
     const day = new Date(Date.now() + 3 * 86_400_000);
     const ymd = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
     expect(snoozeDisplay({ start_date: ymd, phase: 'TODO' })).toBe(formatStartDateDisplay(ymd));

@@ -13,11 +13,11 @@ const job = (over: Partial<SessionCronJob> = {}): SessionCronJob => ({
 });
 
 describe('cron job text', () => {
-  it('names today, tomorrow and yesterday, then falls back to a dated form', () => {
-    expect(formatCronClock(now + hour, now)).toMatch(/^Today 1:00/);
-    expect(formatCronClock(now + 13 * hour, now)).toMatch(/^Tomorrow 1:00/);
-    expect(formatCronClock(now - 13 * hour, now)).toMatch(/^Yesterday 11:00/);
-    expect(formatCronClock(now + 3 * day, now)).toMatch(/^Fri, Sep 18, 12:00/);
+  it('names today, tomorrow and yesterday, then falls back to a dated form (pointInTime)', () => {
+    expect(formatCronClock(now + hour, now)).toMatch(/^today 1:00\sPM$/);
+    expect(formatCronClock(now + 13 * hour, now)).toMatch(/^tomorrow 1:00\sAM$/);
+    expect(formatCronClock(now - 13 * hour, now)).toMatch(/^yesterday 11:00\sPM$/);
+    expect(formatCronClock(now + 3 * day, now)).toMatch(/^Sep 18, 12:00\sPM$/);
   });
 
   it('describes distance in the largest two units and marks a passed minute as due', () => {
@@ -41,7 +41,7 @@ describe('cron job text', () => {
   it('builds a pill title from the first job and counts the rest', () => {
     expect(cronPillTitle(undefined, now)).toContain("host's daemon");
     expect(cronPillTitle([], now)).toBe('Confirmed cron job.');
-    expect(cronPillTitle([job()], now)).toMatch(/^Cron job: Every day at 9:23 AM\. Next run Tomorrow 9:23 AM \(in 21h 23m\)\.$/);
+    expect(cronPillTitle([job()], now)).toMatch(/^Cron job: Every day at 9:23 AM\. Next run tomorrow 9:23\sAM \(in 21h 23m\)\.$/);
     expect(cronPillTitle([job({ schedule: null, nextRunAt: null }), job({ id: 'b' }), job({ id: 'c' })], now))
       .toBe('Cron job: 23 9 * * *. 2 more jobs.');
   });

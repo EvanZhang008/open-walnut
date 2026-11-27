@@ -14,6 +14,7 @@ import { createPortal } from 'react-dom';
 import { fetchSessionHistory } from '@/api/sessions';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { log } from '@/utils/log';
+import { fullTime, lineStart, pointInTime } from '@/utils/time';
 import { rawTurnsOf, type RawTurn } from '@/utils/raw-turns';
 import '@/styles/session-raw-view.css';
 import { ICON_CLOSE } from '../common/Icons';
@@ -40,7 +41,7 @@ function Turn({ turn, index }: { turn: RawTurn; index: number }) {
     <section className="raw-turn" data-testid="raw-turn" data-hinted={turn.hinted ? '1' : '0'}>
       <header className="raw-turn-head">
         <span>Turn {index + 1}</span>
-        <time>{new Date(turn.at).toLocaleString()}</time>
+        <time dateTime={turn.at} title={fullTime(turn.at)}>{lineStart(pointInTime(turn.at))}</time>
         {turn.hintKinds.length > 0 && <span className="raw-turn-hints">hints: {turn.hintKinds.join(', ')}</span>}
       </header>
       <div className="raw-turn-label">Input (as the model received it)</div>

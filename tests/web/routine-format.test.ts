@@ -4,7 +4,7 @@
  * awkward inputs (a missing timestamp, a delivery still retrying) are pinned
  * here rather than discovered on a card.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
   auditClock, auditHistory, auditTarget, clockHostTitle, describeAgo, describeAuditEntry, describeCheck, describeClockWait,
   describeExecutorBadge, describeFireTally, describeLastCheck, describeRunTime, describeSchedule,
@@ -84,6 +84,28 @@ describe('describeSchedule for a cron in another zone', () => {
   })
   it('an unknown zone is named as written', () => {
     expect(describeSchedule({ kind: 'cron', expr: '0 9 * * *', tz: 'Mars/Olympus' })).toMatch(/Mars\/Olympus$/)
+  })
+})
+
+describe('a routine zone reads the same on every kind of row', () => {
+  // 2026-11-27 audit: "Mondays at 10:00 AM PST" beside nine "Every 30 min" and one "Every 30 min PST".
+  const zoneWas = process.env.TZ
+  beforeAll(() => { process.env.TZ = 'America/Los_Angeles' })
+  afterAll(() => { if (zoneWas === undefined) delete process.env.TZ; else process.env.TZ = zoneWas })
+
+  it('another name for the viewer\'s own zone says no zone', () => {
+    expect(describeSchedule({ kind: 'cron', expr: '0 10 * * 1', tz: 'US/Pacific' })).toMatch(/^Mondays at 10:00\sAM$/)
+    expect(describeSchedule({ kind: 'cron', expr: '0 8 * * *', tz: 'America/Los_Angeles' })).toMatch(/^Every day at 8:00\sAM$/)
+  })
+  it('a cadence that names no hour never says a zone', () => {
+    expect(describeSchedule({ kind: 'cron', expr: '*/30 * * * *', tz: 'UTC' })).toBe('Every 30 min')
+    expect(describeSchedule({ kind: 'cron', expr: '15 * * * *', tz: 'UTC' })).toBe('Hourly at :15')
+    expect(describeSchedule({ kind: 'every', everyMs: 30 * 60_000 })).toBe('Every 30 min')
+  })
+  it('a cadence that names an hour in another zone says it, and a one-time run is the viewer\'s instant', () => {
+    expect(describeSchedule({ kind: 'cron', expr: '0 10 * * 1', tz: 'UTC' })).toMatch(/^Mondays at 10:00\sAM UTC$/)
+    expect(describeSchedule({ kind: 'cron', expr: '7 7 7 7 7', tz: 'UTC' })).toBe(CUSTOM_SCHEDULE)
+    expect(describeSchedule({ kind: 'at', at: '2025-10-16T07:30:00.000Z' })).toMatch(/^Once at Oct 16, 2025, 12:30\sAM$/)
   })
 })
 
@@ -217,14 +239,14 @@ describe('the trigger audit trail as sentences', () => {
 
   it('prints an audit clock even for a broken timestamp', () => {
     expect(auditClock(Number.NaN)).toBe('--:--');
-    expect(auditClock(NOW, NOW)).toMatch(/^\d{2}:\d{2}/);
+    expect(auditClock(NOW, NOW)).toMatch(/^\d{1,2}:\d{2}\s[AP]M$/);
   });
 
   // A replayed fire can be days old; "06:12" alone would read as this morning.
   it('dates a row from another day, and only then', () => {
     expect(auditClock(NOW - 60_000, NOW)).not.toMatch(/[A-Za-z]{3}/);
     const twoDaysAgo = auditClock(NOW - 2 * 86_400_000, NOW);
-    expect(twoDaysAgo).toMatch(/[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}/);
+    expect(twoDaysAgo).toMatch(/^[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2}\s[AP]M$/);
   });
 
   it('a backlog delivered as one envelope reads as one row, with how late it was', () => {

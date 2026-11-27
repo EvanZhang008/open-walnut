@@ -16,6 +16,7 @@ import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { useDragBusTarget } from '@/hooks/useDragBusTarget';
 import { parseDateLocal } from '@/components/common/DatePicker';
 import { addDays, formatDateOnly } from '@/utils/calendar-date';
+import { dayDate, lineStart } from '@/utils/time';
 import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile, type CalendarItem } from './calendar-items';
 import { TimeGrid, type DropPreview, type GridMetrics } from './TimeGrid';
 import { QuickCreatePopover, type CreateSeed } from './QuickCreatePopover';
@@ -29,6 +30,9 @@ import { CalendarAlert, calendarAlertOf, canCreateEventOf } from './CalendarAler
 import { emptyDayLine, isDayEmpty } from './phone-empty-day';
 import { EmptyState, LoadingState, UnavailableState } from '../common/EmptyState';
 import '@/styles/header-fit.css';
+
+/** The panel's day as every screen writes a day, capitalised as a title: "Today", "Nov 23". */
+const dayTitle = (d: Date) => lineStart(dayDate(d));
 
 interface Props {
   onClose: () => void;
@@ -153,7 +157,7 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
     >
       <div className="cal-side-header" data-fit-header="">
         <span className="cal-side-title" data-fit-title="">
-          {isToday ? 'Today' : anchor.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' })}
+          {dayTitle(anchor)}
         </span>
         {/* Three groups of the same quiet buttons: the day, the time scale, the panel. */}
         <div className="cal-side-tools" role="group" aria-label="Day">

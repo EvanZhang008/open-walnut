@@ -37,6 +37,7 @@ import {
   layoutDayEvents,
   weekRange,
 } from '@/utils/calendar-date';
+import { weekdayShort } from '@/utils/calendar-grid-labels';
 import { useMinuteValue } from '@/utils/minute-clock';
 import { fittedSlotPx, GRID_EXTENDED_END, GRID_FOCUS_START, gridMinute, gridY, gridLocalIso, gridSnapMinute, PHONE_MIN_SLOT_PX, phoneLandingMinute, useCalendarGridSettings } from './calendar-grid-settings';
 import { timeGridItems } from './calendar-items';
@@ -661,7 +662,7 @@ export const TimeGrid = memo(function TimeGrid({
     const isToday = dayStr === todayStr;
     return (
       <div key={dayStr} className={`cal-grid-dayhead${isToday ? ' today' : ''}`}>
-        <span className="cal-grid-dayname">{d.toLocaleDateString('en', { weekday: 'short' })}</span>
+        <span className="cal-grid-dayname">{weekdayShort(d)}</span>
         <span className="cal-grid-daynum">{d.getDate()}</span>
       </div>
     );

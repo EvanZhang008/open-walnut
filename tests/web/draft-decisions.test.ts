@@ -1,10 +1,9 @@
 /**
  * The draft column's decision chips as data (draft-decisions.ts): every row of
  * the copy table (spec 5.2), the tooltip template (5.3), the 7-days-ahead date
- * exception (C64), the legend rule (C34) and the "Use Walnut's pick" inputs.
+ * case (C64), the legend rule (C34) and the "Use Walnut's pick" inputs.
  *
- * The clock is frozen on Thursday 2026-09-24 10:00 local time, because the
- * shared formatDateTimeDisplay reads the clock itself.
+ * The clock is frozen on Thursday 2026-09-24 10:00 local time.
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
@@ -12,7 +11,6 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: () => null }));
 
 const dec = await import('@/components/sessions/draft-decisions');
-const { formatDateTimeDisplay } = await import('@/components/common/DatePicker');
 const { DEFAULT_META } = await import('@/components/sessions/task-meta-constants');
 type DraftColumn = import('@/components/sessions/draft-column').DraftColumn;
 type DraftAiField = import('@/components/sessions/draft-column').DraftAiField;
@@ -149,31 +147,31 @@ describe('priority chip', () => {
 });
 
 describe('start and due chips', () => {
-  it('start: today, tomorrow, a weekday, M/D, with a time', () => {
+  it('start: today, tomorrow, a date, with a time', () => {
     const label = (iso: string) => chip(draft({ startDate: iso }, { ai: ['startDate'] }), 'startDate')!.label;
-    expect(label('2026-09-24')).toBe('Start Today');
-    expect(label('2026-09-25')).toBe('Start Tomorrow');
-    expect(label('2026-09-26')).toBe('Start Sat');
-    expect(label('2026-10-03')).toBe('Start 10/3');
-    expect(label('2026-09-26T15:00')).toBe('Start Sat 15:00');
+    expect(label('2026-09-24')).toBe('Start today');
+    expect(label('2026-09-25')).toBe('Start tomorrow');
+    expect(label('2026-09-26')).toBe('Start Sep 26');
+    expect(label('2026-10-03')).toBe('Start Oct 3');
+    expect(label('2026-09-26T15:00')).toBe('Start Sep 26, 3:00 PM');
   });
 
   it('a same-day range shows the end time only, a cross-day range the end day', () => {
     const c = chip(draft({ startDate: '2026-09-26T15:00', endDate: '2026-09-26T17:00' }, { ai: ['startDate'] }), 'startDate')!;
-    expect(c.label).toBe('Start Sat 15:00 to 17:00');
-    expect(c.title).toBe('Start: Sat 15:00, ends 17:00. Set by Walnut from your text. Click to change.');
+    expect(c.label).toBe('Start Sep 26, 3:00 PM to 5:00 PM');
+    expect(c.title).toBe('Start: Sep 26, 3:00 PM, ends 5:00 PM. Set by Walnut from your text. Click to change.');
     expect(chip(draft({ startDate: '2026-09-26', endDate: '2026-09-27' }, { ai: ['startDate'] }), 'startDate')!.label)
-      .toBe('Start Sat to Sun');
+      .toBe('Start Sep 26 to Sep 27');
     expect(chip(draft({ startDate: '2026-09-26T15:00', endDate: '2026-09-27T10:00' }, { owner: { startDate: 'user' } }), 'startDate')!.label)
-      .toBe('Start Sat 15:00 to Sun 10:00');
+      .toBe('Start Sep 26, 3:00 PM to Sep 27, 10:00 AM');
   });
 
-  it('due: today, tomorrow with a time, a weekday, M/D', () => {
+  it('due: today, tomorrow with a time, a date', () => {
     const label = (iso: string) => chip(draft({ dueDate: iso }, { ai: ['dueDate'] }), 'dueDate')!.label;
-    expect(label('2026-09-24')).toBe('Due Today');
-    expect(label('2026-09-25T17:00')).toBe('Due Tomorrow 17:00');
-    expect(label('2026-09-26')).toBe('Due Sat');
-    expect(label('2026-10-03')).toBe('Due 10/3');
+    expect(label('2026-09-24')).toBe('Due today');
+    expect(label('2026-09-25T17:00')).toBe('Due tomorrow 5:00 PM');
+    expect(label('2026-09-26')).toBe('Due Sep 26');
+    expect(label('2026-10-03')).toBe('Due Oct 3');
   });
 
   it('a past due is flagged overdue; today (date only) and a later hour today are not', () => {
@@ -182,7 +180,7 @@ describe('start and due chips', () => {
     expect(overdue('2026-09-24T08:00')).toBe(true);
     expect(overdue('2026-09-24')).toBeUndefined();
     expect(overdue('2026-09-24T18:00')).toBeUndefined();
-    expect(chip(draft({ dueDate: '2026-09-22' }, { owner: { dueDate: 'user' } }), 'dueDate')!.label).toBe('Due 9/22');
+    expect(chip(draft({ dueDate: '2026-09-22' }, { owner: { dueDate: 'user' } }), 'dueDate')!.label).toBe('Due Sep 22');
   });
 
   it('no date, no chip', () => {
@@ -236,17 +234,15 @@ describe('unread chip and order', () => {
 });
 
 describe('formatDraftDate (C64)', () => {
-  it('exactly 7 days ahead reads M/D, so a Thursday never says "Thu" for next Thursday', () => {
-    expect(dec.formatDraftDate('2026-10-01', NOW)).toBe('10/1');
-    expect(dec.formatDraftDate('2026-10-01T09:30', NOW)).toBe('10/1 9:30');
-    expect(chip(draft({ dueDate: '2026-10-01' }, { ai: ['dueDate'] }), 'dueDate')!.label).toBe('Due 10/1');
+  it('a day a week out says its date, so a Thursday never says "Thu" for next Thursday', () => {
+    expect(dec.formatDraftDate('2026-10-01', NOW)).toBe('Oct 1');
+    expect(dec.formatDraftDate('2026-10-01T09:30', NOW)).toBe('Oct 1, 9:30 AM');
+    expect(chip(draft({ dueDate: '2026-10-01' }, { ai: ['dueDate'] }), 'dueDate')!.label).toBe('Due Oct 1');
   });
 
-  it('the shared formatDateTimeDisplay is unchanged, and every other day matches it', () => {
-    expect(formatDateTimeDisplay('2026-10-01')).toBe('Thu');
-    for (const iso of ['2026-09-20', '2026-09-24', '2026-09-25', '2026-09-27T08:05', '2026-09-30', '2026-10-02', '2026-11-15']) {
-      expect(dec.formatDraftDate(iso, NOW)).toBe(formatDateTimeDisplay(iso));
-    }
+  it('a date in another year shows the year, and nonsense reads as nothing', () => {
+    expect(dec.formatDraftDate('2027-01-05', NOW)).toBe('Jan 5, 2027');
+    expect(dec.formatDraftDate('not a date', NOW)).toBe('');
   });
 });
 
@@ -286,6 +282,6 @@ describe('legend and Walnut picks', () => {
     expect(dec.draftSuggestionLabel('pinTier', 'satellite', c)).toBe('Satellite');
     expect(dec.draftSuggestionLabel('pinTier', 'ct_deep', c)).toBe('Deep work');
     expect(dec.draftSuggestionLabel('priority', 'immediate', c)).toBe('!! Immediate');
-    expect(dec.draftSuggestionLabel('dueDate', '2026-09-26', c)).toBe('Sat');
+    expect(dec.draftSuggestionLabel('dueDate', '2026-09-26', c)).toBe('Sep 26');
   });
 });

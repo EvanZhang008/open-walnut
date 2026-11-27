@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest'
 import { hookBaseName, hookDescription, hookHelp, hookNames, humanEvent } from '../../web/src/components/settings/sections/hook-text.js'
 import { hookTag } from '../../web/src/components/settings/sections/HooksSection.js'
 import { humanDeviceModel } from '../../web/src/components/settings/sections/DevicesSection.js'
-import { usageDay, usageRangeHint, usageTime } from '../../web/src/components/settings/sections/UsageTables.js'
+import { usageRangeHint } from '../../web/src/components/settings/sections/UsageTables.js'
+import { usageDay } from '../../web/src/components/usage/breakdown-model.js'
 
 const DASH = /[\u2014\u2013]/
 
@@ -54,14 +55,17 @@ describe('F24 device model', () => {
 
 describe('F12 F32 usage dates', () => {
   it('names the range in words, never an ISO date', () => {
-    expect(usageRangeHint('2026-09-16', undefined)).toBe('Since Sep 16')
-    expect(usageRangeHint('2026-09-16', '2026-09-20')).toBe('Sep 16 to Sep 20')
+    // A past year, so the year always shows (dayDate leaves out only this year's).
+    expect(usageRangeHint('2025-09-16', undefined)).toBe('Since Sep 16, 2025')
+    expect(usageRangeHint('2025-09-16', '2025-09-20')).toBe('Sep 16, 2025 to Sep 20, 2025')
     expect(usageRangeHint(undefined, undefined)).toBe('All time')
-    expect(usageDay('2026-09-03')).toBe('Sep 3')
+    expect(usageDay('2025-09-03')).toBe('Sep 3, 2025')
   })
 
-  it('prints times without a leading zero hour', () => {
-    const t = usageTime(new Date(2026, 8, 23, 3, 31).toISOString())
-    expect(t).toMatch(/^Sep 23, 3:31\sAM$/)
+  it('reads a day of this year as every other day does', () => {
+    const now = new Date(2026, 8, 23, 12).getTime()
+    expect(usageDay('2026-09-03', { now })).toBe('Sep 3')
+    expect(usageDay('2026-09-22', { now })).toBe('yesterday')
+    expect(usageDay('not a day', { now })).toBe('not a day')
   })
 })

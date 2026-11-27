@@ -11,7 +11,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement'
 import { useOverlayLayer } from '@/hooks/useOverlayLayer'
-import { formatAbsoluteTime } from './sections/addons-format'
+import { timeAgo } from '@/utils/time'
 import { PluginUpdateIcon } from './plugin-update-icons'
 import { shortRemote, shortenHome } from './plugin-update-view'
 import '@/styles/plugin-updates.css'
@@ -136,7 +136,7 @@ export function PluginProvenanceFlyout(props: PluginProvenanceFlyoutProps) {
   }, [open])
 
   const checked = checkedAt
-    ? `Checked ${formatAbsoluteTime(checkedAt, now !== undefined ? new Date(now) : undefined)}`
+    ? `Checked ${timeAgo(checkedAt, { long: true, now })}`
     : 'Not checked yet'
   const isLinked = props.kind === 'linked'
   const copyValue = isLinked ? props.rows.checkout : props.rows.url

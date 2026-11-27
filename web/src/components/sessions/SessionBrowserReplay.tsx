@@ -30,8 +30,9 @@ import { BrowserRevealButton } from './BrowserRevealButton';
 import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
 import { ICON_COLLAPSE, ICON_EXPAND, ICON_EYE } from '@/components/common/Icons';
 import { log } from '@/utils/log';
+import { lineStart, pointInTime } from '@/utils/time';
 import {
-  NO_REPLAY, NO_STEP_PICTURE, REPLAY_REREAD_MS, REPLAY_SPEEDS, agoLine, pictureIndex, replayRuler, replayStepWords, replayTimeLine, spanLine, stepTimeLine,
+  NO_REPLAY, NO_STEP_PICTURE, REPLAY_REREAD_MS, REPLAY_SPEEDS, agoLine, pictureIndex, replayRuler, replayStepWords, spanLine, stepTimeLine,
   type ReplayStep, type ReplayStepIcon,
 } from './browser-view-model';
 
@@ -294,12 +295,12 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose, 
   const count = listed.length;
   const said = i >= 0 ? words[i] : undefined;
   const timeOf = (s: ReplayStep) => stepTimeLine(s.at, listed[0]?.at ?? s.at, ruler.seconds, now);
-  const tip = (s: ReplayStep, k: number) => `${k + 1}. ${words[k]?.title ?? s.label}${words[k]?.detail ? `, ${words[k].detail}` : ''} · ${replayTimeLine(s.at, now)} (recorded as: ${s.label})`;
+  const tip = (s: ReplayStep, k: number) => `${k + 1}. ${words[k]?.title ?? s.label}${words[k]?.detail ? `, ${words[k].detail}` : ''} · ${pointInTime(s.at, { now })} (recorded as: ${s.label})`;
 
   const list = count > 0 && (
     <ol className="session-browser-replay-list" ref={listRef} data-testid="session-browser-replay-list" aria-label="Steps">
       {listed.map((s, k) => (
-        <Row key={s.id} k={k} on={k === i} failed={!s.ok} icon={words[k].icon} title={words[k].title} detail={words[k].detail} time={timeOf(s)} tip={tip(s, k)} go={go} />
+        <Row key={s.id} k={k} on={k === i} failed={!s.ok} icon={words[k].icon} title={words[k].title} detail={words[k].detail} time={lineStart(timeOf(s))} tip={tip(s, k)} go={go} />
       ))}
     </ol>
   );
@@ -343,7 +344,7 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose, 
               <span className="session-browser-replay-label">{said.title}</span>
               {said.detail && <span className="session-browser-replay-detail">{said.detail}</span>}
               {shownAt !== i && shownAt >= 0 && <span className="session-browser-muted" title={NO_STEP_PICTURE}>(no picture of this step)</span>}
-              <span className="session-browser-replay-clock">{replayTimeLine(step.at, now)}</span>
+              <span className="session-browser-replay-clock">{lineStart(pointInTime(step.at, { now }))}</span>
             </div>
           )}
           {count > 0 && (
@@ -374,7 +375,7 @@ export function SessionBrowserReplay({ taskId, large, onLarge, onBack, onClose, 
                   style={{ left: `${ruler.at[k] * 100}%` }} title={tip(s, k)} aria-label={`Step ${k + 1}`} onClick={() => go(k)} data-testid="session-browser-replay-tick" />
               ))}
               <span className="session-browser-replay-ends" aria-hidden>
-                <span>{replayTimeLine(listed[0].at, now)}</span><span>{count > 1 ? replayTimeLine(listed[count - 1].at, now) : ''}</span>
+                <span>{lineStart(pointInTime(listed[0].at, { now }))}</span><span>{count > 1 ? lineStart(pointInTime(listed[count - 1].at, { now })) : ''}</span>
               </span>
             </div>
           )}

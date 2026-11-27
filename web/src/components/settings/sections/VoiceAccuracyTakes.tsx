@@ -22,6 +22,8 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { VoiceAccuracyTakeDialog, whenOf } from './VoiceAccuracyTakeDialog';
 import { RUN_LAST, markedLowest, pct, shortLabel, takeCell, takeRate, takeText, takesLayout, type TakeCell, type TakesLayout } from './voice-accuracy-model';
 import { EmptyState } from '@/components/common/EmptyState';
+import { usageDay } from '@/components/usage/breakdown-model';
+import { lineStart } from '@/utils/time';
 
 type View = 'take' | 'day';
 const isView = (v: unknown): v is View => v === 'take' || v === 'day';
@@ -106,7 +108,7 @@ function TakeRow({ take, engines, layout, open, error, onOpen }: {
   const words = takeText(take);
   const copy = (
     <span className="settings-row-copy">
-      <span className="va-take-when">{whenOf(take)}</span>
+      <span className="va-take-when">{lineStart(whenOf(take))}</span>
       {words.text && (
         <span className="va-take-text">
           <span className="va-take-source">{`${words.source}: `}</span>
@@ -150,7 +152,7 @@ function DayRows({ days, engines, layout }: { days: CompareDay[]; engines: Compa
           const rate = day.engines[e.id]?.mixed ?? null;
           return rate === null ? { text: 'Not run', tone: 'muted', status: 'muted' } : { text: pct(rate) };
         });
-        const label = new Date(`${day.day}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const label = lineStart(usageDay(day.day));
         const help = `${day.takes} recording${day.takes === 1 ? '' : 's'}`;
         if (layout === 'stacked') {
           return <SettingsRow key={day.day} label={label} help={<>{help}<Badges cells={cells} engines={engines} marked={day.best} /></>} data-testid="va-day-row" />;

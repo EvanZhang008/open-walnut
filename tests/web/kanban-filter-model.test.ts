@@ -52,8 +52,8 @@ describe('chips', () => {
     expect(chipTooltip('running', 0)).toBe('No worker is running');
     const at = new Date(2026, 9, 3, 8, 30).toISOString();
     const now = new Date(2026, 9, 3, 9, 0).getTime();
-    expect(chipTooltip('changed', 0, at, now)).toBe('Nothing changed since you last looked (08:30)');
-    expect(chipTooltip('changed', 6, at, now)).toBe('Changed since you last looked (08:30)');
+    expect(chipTooltip('changed', 0, at, now)).toBe('Nothing changed since you last looked (8:30 AM)');
+    expect(chipTooltip('changed', 6, at, now)).toBe('Changed since you last looked (8:30 AM)');
   });
 });
 

@@ -18,7 +18,7 @@ import { PluginProvenanceFlyout } from '../PluginProvenanceFlyout';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsRow, SettingsTag } from '../SettingsSection';
-import { formatAbsoluteTime } from './addons-format';
+import { timeAgo } from '@/utils/time';
 import type { SourceAutoState } from '../plugin-auto-update-view';
 import { plainText, resolveRowState, sourceShortLabel, updateButtonMode, type Feedback } from '../plugin-update-view';
 import { sourceRowKey } from '../plugin-update-types';
@@ -111,14 +111,13 @@ export function UpdatesHead({ updates, slowLoad, onCheckAll }: {
   slowLoad: boolean;
   onCheckAll: () => void;
 }) {
-  // Absolute time (never `ago`), so the line never goes stale on screen; the
-  // 30 s tick only moves `today` to a weekday after midnight.
+  // The age of the last check, said in a sentence ("Checked 3 min ago"); the 30 s tick keeps it current.
   const [, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick((n) => n + 1), 30_000);
     return () => clearInterval(timer);
   }, []);
-  const ago = updates.checkedAt ? formatAbsoluteTime(updates.checkedAt) : null;
+  const ago = updates.checkedAt ? timeAgo(updates.checkedAt, { long: true }) : null;
   const lastChecked = ago ? `last checked ${ago}` : 'not checked yet';
   const checking = updates.refreshing || (slowLoad && !updates.loaded);
   let text: string;

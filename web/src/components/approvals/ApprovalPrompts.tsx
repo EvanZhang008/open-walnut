@@ -28,6 +28,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { QUIET_CATCHUP_ID } from '@/contexts/notifications/system-notice';
 import { OPEN_CENTER_EVENT } from '@/utils/open-anywhere';
 import { inputPressedAt } from '@/utils/input-time';
+import { fullTime } from '@/utils/time';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { APPROVALS_SWITCH_LABEL, type Approval } from '@/api/approvals';
@@ -70,7 +71,7 @@ export function requesterText(a: Approval, hostName: string): string {
 function Clock({ a, now }: { a: Approval; now: number }) {
   const soon = Date.parse(a.expiresAt) - now < 60_000;
   return (
-    <span className={`approval-clock${soon ? ' approval-clock-soon' : ''}`} title={`Expires ${new Date(a.expiresAt).toLocaleString()}`}>
+    <span className={`approval-clock${soon ? ' approval-clock-soon' : ''}`} title={`Expires ${fullTime(a.expiresAt)}`}>
       {timeLeft(a.expiresAt, now)} left
     </span>
   );

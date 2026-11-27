@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { Task } from '@open-walnut/core';
 import {
   INDENT_CAP, PROJECT_STATUS_LABELS, PROJECT_STATUS_TONES, REST_DONE_SECTION_ID, REST_SECTION_ID,
-  boardSignals, buildSections, buildTeamOverview, compactAgo, describeTask, donePercent, orderGroup, orderProjects,
+  boardSignals, buildSections, buildTeamOverview, describeTask, donePercent, orderGroup, orderProjects,
   projectStatusOf, rollupText, rowTooltip, signalsText, teamChildren, walkTeam,
   type BoardElements, type LiveStatus, type OverviewRow,
 } from '../../web/src/components/board/board-overview-model';
@@ -564,12 +564,6 @@ describe('sections: the board\'s projects', () => {
 });
 
 describe('row words', () => {
-  it('compactAgo drops "ago"', () => {
-    expect(compactAgo('3m ago')).toBe('3m');
-    expect(compactAgo('just now')).toBe('now');
-    expect(compactAgo('')).toBe('');
-  });
-
   it('the tooltip tells the whole story', () => {
     const r = { ...row('a1', { depth: 2, parentId: 'a', now: 'Waiting for approval: Bash', badge: { label: 'Waiting', tone: 'red' as const }, openSubtasks: 2, place: 'Lighthouse' }), indent: 0, under: 'Area A' };
     expect(rowTooltip(r, { when: 'Oct 2, 11:58' })).toBe([

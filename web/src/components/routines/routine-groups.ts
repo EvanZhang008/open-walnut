@@ -15,6 +15,7 @@
 import type { Routine } from '@/api/routines';
 import { describeSchedule, describeTriggerOff, describeWake, describeClockWait, triggerRunState } from '@/utils/routine-format';
 import { projectGroupKey } from '@/utils/project-display';
+import { clockTime, dayDate, pointInTime } from '@/utils/time';
 
 export const GLOBAL_GROUP_KEY = 'global';
 
@@ -114,31 +115,27 @@ function lowerFirst(s: string): string {
   return s ? s[0].toLowerCase() + s.slice(1) : s;
 }
 
-const SHORT_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
 /**
  * When the next run is, said short. A cadence that already names its hour ("Weekdays
  * at 9:00 AM") needs only the day: "today", "tomorrow", "in 3 days". One that does not
- * ("Every 2 hours") says the clock: "next at 12:09 PM", "tomorrow at 9:00 AM",
- * "Mon at 8:00 AM". Minutes away is "next in 3 min" either way.
+ * ("Every 2 hours") says the clock: "next at 12:09 PM" within half a day, else the time
+ * as every screen writes it ("tomorrow 9:00 AM", "Nov 30, 8:00 AM"). Minutes away is
+ * "next in 3 min" either way.
  */
 export function shortNextRun(nextMs: number | undefined, nowMs = Date.now(), cadenceHasHour = false): string | null {
   if (!nextMs) return null;
   const inMs = nextMs - nowMs;
   if (inMs < 60_000) return 'next in <1 min';
   if (inMs < 3_600_000) return `next in ${Math.round(inMs / 60_000)} min`;
-  const at = new Date(nextMs);
-  const time = at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   const today = new Date(nowMs); today.setHours(0, 0, 0, 0);
   const day = new Date(nextMs); day.setHours(0, 0, 0, 0);
   const days = Math.round((day.getTime() - today.getTime()) / 86_400_000);
-  if (days >= 7) return `on ${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+  if (days >= 7) return `on ${dayDate(nextMs, { now: nowMs })}`;
   if (cadenceHasHour) return days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
-  // Within half a day the clock time says it ("next at 1:07 AM"): "tomorrow at" for a
+  // Within half a day the clock time says it ("next at 1:07 AM"): "tomorrow" for a
   // run an hour away read as far off (2026-11-04, a review).
-  if (days <= 0 || inMs < 12 * 3_600_000) return `next at ${time}`;
-  if (days === 1) return `tomorrow at ${time}`;
-  return `${SHORT_DAYS[at.getDay()]} at ${time}`;
+  if (days <= 0 || inMs < 12 * 3_600_000) return `next at ${clockTime(nextMs)}`;
+  return pointInTime(nextMs, { now: nowMs });
 }
 
 /** A cron cadence that names its hour in this clock's zone ("Weekdays at 9:00 AM", not "... PST"). */

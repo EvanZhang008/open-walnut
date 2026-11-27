@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { InboxItemReceipt, InboxLetterItem } from '../../web/src/api/human-inbox-items';
 import { actionText, askAILabel, currentTaskText, itemActions, mergeReceipts, receiptText, accountText, ambiguousAccounts, mailDateText, readHistoryText, retryTaskAction } from '../../web/src/components/inbox/item-receipt-model';
+import { pointInTime } from '../../web/src/utils/time';
 const query = vi.hoisted(() => vi.fn());
 vi.mock('@/api/human-inbox-items', async original => ({ ...await original<typeof import('../../web/src/api/human-inbox-items')>(), queryItem: query }));
 import { getItemSnapshot, itemKey, mergeItemResponse, noteItemUnconfirmed, refreshItem, resetItemStore, setItemSubmitting, watchItem } from '../../web/src/components/inbox/item-store';
@@ -21,7 +22,7 @@ describe('Inbox item truth and fixed controls', () => {
   it('keeps read and task receipts independent', () => {
     const read = { ...receipt(2, 'success'), requestId: 'read-a', intent: 'mark_read' as const };
     expect(mergeReceipts([read], [receipt(3, 'failure')])).toHaveLength(2);
-    expect(receiptText(read)).toContain('Marked read at');
+    expect(receiptText(read)).toContain('Marked read ');
   });
   it('renders only one exact task picker and refuses unknown or damaged source data', () => {
     expect(itemActions(item)).toEqual([item.actions[1]]);
@@ -43,14 +44,14 @@ describe('Inbox item truth and fixed controls', () => {
   });
   it('keeps saved read history when the origin becomes local-only', () => {
     const saved = { ...receipt(2, 'success'), intent: 'mark_read' as const };
-    expect(readHistoryText(saved, true)).toBe(`Marked read previously at ${new Date(saved.updatedAt).toLocaleString()}`);
-    expect(readHistoryText(saved)).toContain('Marked read at');
+    expect(readHistoryText(saved, true)).toBe(`Marked read previously, ${pointInTime(saved.updatedAt)}`);
+    expect(readHistoryText(saved)).toContain('Marked read ');
     expect(readHistoryText(undefined, true)).toBe('');
   });
   it('uses a mail date fallback rather than an execution time fallback', () => {
     expect(mailDateText()).toBe('Date unavailable');
     expect(mailDateText('invalid')).toBe('Date unavailable');
-    expect(mailDateText('2026-10-22T00:00:00Z')).toBe(new Date('2026-10-22T00:00:00Z').toLocaleString());
+    expect(mailDateText('2026-10-22T00:00:00Z')).toBe(pointInTime('2026-10-22T00:00:00Z'));
   });
   it('maps cross-letter recovery to this item action with the same intent', () => {
     const current = { ...item, actions: [{ id: 'new-create', kind: 'op' as const, intent: 'create_task' as const }, ...item.actions] };

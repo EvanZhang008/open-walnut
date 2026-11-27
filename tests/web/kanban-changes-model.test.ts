@@ -13,11 +13,11 @@ import {
 const OWNER = 'own00000-0000-4000-8000-000000000000';
 const NOW = new Date(2026, 9, 3, 15, 30).getTime();
 const at = (h: number, m: number) => new Date(2026, 9, 3, h, m).toISOString();
-const titles: Record<string, string> = { 'wkr00000-0000-4000-8000-000000000000': 'V1000000104 worker on checkout latency' };
+const titles: Record<string, string> = { 'wkr00000-0000-4000-8000-000000000000': 'CARD-000104 worker on checkout latency' };
 
 function input(p: Partial<CardChangeInput> = {}): CardChangeInput {
   return {
-    taskId: 'card0000-0000-4000-8000-000000000000', label: 'V1000000104', lanes: templateLanes('triage'),
+    taskId: 'card0000-0000-4000-8000-000000000000', label: 'CARD-000104', lanes: templateLanes('triage'),
     lane: 'investigating', source: 'auto', unread: false, summaryHash: summaryHash('same'), createdAt: at(8, 0),
     baseline: { lane: 'investigating', summaryHash: summaryHash('same'), unread: false }, hasBaseline: true,
     baselineAt: at(9, 0), ownerId: OWNER, titleOf: (id) => titles[id] ?? '', now: NOW, ...p,
@@ -33,24 +33,24 @@ describe('cardChange', () => {
   it('a move by the leader, with who and when', () => {
     const c = cardChange(input({ lane: 'mitigating', source: 'explicit', laneAt: at(15, 2), laneBy: `task:${OWNER}` }));
     // R3-04: the foot shows who and when (never cut); where it came from is in the tooltip text.
-    expect(c?.foot).toEqual({ text: 'Moved from Investigating by the leader · 15:02', short: 'Moved by the leader', clock: '15:02', more: 0 });
-    expect(c?.items[0].sentence).toBe('the leader moved V1000000104 from Investigating to Mitigating');
+    expect(c?.foot).toEqual({ text: 'Moved from Investigating by the leader · 3:02 PM', short: 'Moved by the leader', clock: '3:02 PM', more: 0 });
+    expect(c?.items[0].sentence).toBe('the leader moved CARD-000104 from Investigating to Mitigating');
   });
 
   it('a move by another session names its task, cut to 24', () => {
     const c = cardChange(input({ lane: 'mitigating', source: 'explicit', laneAt: at(15, 2), laneBy: 'task:wkr00000-0000-4000-8000-000000000000' }));
-    expect(c?.foot?.text).toBe('Moved from Investigating by V1000000104 worker on ch… · 15:02');
-    expect(cutTitle('V1000000104 worker')).toBe('V1000000104 worker');
+    expect(c?.foot?.text).toBe('Moved from Investigating by CARD-000104 worker on ch… · 3:02 PM');
+    expect(cutTitle('CARD-000104 worker')).toBe('CARD-000104 worker');
   });
 
   it('an automatic move says so; a human move never counts', () => {
-    expect(cardChange(input({ lane: 'resolved', laneAt: at(14, 0) }))?.foot?.text).toBe('Moved from Investigating automatically · 14:00');
+    expect(cardChange(input({ lane: 'resolved', laneAt: at(14, 0) }))?.foot?.text).toBe('Moved from Investigating automatically · 2:00 PM');
     expect(cardChange(input({ lane: 'mitigating', source: 'explicit', laneAt: at(15, 0), laneBy: 'human' }))).toBeNull();
   });
 
   it('a summary update by the leader counts; by a human it does not', () => {
     const c = cardChange(input({ summaryHash: summaryHash('new'), summaryAt: at(15, 2), summaryBy: `task:${OWNER}` }));
-    expect(c?.foot?.text).toBe('Summary updated by the leader · 15:02');
+    expect(c?.foot?.text).toBe('Summary updated by the leader · 3:02 PM');
     expect(cardChange(input({ summaryHash: summaryHash('new'), summaryAt: at(15, 2), summaryBy: 'human' }))).toBeNull();
   });
 
@@ -62,21 +62,21 @@ describe('cardChange', () => {
 
   it('new output: only output_at after the baseline (C61); an unread flip alone is the dot, not a change', () => {
     expect(cardChange(input({ unread: true }))).toBeNull();
-    expect(cardChange(input({ card: { output_at: at(14, 10) } }))?.foot?.text).toBe('New output · 14:10');
+    expect(cardChange(input({ card: { output_at: at(14, 10) } }))?.foot?.text).toBe('New output · 2:10 PM');
     expect(cardChange(input({ unread: true, baseline: { lane: 'investigating', summaryHash: summaryHash('same'), unread: true } }))).toBeNull();
     const both = cardChange(input({ card: { output_at: at(14, 10) }, summaryHash: summaryHash('new'), summaryAt: at(14, 10), summaryBy: `task:${OWNER}` }));
     expect(both?.items.map((i) => i.kind)).toEqual(['summary', 'output']);
-    expect(both?.foot).toEqual({ text: 'Summary updated by the leader · 14:10', short: 'Summary by the leader', clock: '14:10', more: 0 });
+    expect(both?.foot).toEqual({ text: 'Summary updated by the leader · 2:10 PM', short: 'Summary by the leader', clock: '2:10 PM', more: 0 });
   });
 
   it('several changes: the first + how many more', () => {
     const c = cardChange(input({ lane: 'mitigating', source: 'explicit', laneAt: at(15, 2), laneBy: `task:${OWNER}`,
       summaryHash: summaryHash('new'), summaryAt: at(15, 2), summaryBy: `task:${OWNER}` }));
-    expect(c?.foot).toEqual({ text: 'Moved from Investigating by the leader · 15:02', short: 'Moved by the leader', clock: '15:02', more: 1 });
+    expect(c?.foot).toEqual({ text: 'Moved from Investigating by the leader · 3:02 PM', short: 'Moved by the leader', clock: '3:02 PM', more: 1 });
   });
 
   it('a card with no baseline entry is new', () => {
-    expect(cardChange(input({ baseline: undefined, createdAt: at(9, 12) }))?.foot?.text).toBe('New card · 09:12');
+    expect(cardChange(input({ baseline: undefined, createdAt: at(9, 12) }))?.foot?.text).toBe('New card · 9:12 AM');
   });
 
   it('N4: a card a human placed (Add task, from any window) is not new to them', () => {
@@ -89,9 +89,12 @@ describe('cardChange', () => {
 describe('the log and the snapshot', () => {
   it('What changed lists every change, oldest first, with the time', () => {
     const a = cardChange(input({ lane: 'mitigating', source: 'explicit', laneAt: at(15, 2), laneBy: `task:${OWNER}` }));
-    const b = cardChange(input({ label: 'V1000000109', card: { output_at: at(14, 10) } }));
+    const b = cardChange(input({ label: 'CARD-000109', card: { output_at: at(14, 10) } }));
     const log = changeLog([{ taskId: 'a', change: a ?? undefined }, { taskId: 'b', change: b ?? undefined }], NOW);
-    expect(log.map((l) => l.text)).toEqual(['14:10 V1000000109 new output', '15:02 the leader moved V1000000104 from Investigating to Mitigating']);
+    expect(log.map((l) => l.text)).toEqual(['2:10 PM CARD-000109 new output', '3:02 PM the leader moved CARD-000104 from Investigating to Mitigating']);
+    // Each entry is its own line, so a day said in words starts it capitalized.
+    const old = cardChange(input({ label: 'CARD-000109', baselineAt: new Date(2026, 9, 2, 9, 0).toISOString(), card: { output_at: new Date(2026, 9, 2, 14, 10).toISOString() } }));
+    expect(changeLog([{ taskId: 'b', change: old ?? undefined }], NOW)[0].text).toBe('Yesterday 2:10 PM CARD-000109 new output');
   });
 
   it('writerText', () => {
@@ -121,26 +124,26 @@ describe('round 4 fixes', () => {
     expect(anon?.foot?.short).toBe('Summary updated');
     expect(JSON.stringify([removed, anon])).not.toContain('a session');
     const moved = cardChange(input({ lane: 'mitigating', source: 'explicit', laneAt: at(15, 2) }));
-    expect(moved?.foot).toEqual({ text: 'Moved from Investigating · 15:02', short: 'Moved from Investigating', clock: '15:02', more: 0 });
+    expect(moved?.foot).toEqual({ text: 'Moved from Investigating · 3:02 PM', short: 'Moved from Investigating', clock: '3:02 PM', more: 0 });
   });
 
   it('R3-04: an automatic move and a worker move keep the time beside a short label', () => {
-    expect(cardChange(input({ lane: 'resolved', laneAt: at(14, 0) }))?.foot).toMatchObject({ short: 'Moved automatically', clock: '14:00' });
+    expect(cardChange(input({ lane: 'resolved', laneAt: at(14, 0) }))?.foot).toMatchObject({ short: 'Moved automatically', clock: '2:00 PM' });
     const w = cardChange(input({ lane: 'mitigating', source: 'explicit', laneAt: at(15, 2), laneBy: 'task:wkr00000-0000-4000-8000-000000000000' }));
-    expect(w?.foot).toMatchObject({ short: 'Moved by V1000000104 worker on ch…', clock: '15:02' });
+    expect(w?.foot).toMatchObject({ short: 'Moved by CARD-000104 worker on ch…', clock: '3:02 PM' });
   });
 
   it('R3-04: the card\'s own worker is named "the worker", never by its own (cut) title', () => {
     const self = 'task:card0000-0000-4000-8000-000000000000' as const;
     const sum = cardChange(input({ summaryHash: summaryHash('new'), summaryAt: at(15, 2), summaryBy: self }));
-    expect(sum?.foot).toMatchObject({ text: 'Summary updated by the worker \u00b7 15:02', short: 'Summary by the worker', clock: '15:02' });
-    expect(sum?.items[0].sentence).toBe('the worker updated the summary of V1000000104');
+    expect(sum?.foot).toMatchObject({ text: 'Summary updated by the worker \u00b7 3:02 PM', short: 'Summary by the worker', clock: '3:02 PM' });
+    expect(sum?.items[0].sentence).toBe('the worker updated the summary of CARD-000104');
     const moved = cardChange(input({ lane: 'mitigating', source: 'explicit', laneAt: at(15, 2), laneBy: self }));
     expect(moved?.foot?.short).toBe('Moved by the worker');
     const card = { lane_suggested: { lane: 'resolved', by: 'card0000-0000-4000-8000-000000000000', at: at(15, 2) } };
     expect(cardChange(input({ card }))?.foot?.text).toBe('Worker suggests Resolved');
     expect(writerLead('the leader')).toBe('Leader');
-    expect(writerLead('V1000000104 worker')).toBe('V1000000104 worker');
+    expect(writerLead('CARD-000104 worker')).toBe('CARD-000104 worker');
   });
 
   it('R3-02: an automatic move caused by the user (laneBy human) is not counted', () => {

@@ -27,8 +27,8 @@ import { Ribbon } from './tape'
  * Copy follows the approved mockup, which the user wrote in their own language; the
  * numbers carry the meaning either way and the strings are trivially swappable.
  */
-const IDLE_MARKER = (ms: number) => `— 空闲 ${formatDuration(ms)} —`
-const FRAGMENTED_TITLE = '碎片工作(切换频繁)'
+const IDLE_MARKER = (ms: number) => `Idle ${formatDuration(ms)}`
+const FRAGMENTED_TITLE = 'Scattered work (frequent switches)'
 
 export function TimeChapters({ slices, axis, minuteOf, nowMin, labelFor }: {
   /** The serial ribbon, ascending. Chapters are meaningless on merged blocks. */
@@ -158,7 +158,7 @@ function compTitle(seg: CompSegment, labelFor: (taskId: string) => string): stri
 /** 快碰 (quick touches) only when they really were all quick; otherwise 其他. */
 function restLabel(seg: CompSegment): string {
   const n = seg.count ?? 0
-  return seg.allQuick ? `快碰 ${n} 项` : `其他 ${n} 项`
+  return seg.allQuick ? `${n} brief touches` : `${n} others`
 }
 
 /** "Manager Letter 40m · Focus System 5m · 快碰 7 项 7m" */

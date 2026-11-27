@@ -2,6 +2,7 @@ import type { InboxItemAction, InboxItemReceipt, InboxLetterItem, InboxCurrentTa
 import type { ContentItem } from '@/utils/content-actions';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { PHASE_LABELS } from '@/utils/session-status';
+import { pointInTime } from '@/utils/time';
 
 /** A task's phase in the user's status words: the one web map (PHASE_LABELS), keyed by any string. */
 export const PHASE_TEXT: Record<string, string> = PHASE_LABELS;
@@ -72,7 +73,7 @@ export function retryTaskAction(item: InboxLetterItem, receipt?: InboxItemReceip
 }
 export function receiptText(r?: InboxItemReceipt): string {
   if (!r) return '';
-  if (r.intent === 'mark_read') return r.status === 'success' ? `Marked read at ${timeText(r.updatedAt)}` : r.status === 'pending'
+  if (r.intent === 'mark_read') return r.status === 'success' ? `Marked read ${timeText(r.updatedAt)}` : r.status === 'pending'
     ? (r.stage === 'finished' ? 'Read status unconfirmed' : 'Working…') : 'Could not mark read';
   if (r.intent === 'reply_ai') return r.delivery === 'deferred' ? 'Waiting for permission'
     : r.delivery === 'skipped' ? 'Saved. This letter has no available agent.'
@@ -80,7 +81,7 @@ export function receiptText(r?: InboxItemReceipt): string {
   if (r.taskCreated === false) return r.status === 'failure' ? 'Task creation was not confirmed. Review before retrying.' : 'Creating task…';
   if (r.delivery) return r.delivery === 'queued' ? 'Work queued' : r.delivery === 'deferred' ? 'Waiting for permission'
     : r.delivery === 'unconfirmed' ? 'Attachment unconfirmed' : 'Could not attach';
-  if (r.execution === 'running') return r.startedAt ? `Started at ${timeText(r.startedAt)}` : 'Started (time unavailable)';
+  if (r.execution === 'running') return r.startedAt ? `Started ${timeText(r.startedAt)}` : 'Started (time unavailable)';
   if (r.execution === 'unconfirmed') return r.taskId && r.intent === 'create_task' ? 'Task created. Start unconfirmed.' : 'Start unconfirmed';
   if (r.execution === 'not_started') return r.taskId ? r.intent === 'attach_task' ? 'Not started. Could not attach.' : 'Task created. Could not start.' : 'Not started';
   if (r.execution === 'starting' || r.stage === 'starting') return 'Starting…';
@@ -90,15 +91,15 @@ export function mailDateText(value?: string): string {
   return value && Number.isFinite(Date.parse(value)) ? timeText(value) : 'Date unavailable';
 }
 export function readHistoryText(receipt: InboxItemReceipt | undefined, previous = false): string {
-  return receipt?.status === 'success' && previous ? `Marked read previously at ${timeText(receipt.updatedAt)}` : receiptText(receipt);
+  return receipt?.status === 'success' && previous ? `Marked read previously, ${timeText(receipt.updatedAt)}` : receiptText(receipt);
 }
 export function timeText(value?: string): string {
   if (!value || !Number.isFinite(Date.parse(value))) return 'Time unavailable';
-  return new Date(value).toLocaleString();
+  return pointInTime(value);
 }
 export function currentTaskText(current?: InboxCurrentTaskStatus, stale = false): string {
   if (!current || current.status === 'unavailable') return 'Current task status unavailable';
-  if (stale && current.status === 'running') return `Current task status unavailable · Last observed Running at ${timeText(current.observedAt)}`;
+  if (stale && current.status === 'running') return `Current task status unavailable · Last observed Running ${timeText(current.observedAt)}`;
   const labels: Record<string, string> = { running: 'Running', starting: 'Starting', idle: 'Idle', stopped: 'Stopped',
     error: 'Error', waiting_permission: 'Waiting for permission', waiting_user: USER_STATE_LABELS.needs, waiting: 'Waiting', completed: 'Completed', deleted: 'Target deleted' };
   return `${labels[current.status]} · ${stale ? 'Last observed' : 'Checked'} ${timeText(current.observedAt)}`;

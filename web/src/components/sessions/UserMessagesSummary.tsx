@@ -4,18 +4,13 @@ import type { SessionHistoryMessage } from '@/types/session';
 // which would otherwise be all this one-line preview ever shows.
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import { DisclosureChevron } from '@/components/controls';
+import { clockTime } from '@/utils/time';
 
 interface UserMessagesSummaryProps {
   messages: SessionHistoryMessage[];
   loading: boolean;
   /** Called when user clicks a message — passes the index in the full messages array */
   onMessageClick?: (messageIndex: number) => void;
-}
-
-function formatTime(dateStr: string): string {
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
 export function UserMessagesSummary({ messages, loading, onMessageClick }: UserMessagesSummaryProps) {
@@ -66,7 +61,7 @@ export function UserMessagesSummary({ messages, loading, onMessageClick }: UserM
               onClick={() => handleClick(originalIndex)}
             >
               <span className="user-messages-summary-time">
-                {formatTime(message.timestamp)}
+                {clockTime(message.timestamp)}
               </span>
               <span className="user-messages-summary-text">
                 {text}

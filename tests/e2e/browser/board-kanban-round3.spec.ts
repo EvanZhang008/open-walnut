@@ -263,7 +263,7 @@ test('N6 N11 N12: the suggestion names its lane whole; a leader move shows in th
   const h0 = (await card(pane, m).boundingBox())!.height
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/cards/${m}`, { lane: 'mitigating' }, leaderHeaders())
   const changed = card(pane, m).getByTestId('kanban-card-changed')
-  await expect(changed).toHaveText(/^Moved by the leader \d{2}:\d{2}$/, { timeout: 15_000 })
+  await expect(changed).toHaveText(/^Moved by the leader \d{1,2}:\d{2} [AP]M$/, { timeout: 15_000 })
   expect(await changed.evaluate((el) => !!el.closest('[data-testid="kanban-card-foot"]'))).toBe(true)
   expect((await changed.boundingBox())!.height).toBeLessThanOrEqual(18)
   expect(Math.abs((await card(pane, m).boundingBox())!.height - h0)).toBeLessThanOrEqual(1)

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { outlineTimeLabel } from './outline-order';
+import { lineStart, pointInTime } from '@/utils/time';
 
 /**
  * The transcript outline: one tick per pinned message, parked in the timeline's
@@ -52,8 +52,8 @@ interface SessionPinnedTocProps {
  *  leave the panel for a frame and collapse it under the cursor. */
 const COLLAPSE_DELAY_MS = 140;
 
-/** Today's rows show the clock, any other day shows its date too (outline-order.ts). */
-const timeLabel = (ts: string | undefined): string => outlineTimeLabel(ts);
+/** A row's day and clock: a bare "3:08 PM" on a row from two days ago read as this afternoon. */
+const timeLabel = (ts: string | undefined): string => lineStart(pointInTime(ts));
 
 export const SessionPinnedToc = memo(function SessionPinnedToc({
   entries, onJump, onUnpin, canGoBack, onBack, moreCount = 0, onMore,

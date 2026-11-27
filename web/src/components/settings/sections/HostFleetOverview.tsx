@@ -20,7 +20,7 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { DisclosureButton } from '@/components/controls';
 import { isLive } from './host-fleet-dashboard-model';
 import { usd } from './host-fleet-model';
-import { readAgo } from './host-fleet-read-model';
+import { fullTime, timeAgo } from '@/utils/time';
 import { listSummary } from './host-row-model';
 import { useRowReports } from './host-list-store';
 import { FleetNumber } from './FleetNumber';
@@ -81,7 +81,7 @@ export function HostFleetOverview({ fleet, onPickRow }: { fleet: HostFleet; onPi
           </DisclosureButton>
         </h4>
         <span className="hf-dash-read" data-fit-actions="">
-          {newest !== null && !refreshing && <span className="hf-dash-updated" data-testid="host-fleet-read" title={new Date(newest).toLocaleString()}>Read {readAgo(newest, now)}</span>}
+          {newest !== null && !refreshing && <span className="hf-dash-updated" data-testid="host-fleet-read" title={fullTime(newest)}>Read {timeAgo(new Date(newest).toISOString(), { long: true, now })}</span>}
           <SettingsButton
             holdFocus
             busy={refreshing}
@@ -98,7 +98,7 @@ export function HostFleetOverview({ fleet, onPickRow }: { fleet: HostFleet; onPi
       {open && (
         <>
           {error && <p className="hf-error" role="status">Could not read the hosts: {error}.{hosts ? ' Showing what was read last.' : ''}</p>}
-          {refreshError && <p className="hf-error" role="status" data-testid="host-fleet-refresh-error">Could not read the hosts again: {refreshError}.{newest !== null ? ` Showing what was read ${readAgo(newest, now)}.` : ''}</p>}
+          {refreshError && <p className="hf-error" role="status" data-testid="host-fleet-refresh-error">Could not read the hosts again: {refreshError}.{newest !== null ? ` Showing what was read ${timeAgo(new Date(newest).toISOString(), { long: true, now })}.` : ''}</p>}
           {!sum && !error && (hosts && pending > 0
             ? <LoadingState title="Reading each host..." testId="host-fleet-reading" />
             : hosts

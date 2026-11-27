@@ -1,12 +1,13 @@
 /**
  * Human-readable schedule formatting for routine cards, in the style of the
- * Claude cloud app: "Weekdays at 5:30 AM · Next run tomorrow at 5:30 AM".
+ * Claude cloud app: "Weekdays at 5:30 AM · Next run tomorrow 5:30 AM".
  * Lives in the frontend so phrasing uses the viewer's locale/clock.
  */
 
 import type { RoutineAuditEntry, RoutineCheck, RoutineLastCheck, RoutineSchedule, RoutineState, RoutineWake } from '@/api/routines';
 import { describeSpan } from '../../../src/core/cron/trigger-timing';
 import { TRIGGER_STOP_AFTER_ERRORS, triggerRunState } from '../../../src/core/cron/trigger-run-state';
+import { clockTime, pointInTime, timeAgo } from '@/utils/time';
 import {
   checkErrorText, isTimeLimitError, limitUse, runLimitSeconds, secondsLabel, timeLimitSeconds, type LimitUse,
 } from '../../../src/core/cron/trigger-time-limit';
@@ -15,10 +16,51 @@ export { triggerRunState };
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+/** A cron's hour and minute as a clock ("9:00 AM"), the same words as every other clock. */
 function formatTime(hour: number, minute: number): string {
   const d = new Date();
   d.setHours(hour, minute, 0, 0);
-  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return clockTime(d);
+}
+
+// ── Time zones (the routine form and every routine row ask these) ──
+// The one formatter for zone questions: which zone this browser is in, a zone's short name
+// and its offset. It never writes a time: every time goes through '@/utils/time'.
+function zoneFormat(opts: { timeZone?: string; timeZoneName?: 'short' | 'shortOffset' } = {}) {
+  return new Intl.DateTimeFormat('en-US', opts);
+}
+
+function zonePart(tz: string, at: Date, style: 'short' | 'shortOffset'): string {
+  return zoneFormat({ timeZone: tz, timeZoneName: style }).formatToParts(at).find((p) => p.type === 'timeZoneName')?.value ?? '';
+}
+
+/** The viewer's own zone ("America/Los_Angeles"). */
+export function viewerZone(): string {
+  return zoneFormat().resolvedOptions().timeZone;
+}
+
+/**
+ * Whether a zone keeps the viewer's clock all year: the same id, or another name for it
+ * ("US/Pacific" for "America/Los_Angeles": the same offset in winter and in summer).
+ */
+export function isViewerZone(tz: string | undefined): boolean {
+  const here = viewerZone();
+  if (!tz || tz === here) return true;
+  try {
+    const y = new Date().getFullYear();
+    return [new Date(y, 0, 1), new Date(y, 6, 1)].every((at) => zonePart(tz, at, 'shortOffset') === zonePart(here, at, 'shortOffset'));
+  } catch {
+    return false;
+  }
+}
+
+/** A zone's short name now ("PST", "UTC", "GMT+8"); the id itself when it has none. */
+export function zoneName(tz: string): string {
+  try {
+    return zonePart(tz, new Date(), 'short') || tz;
+  } catch {
+    return tz;
+  }
 }
 
 /**
@@ -26,15 +68,7 @@ function formatTime(hour: number, minute: number): string {
  * hours in a cron expr are that zone's, while "Next run" is shown in the viewer's.
  */
 function foreignZone(tz: string | undefined): string | null {
-  if (!tz) return null;
-  try {
-    if (tz === Intl.DateTimeFormat().resolvedOptions().timeZone) return null;
-    const part = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' })
-      .formatToParts(new Date()).find((p) => p.type === 'timeZoneName');
-    return part?.value || tz;
-  } catch {
-    return tz;
-  }
+  return isViewerZone(tz) ? null : zoneName(tz!);
 }
 
 /** The days a cron's day-of-week field names (0 is Sunday, 7 too), sorted; null for a shape it cannot read. */
@@ -153,10 +187,8 @@ function describeCronExpr(expr: string): string | null {
 }
 
 export function describeSchedule(schedule: RoutineSchedule): string {
-  if (schedule.kind === 'at') {
-    const d = new Date(schedule.at);
-    return `Once at ${d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
-  }
+  // A one-time run is an instant, said in the viewer's own zone: no zone to name.
+  if (schedule.kind === 'at') return `Once at ${pointInTime(schedule.at)}`;
   if (schedule.kind === 'every') {
     // A check may poll faster than a minute (floor 10s); rounding 30s up to
     // "1 min" misstated the cadence the user asked for.
@@ -166,9 +198,14 @@ export function describeSchedule(schedule: RoutineSchedule): string {
     const hours = mins / 60;
     return Number.isInteger(hours) ? (hours === 1 ? 'Every hour' : `Every ${hours} hours`) : `Every ${mins} min`;
   }
-  const zone = foreignZone(schedule.tz);
-  // What it cannot say in words reads as a custom schedule; the expression is in scheduleTitle.
-  const said = describeCronExpr(schedule.expr) ?? CUSTOM_SCHEDULE;
+  // What it cannot say in words reads as a custom schedule; the expression and its zone are in
+  // scheduleTitle. A cadence that names no hour ("Every 30 min", "Hourly at :15") runs the same
+  // in every zone, so only one that names an hour says a zone, and only when it is not the
+  // viewer's (2026-11-27 audit: one "Every 30 min PST" among nine "Every 30 min").
+  const said = describeCronExpr(schedule.expr);
+  if (!said) return CUSTOM_SCHEDULE;
+  const hour = schedule.expr.trim().split(/\s+/)[1];
+  const zone = hour === '*' ? null : foreignZone(schedule.tz);
   return zone ? `${said} ${zone}` : said;
 }
 
@@ -184,23 +221,10 @@ export function scheduleTitle(schedule: RoutineSchedule): string | undefined {
 export function describeNextRun(state: RoutineState | undefined): string | null {
   const next = state?.nextRunAtMs;
   if (!next) return null;
-  const d = new Date(next);
-  const now = new Date();
-  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-
-  const today = new Date(now); today.setHours(0, 0, 0, 0);
-  const target = new Date(d); target.setHours(0, 0, 0, 0);
-  const dayDiff = Math.round((target.getTime() - today.getTime()) / 86_400_000);
-
-  if (dayDiff === 0) {
-    const inMs = next - now.getTime();
-    if (inMs < 60_000) return 'Next run in <1 min';
-    if (inMs < 3_600_000) return `Next run in ${Math.round(inMs / 60_000)} min`;
-    return `Next run today at ${time}`;
-  }
-  if (dayDiff === 1) return `Next run tomorrow at ${time}`;
-  if (dayDiff < 7) return `Next run ${DAY_NAMES[d.getDay()]} at ${time}`;
-  return `Next run ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at ${time}`;
+  const inMs = next - Date.now();
+  if (inMs < 60_000) return 'Next run in <1 min';
+  if (inMs < 3_600_000) return `Next run in ${Math.round(inMs / 60_000)} min`;
+  return `Next run ${pointInTime(next)}`;
 }
 
 /**
@@ -214,7 +238,7 @@ export function describeWake(wake: RoutineWake | undefined): string | null {
   return `after ${n} new item${n === 1 ? '' : 's'}`;
 }
 
-/** "Weekdays at 5:30 AM · Next run tomorrow at 5:30 AM · or after 20 new items" */
+/** "Weekdays at 5:30 AM · Next run tomorrow 5:30 AM · or after 20 new items" */
 export function describeRoutineTiming(
   schedule: RoutineSchedule,
   state?: RoutineState,
@@ -246,14 +270,9 @@ export function describeTriggerOff(
   return typeof at === 'number' ? `Paused ${describeAgo(at, nowMs)}` : 'Paused';
 }
 
-/** "3m ago" / "just now" / "2h ago" for the card's last-check line. */
+/** "3m ago" / "just now" / "2h ago" for the card's last-check line (timeAgo, from epoch ms). */
 export function describeAgo(atMs: number, nowMs = Date.now()): string {
-  if (!Number.isFinite(atMs)) return 'at an unknown time';
-  const diff = Math.max(0, nowMs - atMs);
-  if (diff < 45_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.max(1, Math.round(diff / 60_000))}m ago`;
-  if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)}h ago`;
-  return `${Math.round(diff / 86_400_000)}d ago`;
+  return Number.isFinite(atMs) ? timeAgo(new Date(atMs).toISOString(), { now: nowMs }) : 'at an unknown time';
 }
 
 /** A check error as shown: a kill at the time limit names the limit (trigger-time-limit.ts). */
@@ -399,9 +418,8 @@ export function describeExecutorBadge(
 export function auditClock(atMs: number, nowMs = Date.now()): string {
   if (!Number.isFinite(atMs)) return '--:--';
   const at = new Date(atMs);
-  const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  if (at.toDateString() === new Date(nowMs).toDateString()) return time;
-  return `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`;
+  if (at.toDateString() === new Date(nowMs).toDateString()) return clockTime(at);
+  return pointInTime(at, { now: nowMs });
 }
 
 /**

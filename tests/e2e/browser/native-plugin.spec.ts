@@ -18,8 +18,8 @@ const SCREENSHOT_DIR = '/tmp/walnut-plugin-demo'
 /** Where the update-status design shots land (light, dark, narrow); read by the reviewers. */
 const UPDATE_SHOT_DIR = '/tmp/plugin-update-ux/after'
 const execFileAsync = promisify(execFile)
-/** The header after a clean check: an absolute time today (never `just now`, never `ago`). */
-const CHECKED_AT = /^Checked \d{1,2}:\d{2} (AM|PM)$/
+/** The header after a clean check: the age of the check, said in a sentence (timeAgo long). */
+const CHECKED_AT = /^Checked (just now|\d+ min ago)$/
 let child: ChildProcessWithoutNullStreams | null = null
 let fixturePort = 0
 let fixtureHome = ''

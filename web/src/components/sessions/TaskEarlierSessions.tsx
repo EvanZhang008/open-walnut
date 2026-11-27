@@ -13,18 +13,13 @@ import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { engineEntry } from '@/utils/engines';
 import { formatModelName } from '@/hooks/useSessionUsage';
 import { log } from '@/utils/log';
+import { pointInTime } from '@/utils/time';
 import { AgentText } from '@/components/common/AgentText';
 import { earlierParts, type ChatEarlierMessage } from './chat-earlier-parts';
 import { markOpenedOnPurpose } from './EngineSwitch';
 import { DisclosureButton } from '@/components/controls';
 import '@/styles/chat-earlier.css';
 import '@/styles/engine-switch.css';
-
-function when(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
 
 /** The task's sessions, fetched once per (task, current session). */
 export function useTaskSessions(taskId: string | undefined, sessionId: string, enabled: boolean): TaskSessionRow[] {
@@ -66,7 +61,7 @@ function EarlierSessionBlock({ row, onOpen }: { row: TaskSessionRow; onOpen?: (s
         <DisclosureButton className="task-earlier-toggle" expanded={open} onClick={() => setOpen((o) => !o)}>
           {name} session{row.model ? ` · ${formatModelName(row.model)}` : ''}
           {row.message_count ? ` · ${row.message_count} messages` : ''}
-          {row.started_at ? ` · ${when(row.started_at)}` : ''}
+          {row.started_at ? ` · ${pointInTime(row.started_at)}` : ''}
         </DisclosureButton>
         {onOpen && (
           <button type="button" className="btn btn-sm" onClick={() => { markOpenedOnPurpose(row.session_id); onOpen(row.session_id); }}>Open</button>
@@ -108,7 +103,7 @@ function ResumeDivider({ row }: { row: TaskSessionRow }) {
   const to = engineEntry(catalog, row.engine).displayName;
   return (
     <div className="chat-earlier-divider task-earlier-divider" role="separator" data-testid="engine-switch-divider" data-kind="resumed">
-      <span>Switched {from} → {to} · {when(r.at)} · resumed this session with the {r.carried_turns} turn{r.carried_turns === 1 ? '' : 's'} it missed</span>
+      <span>Switched {from} → {to} · {pointInTime(r.at)} · resumed this session with the {r.carried_turns} turn{r.carried_turns === 1 ? '' : 's'} it missed</span>
     </div>
   );
 }
@@ -124,7 +119,7 @@ function SwitchDivider({ row }: { row: TaskSessionRow }) {
   const trimmed = s.trimmed_turns > 0 ? ` (${s.trimmed_turns} older left out to fit ${to}'s window)` : '';
   return (
     <div className="chat-earlier-divider task-earlier-divider" role="separator" data-testid="engine-switch-divider">
-      <span>Switched {from} → {to} · {when(s.at)} · {carried}{trimmed}</span>
+      <span>Switched {from} → {to} · {pointInTime(s.at)} · {carried}{trimmed}</span>
     </div>
   );
 }

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, type CSSProperties, type RefObject } fr
 import { createPortal } from 'react-dom';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import { AgentText } from '@/components/common/AgentText';
 import '@/styles/header-fit.css';
 import '@/styles/session-recap.css';
@@ -79,7 +79,7 @@ export function LatestUpdatePopover(props: {
     >
       <header className="latest-update-header" data-fit-header="">
         <h2 className="latest-update-title" data-fit-title="">Latest update</h2>
-        {ago && <span className="latest-update-ago" data-fit-sub="" title={at}>{ago}</span>}
+        {ago && <span className="latest-update-ago" data-fit-sub="" title={fullTime(at)}>{ago}</span>}
         <button
           type="button"
           className="latest-update-close"

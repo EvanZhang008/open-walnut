@@ -8,6 +8,10 @@ import { useMinuteValue } from '@/utils/minute-clock';
 import { badge } from '@/components/common/badge';
 import * as ICONS from '../common/Icons';
 import { formatDateDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
+import { dayDate, fullTime } from '@/utils/time';
+
+/** A pill's hover: the whole time, or the day alone for a date with no hour. */
+const hoverOf = (value: string) => (value.includes('T') ? fullTime(parseDateLocal(value)) : dayDate(parseDateLocal(value))) || value;
 
 /** What the pills show at `now`, as one primitive (so an unchanged minute draws nothing). */
 export function datePillWords(startDate: string | undefined, dueDate: string | undefined, now: number): string {
@@ -25,12 +29,12 @@ export function TaskDatePills({ startDate, dueDate }: { startDate?: string; dueD
   return (
     <>
       {start && (
-        <span className="badge badge-long todo-item-due-pill todo-item-start-pill" title={`Starts: ${startDate}`}>
+        <span className="badge badge-long todo-item-due-pill todo-item-start-pill" title={`Starts: ${hoverOf(startDate!)}`}>
           <span className="todo-item-start-icon" aria-hidden="true">{ICONS.ICON_ARROW_RIGHT}</span><span>{start}</span>
         </span>
       )}
       {due && (
-        <span className={`${badge(overdue === '1' ? 'error' : 'neutral', { long: true })} todo-item-due-pill`} title={dueDate ? `Due: ${dueDate}` : undefined}>
+        <span className={`${badge(overdue === '1' ? 'error' : 'neutral', { long: true })} todo-item-due-pill`} title={dueDate ? `Due: ${hoverOf(dueDate)}` : undefined}>
           <span>{due}</span>
         </span>
       )}

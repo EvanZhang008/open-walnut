@@ -35,14 +35,7 @@ import { useLineClose } from '@/utils/notice-dismiss';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { DisclosureButton } from '@/components/controls';
 import '@/styles/host-picker-settings.css';
-
-/** 'just now', '2m ago', '1h ago'. */
-export function agoText(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 60_000) return 'just now';
-  const m = Math.floor(ms / 60_000);
-  if (m < 60) return `${m}m ago`;
-  return `${Math.floor(m / 60)}h ago`;
-}
+import { timeAgo } from '@/utils/time';
 
 /** A blocking problem that clears says so for 3s. */
 function useReadyLine(status: HostStatus | undefined, label: string): string | null {
@@ -217,7 +210,7 @@ export function RemoteHostReadiness({ alias, label, status, actions, rowFixes = 
         </span>
       )}
       {showLastChecked && !receipt.shown && (
-        <span className="rh-last-checked">{`Last checked ${agoText(minute - (checkedAt as number))}`}</span>
+        <span className="rh-last-checked">{`Last checked ${timeAgo(new Date(checkedAt as number).toISOString(), { long: true, now: minute })}`}</span>
       )}
       {info.map((text) => (
         <span key={text} className="rh-readiness-note" data-host={alias}><InlineCodeText text={text} /></span>

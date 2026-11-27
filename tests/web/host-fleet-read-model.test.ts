@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  FOLLOW_READ_MS, followRead, isRead, markRefreshing, neverRead, newestRead, readAgo, readFailure, ownReadKey, readOnOpen, readLabel, replaceCard, shownHosts,
+  FOLLOW_READ_MS, followRead, isRead, markRefreshing, neverRead, newestRead, readFailure, ownReadKey, readOnOpen, readLabel, replaceCard, shownHosts,
 } from '../../web/src/components/settings/sections/host-fleet-read-model'
 import { fleetSummary, problemsOf } from '../../web/src/components/settings/sections/host-fleet-dashboard-model'
 import { statusKind } from '../../web/src/components/settings/sections/host-fleet-model'
@@ -25,18 +25,13 @@ function host(over: Partial<FleetHost> = {}): FleetHost {
   }
 }
 
-describe('readAgo', () => {
-  it('says minutes under an hour, hours under two days, then days', () => {
-    expect(readAgo(NOW, NOW)).toBe('just now')
-    expect(readAgo(NOW - 59_000, NOW)).toBe('just now')
-    expect(readAgo(NOW - 60_000, NOW)).toBe('1 min ago')
-    expect(readAgo(NOW - 12 * MIN, NOW)).toBe('12 min ago')
-    expect(readAgo(NOW - 59 * MIN, NOW)).toBe('59 min ago')
-    expect(readAgo(NOW - 60 * MIN, NOW)).toBe('1 h ago')
-    expect(readAgo(NOW - 47 * 60 * MIN, NOW)).toBe('47 h ago')
-    expect(readAgo(NOW - 3 * 24 * 60 * MIN, NOW)).toBe('3 d ago')
-    // A clock a little ahead of this one never reads as the future.
-    expect(readAgo(NOW + 5_000, NOW)).toBe('just now')
+describe('how old a reading is', () => {
+  it('reads as every other age in a sentence (timeAgo long)', () => {
+    expect(readLabel(host({ readAt: NOW - 30_000 }), NOW)).toBe('Read just now')
+    expect(readLabel(host({ readAt: NOW + 5_000 }), NOW)).toBe('Read just now')
+    expect(readLabel(host({ readAt: NOW - 60 * MIN }), NOW)).toBe('Read 1 h ago')
+    expect(readLabel(host({ readAt: NOW - 30 * 60 * MIN }), NOW)).toBe('Read yesterday')
+    expect(readLabel(host({ readAt: NOW - 3 * 24 * 60 * MIN }), NOW)).toBe('Read 3 days ago')
   })
 })
 

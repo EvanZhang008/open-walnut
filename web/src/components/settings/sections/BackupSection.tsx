@@ -23,7 +23,7 @@ import { NumberInput } from '../inputs/NumberInput'
 import { SegmentedControl } from '../inputs/SegmentedControl'
 import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave'
 import { saveErrorMessage } from '../settings-pane-context'
-import { formatAbsoluteTime } from './addons-format'
+import { lineStart, pointInTime } from '@/utils/time'
 import { apiGet, apiPost } from '@/api/client'
 import { fetchAwsProfiles } from '@/api/config'
 import { useEvent } from '@/hooks/useWebSocket'
@@ -487,13 +487,13 @@ export function BackupSection({ config, onSave }: Props) {
     ? progressPct !== null ? `Backing up: ${progressPct}% of ${fmtBytes(status.progress?.totalBytes)}` : 'Backing up...'
     : status?.lastBackupAt
       ? [
-          formatAbsoluteTime(status.lastBackupAt),
+          lineStart(pointInTime(status.lastBackupAt)),
           `${(status.lastFileCount ?? 0).toLocaleString()} files`,
           fmtBytes(status.lastTotalBytes),
           ...(!legacyMode && status.snapshotCount ? [`${status.snapshotCount} backup${status.snapshotCount === 1 ? '' : 's'} kept`] : []),
         ].join(', ') + (enabled && !runBlocked
           // When the next one runs, so a switch of service never leaves the user guessing.
-          ? (status.error ? '' : status.dueNow ? '. Next: within a minute.' : `. Next: ${formatAbsoluteTime(new Date(Math.max(Date.now() + 60_000, Date.parse(status.lastBackupAt) + Math.max(1, saved.interval_hours ?? 24) * 3_600_000)).toISOString())}.`)
+          ? (status.error ? '' : status.dueNow ? '. Next: within a minute.' : `. Next: ${pointInTime(Math.max(Date.now() + 60_000, Date.parse(status.lastBackupAt) + Math.max(1, saved.interval_hours ?? 24) * 3_600_000))}.`)
           : '')
       : otherWriter ? 'Another computer writes these backups. Move them to this computer first.'
         : keyUnsaved ? 'No backup yet. It can start once the recovery key is saved.' // empty-state-ok: row help text

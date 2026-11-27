@@ -17,6 +17,8 @@
  * Date normalizes it on parse.
  */
 
+import { dayDate } from './time';
+
 /** 1 = Monday. Single knob if week start ever becomes configurable. */
 export const WEEK_STARTS_ON = 1;
 
@@ -199,10 +201,8 @@ export function clockRange(startMin: number, endMin: number): string {
   return sameHalf ? `${start.replace(/ [AP]M$/, '')} – ${clockLabel(endMin, true)}` : `${start} – ${clockLabel(endMin, true)}`;
 }
 
-/** A day ("YYYY-MM-DD") as a calendar reads it: "Nov 16, 2026". */
+/** A day ("YYYY-MM-DD", local) as every screen writes a day: "today", "Nov 16", "Nov 16, 2025". */
 export function longDayLabel(day: string): string {
   const [y, m, d] = day.split('-').map(Number);
-  const date = new Date(y, m - 1, d);
-  if (Number.isNaN(date.getTime())) return day;
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return dayDate(new Date(y, m - 1, d)) || day;
 }

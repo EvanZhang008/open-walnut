@@ -3,7 +3,7 @@ import { DisclosureChevron } from '@/components/controls';
 import { CopyMessageButtons } from '@/components/common/CopyMessageButtons';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
 import { useSessionRewindApi } from '@/contexts/SessionRewindContext';
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import { pinLabelFor } from '@/hooks/useSessionPins';
 import { ICON_PIN, ICON_PIN_FILLED } from './MessageActionIcons';
 import { ICON_READ_SPLIT, useSessionReader } from './reader-split';
@@ -26,14 +26,6 @@ const ICON_REWIND = (
  *  isRewindableMessageId — kept in both places on purpose: the server refuses,
  *  the client doesn't offer. */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function absoluteTime(ts: string): string {
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleString([], {
-    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
-  });
-}
 
 export interface MessageMetaRowProps {
   msgId?: string;
@@ -85,7 +77,7 @@ export const MessageMetaRow = memo(function MessageMetaRow({
   }, [rewind, rewindId, text]);
 
   const hasText = !!text && !!text.trim();
-  const abs = timestamp ? absoluteTime(timestamp) : '';
+  const abs = timestamp ? fullTime(timestamp) : '';
   const rel = timestamp ? timeAgo(timestamp) : '';
 
   // Nothing to offer (no id to pin, no text to copy, no timestamp) — render

@@ -3,6 +3,7 @@
  * "Open from a browser" group says for each tunnel state. Pure: BrowserAccessGroup
  * renders it, tests read it.
  */
+import { clockTime } from '@/utils/time';
 
 export type ExposeState = 'off' | 'starting' | 'connected' | 'retrying' | 'needs-sign-in' | 'missing' | 'unavailable';
 
@@ -76,10 +77,6 @@ export interface StatusLine {
   retry: boolean;
 }
 
-function clock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
 function sentence(text: string): string {
   const t = text.trim();
   return /[.!?]$/.test(t) ? t : `${t}.`;
@@ -98,7 +95,7 @@ export function describeExpose(status: ExposeStatus | null, title: string): Stat
 function describeState(status: ExposeStatus, title: string): StatusLine {
   const name = status.providerTitle ?? title;
   const on = status.runsOn ? ` on ${status.runsOn.label}` : '';
-  const retryAt = status.nextRetryAt ? ` Trying again at ${clock(status.nextRetryAt)}.` : '';
+  const retryAt = status.nextRetryAt ? ` Trying again at ${clockTime(status.nextRetryAt)}.` : '';
   switch (status.state) {
     case 'off':
       return { dot: 'pending', text: `Runs ${name} while Walnut runs, so a browser you sign in can open Walnut from anywhere.`, retry: false };

@@ -70,9 +70,9 @@ const TIMELINE_NAV_IDS: DayNavTestIds = {
 type ViewKey = 'tape' | 'chapters' | 'lanes'
 
 const VIEWS: Array<{ key: ViewKey; label: string; hint: string }> = [
-  { key: 'tape', label: '胶带 Tape', hint: 'One serial ribbon: what you were doing, minute by minute' },
-  { key: 'chapters', label: '章节 Chapters', hint: 'The day split into stretches of work' },
-  { key: 'lanes', label: '泳道 Lanes', hint: 'One row per task, time left to right' },
+  { key: 'tape', label: 'Tape', hint: 'One serial ribbon: what you were doing, minute by minute' },
+  { key: 'chapters', label: 'Chapters', hint: 'The day split into stretches of work' },
+  { key: 'lanes', label: 'Lanes', hint: 'One row per task, time left to right' },
 ]
 
 function readView(): ViewKey {
@@ -377,10 +377,10 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
             <i className="wt-tt-swatch wt-tt-swatch-human" /> You {formatDuration(humanMs)}
           </span>
           {view === 'tape' && idleMs >= NOTE_FLOOR_MS && (
-            <span className="wt-tt-total-side" data-testid="time-app-idle">空闲 {formatDuration(idleMs)}</span>
+            <span className="wt-tt-total-side" data-testid="time-app-idle">Idle {formatDuration(idleMs)}</span>
           )}
           {view === 'chapters' && (
-            <span className="wt-tt-total-side" data-testid="time-app-chaptercount">{chapterCount} 个章节</span>
+            <span className="wt-tt-total-side" data-testid="time-app-chaptercount">{chapterCount} {chapterCount === 1 ? 'chapter' : 'chapters'}</span>
           )}
           {view === 'lanes' && showAgents && (
             <span className="wt-tt-total wt-tt-total-agent" data-testid="time-app-agent-total">
@@ -389,19 +389,19 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
           )}
           {dayScreen && dayScreen.totalMs > 0 && (
             <span className="wt-tt-total wt-tt-total-screen" data-testid="time-app-screen-total">
-              <i className="wt-tt-swatch wt-tt-swatch-screen" /> 屏幕(Walnut 外) {formatDuration(dayScreen.totalMs)}
+              <i className="wt-tt-swatch wt-tt-swatch-screen" /> Screen outside Walnut {formatDuration(dayScreen.totalMs)}
             </span>
           )}
           {dayScreen && dayScreen.unplacedMs > 0 && (
             <span className="wt-tt-total-side" data-testid="time-app-screen-unplaced">
-              另有 {formatDuration(dayScreen.unplacedMs)} 屏幕时间无法定位到时刻
+              {formatDuration(dayScreen.unplacedMs)} more screen time with no time of day
             </span>
           )}
-          {/* Silent when degraded: "没有采样" would read as a fact about the day,
+          {/* Silent when degraded: "No samples" would read as a fact about the day,
               when all we know is that the read gave up. */}
           {dayScreen && dayScreen.totalMs === 0 && !dayScreen.degraded && (
             <span className="wt-tt-total-side" data-testid="time-app-screen-none">
-              {dayScreen.enabled ? '这天没有屏幕采样' : '屏幕采集未开启(Apps 页可开)'}
+              {dayScreen.enabled ? 'No screen samples this day' : 'Screen capture is off (turn it on in Apps)'}
             </span>
           )}
           <NotDrawnNote day={day} />

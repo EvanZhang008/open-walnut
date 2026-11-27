@@ -15,6 +15,7 @@ import { ApprovalButtons, ApprovalDetail, requesterText } from '@/components/app
 import { applyApprovalEvent, refreshApprovals, useApprovals, type ApprovalsState } from '@/components/approvals/approvals-store';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { clockTime } from '@/utils/time';
 
 /** The pending approvals, read at mount and kept current by the server's events. */
 export function useExtApprovals(): Approval[] {
@@ -30,10 +31,10 @@ export function useExtApprovals(): Approval[] {
 /**
  * What tells apart approvals that read the same (the same step asked again, by the same asker:
  * four "Place order" clicks on one page read word for word alike, review round 4, #7): their place
- * among them, oldest first, and the second each was asked at. One line by id, only for those with
+ * among them, oldest first, and the time each was asked at. One line by id, only for those with
  * a twin; the others say nothing more. Pure.
  */
-export function alikeLines(list: readonly Approval[], timeOf: (iso: string) => string = askedTime): Map<string, string> {
+export function alikeLines(list: readonly Approval[], timeOf: (iso: string) => string = clockTime): Map<string, string> {
   const groups = new Map<string, Approval[]>();
   for (const a of list) {
     const r = a.requester;
@@ -47,11 +48,6 @@ export function alikeLines(list: readonly Approval[], timeOf: (iso: string) => s
     sorted.forEach((a, i) => out.set(a.id, `${i + 1} of ${sorted.length} alike · asked ${timeOf(a.createdAt)}`));
   }
   return out;
-}
-
-function askedTime(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 }
 
 /** The alike line under an approval's asker, when it has a twin among those waiting. */

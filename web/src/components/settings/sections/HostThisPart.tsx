@@ -16,20 +16,17 @@ import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { HostServerPart } from './HostServersGroup';
 import { useHostSettings } from './host-settings-data';
 import { EmptyState } from '@/components/common/EmptyState';
+import { pointInTime } from '@/utils/time';
 
 /** The limit a host has when config.yaml names none (src/core/session-tracker.ts). */
 export const DEFAULT_LIMIT = { local: 7, remote: 20, cloudBox: 2 } as const;
 /** The cloud companion's box (src/core/hosts/cloud-box-host.ts CLOUD_BOX_HOST_ALIAS). */
 const CLOUD_BOX = '__cloudbox__';
 
-function when(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
-
 /** A grant's second line: since when, and what it ran. */
 export function grantSummary(g: ExecGrant): string {
-  const parts = [`${g.via === 'own-host' ? 'Allowed (it runs on one of your hosts)' : g.via === 'approvals-off' ? 'Allowed (Approvals are off)' : 'Allowed'} ${when(g.grantedAt)}`];
-  parts.push(g.runs ? `${g.runs} use${g.runs === 1 ? '' : 's'}, last ${when(g.lastRunAt ?? g.grantedAt)}: ${g.lastCommand ?? ''}` : 'not used yet');
+  const parts = [`${g.via === 'own-host' ? 'Allowed (it runs on one of your hosts)' : g.via === 'approvals-off' ? 'Allowed (Approvals are off)' : 'Allowed'} ${pointInTime(g.grantedAt)}`];
+  parts.push(g.runs ? `${g.runs} use${g.runs === 1 ? '' : 's'}, last ${pointInTime(g.lastRunAt ?? g.grantedAt)}: ${g.lastCommand ?? ''}` : 'not used yet');
   // Each part has its own commas (dates), so the parts are kept apart by a semicolon.
   return parts.join('; ');
 }
@@ -156,7 +153,7 @@ export function HostThisPart({ host, name, limitKey, server = false, secrets = t
                 indent
                 data-denied={key}
                 label={d.taskTitle || d.taskId}
-                help={`You declined it ${when(d.answeredAt ?? d.askedAt)}.`}
+                help={`You declined it ${pointInTime(d.answeredAt ?? d.askedAt)}.`}
                 control={
                   <SettingsButton
                     holdFocus

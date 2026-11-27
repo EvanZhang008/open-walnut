@@ -7,7 +7,8 @@ import { copySecret, vaultApi, type VaultItem } from '@/api/vault'
 import { useConfirm } from '@/hooks/useConfirm'
 import { displayHost } from '../../../../src/core/vault/url-match'
 import { passwordStrength } from '../../../../src/core/vault/strength'
-import { ago, siteTile, typeLabel } from './passwords-model'
+import { siteTile, typeLabel } from './passwords-model'
+import { dayDate, pointInTime, timeAgo } from '@/utils/time'
 import { PasskeyList } from './PasskeyList'
 import { NoticeStatus, type NoticeTone } from '@/components/common/NoticeCard'
 import { CopyIcon, EyeIcon, EyeOffIcon, LinkIcon, StarIcon, EditIcon, TrashIcon, RestoreIcon, CheckIcon, RobotIcon } from './pw-icons'
@@ -192,7 +193,7 @@ export function ItemView({ item, onEdit, onChanged }: { item: VaultItem; onEdit:
         <details className="pw-card pw-history">
           <summary>Password history ({item.passwordHistory.length})</summary>
           {item.passwordHistory.map((h, i) => (
-            <Field key={h.replacedAt + i} label={`Until ${new Date(h.replacedAt).toLocaleString()}`} value={h.password} secret copyKey={`h${i}`} copied={copied} onCopy={copy} />
+            <Field key={h.replacedAt + i} label={`Until ${pointInTime(h.replacedAt)}`} value={h.password} secret copyKey={`h${i}`} copied={copied} onCopy={copy} />
           ))}
         </details>
       )}
@@ -201,7 +202,7 @@ export function ItemView({ item, onEdit, onChanged }: { item: VaultItem; onEdit:
 
       <div className="pw-meta">
         {item.tags?.length ? <div className="pw-tags">{item.tags.map((t) => <span key={t} className="badge pw-tag"><span>{t}</span></span>)}</div> : null}
-        <div>Changed {ago(item.updatedAt)} · Created {new Date(item.createdAt).toLocaleDateString()}{item.usedAt ? ` · Last used ${ago(item.usedAt)}` : ''}</div>
+        <div>Changed {timeAgo(item.updatedAt, { long: true })} · Created {dayDate(item.createdAt)}{item.usedAt ? ` · Last used ${timeAgo(item.usedAt, { long: true })}` : ''}</div>
       </div>
 
       <div className="pw-detail-foot">
@@ -214,7 +215,7 @@ export function ItemView({ item, onEdit, onChanged }: { item: VaultItem; onEdit:
             <TrashIcon size={15} /> Delete forever
           </button>
         )}
-        {trashed && <span className="pw-hint">Deleted {ago(item.trashedAt)}. Items here are removed for good after 30 days.</span>}
+        {trashed && <span className="pw-hint">Deleted {timeAgo(item.trashedAt ?? '', { long: true })}. Items here are removed for good after 30 days.</span>}
       </div>
     </div>
   )

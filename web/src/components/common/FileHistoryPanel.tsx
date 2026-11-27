@@ -22,7 +22,7 @@ import {
 } from '@/api/file-history';
 import { toGitStylePatch } from '@/components/sessions/diffPatch';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
-import { timeAgo } from '@/utils/time';
+import { clockTime, timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
 import { badge, type BadgeTone } from '@/components/common/badge';
 import '@/styles/file-history.css';
@@ -69,19 +69,13 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** When a version was made. Today's versions read as a clock time (seconds
- *  within the last hour): live saving makes several a minute, and six rows of
- *  "just now" could not be told apart (2026-11-07). Older ones read as an age.
- *  `timeAgo` takes a date string; the wire carries epoch ms. */
+/** When a version was made. Today's versions read as a clock time, to the second
+ *  within the last hour: live saving makes several a minute, and six rows of
+ *  "just now" could not be told apart (2026-11-07). Older ones read as an age. */
 function agoOf(at: number, now = Date.now()): string {
   if (!(at > 0)) return '';
-  const age = now - at;
-  if (age >= 0 && age < 24 * 60 * 60 * 1000) {
-    return new Date(at).toLocaleTimeString([], age < 60 * 60 * 1000
-      ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
-      : { hour: '2-digit', minute: '2-digit' });
-  }
-  return timeAgo(new Date(at).toISOString());
+  if (new Date(at).toDateString() === new Date(now).toDateString()) return clockTime(at, { seconds: now - at < 60 * 60 * 1000 });
+  return timeAgo(at, { now });
 }
 
 function buildRows(data: FileHistoryResponse | null): Row[] {

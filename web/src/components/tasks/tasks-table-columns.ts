@@ -9,7 +9,7 @@
  * Tested in tests/web/tasks-table-columns.test.ts.
  */
 import type { TpSortKey } from './tasks-page-sort';
-import { timeAgo } from '@/utils/time';
+import { dayDate, timeAgo } from '@/utils/time';
 
 export type TpColumnId =
   | 'priority' | 'phase' | 'due' | 'start' | 'session' | 'project'
@@ -145,23 +145,13 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 /**
  * Cell text for a timestamp column. Recent times read as an age ("3h ago") because
  * that is the question a Created/Updated column answers at a glance; older ones
- * switch to a short date, and add the year only when it differs from the current
- * one, so a two-year-old task is not mistaken for one from this spring.
+ * switch to the day (`dayDate`: "Mar 5", with the year only when it is not this
+ * one, so a two-year-old task is not mistaken for one from this spring).
  */
 export function formatTableTime(iso: string | undefined | null, now: number = Date.now()): string {
   if (!iso) return '';
   const t = new Date(iso);
   if (isNaN(t.getTime())) return '';
   if (now - t.getTime() < SEVEN_DAYS_MS) return timeAgo(iso, { now });
-  const sameYear = t.getFullYear() === new Date(now).getFullYear();
-  return t.toLocaleDateString(undefined, sameYear
-    ? { month: 'short', day: 'numeric' }
-    : { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-/** Tooltip for a timestamp cell: the full local date and time. */
-export function formatTableTimeTitle(iso: string | undefined | null): string {
-  if (!iso) return '';
-  const t = new Date(iso);
-  return isNaN(t.getTime()) ? '' : t.toLocaleString();
+  return dayDate(t, { now });
 }

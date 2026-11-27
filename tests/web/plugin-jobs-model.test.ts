@@ -91,7 +91,7 @@ describe('a job row', () => {
   it('says a long-running job\'s uptime, a restart on its way and why it does not start', () => {
     const lr = (over: Partial<PluginJobRow>) => row({ job: 'worker', kind: 'long-running', everyMs: undefined, ...over })
     expect(jobHelp({ kind: 'long-running' }, lr({ state: 'running', startedAt: NOW - 3 * 3_600_000, restarts: 2, failures: 1 }), NOW))
-      .toBe('Runs all the time; restarted when it stops. Up since 3 h ago. Restarted 2 times, 1 after a failure.')
+      .toBe('Runs all the time; restarted when it stops. Up for 3 h. Restarted 2 times, 1 after a failure.')
     expect(jobHelp({ kind: 'long-running' }, lr({ state: 'retrying', nextRunAt: NOW + 10_000, restarts: 1, failures: 1, lastError: 'exited with code 1' }), NOW))
       .toBe('Runs all the time; restarted when it stops. Starting again in 10 s. Restarted once, 1 after a failure. Last error: exited with code 1.')
     expect(jobHelp({ kind: 'long-running' }, lr({ state: 'refused', lastError: 'its code is not on this machine yet' }), NOW))

@@ -9,6 +9,7 @@ import {
   type ChangeSnapshot, type ChangeStage, type ChangeStageStatus, type ChangeTone,
 } from '../../../../src/core/changes/model';
 import { linkUrlOfTag } from '../../../../src/core/link-tags';
+import { pointInTime } from '@/utils/time';
 import { watchablePrUrls } from '../../../../src/core/pull-requests/model';
 
 /** The part of a task the change pill reads. */
@@ -61,15 +62,9 @@ export function reviewFacts(review: ChangeReview): string[] {
   return out;
 }
 
-/** A short clock time (`today 16:16`, `11-16 16:16` on another day), in the viewer's zone. */
+/** A stage's time (`today 4:16 PM`, `Nov 16, 4:16 PM` on another day), in the viewer's zone. */
 export function stageTime(iso: string | undefined, now = Date.now()): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const today = new Date(now);
-  return d.toDateString() === today.toDateString() ? `today ${hm}` : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`;
+  return pointInTime(iso, { now });
 }
 
 /** "in 7 h 12 min", "in 25 min", "now": how long until a blocker ends by itself. */

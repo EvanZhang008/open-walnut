@@ -23,6 +23,7 @@
  *   is greyed out with no `title` presents the whole feature as broken.
  */
 import type { MailMessageDto, MailUnsubscribeDto } from '@/api/mail';
+import { dayDate } from '@/utils/time';
 import { CANNOT_SEND_TITLE } from './compose/send-status';
 
 /** Said under a disabled `Unsubscribe`: the design's exact wording, and the one hint that follows it. */
@@ -103,17 +104,6 @@ export interface UnsubscribeRowState {
   reason?: string;
 }
 
-/** A short date, and the year only when it is not this one: `Sep 21` reads as recent, and should. */
-function shortDate(at: number, now: number): string {
-  if (!Number.isFinite(at) || at <= 0) return '';
-  const when = new Date(at);
-  const sameYear = when.getFullYear() === new Date(now).getFullYear();
-  return when.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    ...(sameYear ? {} : { year: 'numeric' }),
-  });
-}
 
 /** How the ladder's own vocabulary reads in a sentence. `manual` is a human saying they did it. */
 function methodPhrase(method: string): string {
@@ -135,13 +125,14 @@ export function unsubscribeDoneTitle(
   done: NonNullable<MailUnsubscribeDto['done']>,
   now: number = Date.now(),
 ): string {
-  const when = shortDate(done.at, now);
+  const when = Number.isFinite(done.at) && done.at > 0 ? dayDate(done.at, { now }) : '';
   if (done.scope === 'list') {
     // `sender` is also the fallback for a server that did not say: understating what was left is the
     // safe direction, since "this sender" is true whenever "this list" is.
     const what = done.keyedBy === 'list-id' ? 'this list' : 'this sender';
     return when
-      ? `You unsubscribed from ${what} on ${when}`
+      // "on Sep 21", but "today" alone: a day said in words takes no "on".
+      ? `You unsubscribed from ${what} ${/\d/.test(when) ? 'on ' : ''}${when}`
       : `You unsubscribed from ${what}`;
   }
   return when

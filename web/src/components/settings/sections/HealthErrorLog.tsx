@@ -22,14 +22,11 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { groupHealthErrors, type HealthErrorGroup, type HealthErrorRow } from './health-error-log-model';
 import { HealthHostProblems, useHealthProblemHosts } from './HealthHostProblems';
 import '@/styles/health-monitor.css';
+import { pointInTime } from '@/utils/time';
 
 export const HEALTH_ERRORS_BLURB = 'Errors Walnut retries or fixes on its own. They never pop up or fill the bell; they are kept here, grouped by kind, for anyone who wants to look into them. Walnut looks into the ones that keep happening by itself. Only an error you have to act on (sign in, free disk space, an action of yours that failed) reaches you.';
 
 const STATE_LABEL: Record<HealthErrorRow['state'], string> = { open: 'Happening', recovered: 'Recovered', stale: 'Ended' };
-
-function when(ms: number): string {
-  return new Date(ms).toLocaleString();
-}
 
 function times(n: number): string {
   return n === 1 ? 'once' : `${n} times`;
@@ -119,7 +116,7 @@ function ErrorRow({ row, canFix, onClear }: { row: HealthErrorRow; canFix: boole
       {open && (
         <div className="health-errors-detail" data-testid="health-errors-detail">
           {row.body && <p className="health-detail-desc">{row.body}</p>}
-          <p className="health-detail-desc">First seen {when(row.firstSeen)} · last seen {when(row.lastSeen)} · {times(row.times)}</p>
+          <p className="health-detail-desc">First seen {pointInTime(row.firstSeen)} · last seen {pointInTime(row.lastSeen)} · {times(row.times)}</p>
           {row.detail && <pre className="health-sample">{row.detail}</pre>}
           <div className="health-detail-actions">
             {row.sessionId && <SettingsButton onClick={() => go(`/sessions?id=${encodeURIComponent(row.sessionId!)}`)}>Open the session</SettingsButton>}

@@ -15,13 +15,13 @@ import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import type { AgentTextSource } from '@/utils/agent-text-source';
 import type { OrgThreadMessage } from '@/api/org-threads';
+import { clockTime, pointInTime } from '@/utils/time';
 import { THREAD_WORDS_SOURCE } from './thread-text-source';
 
-/** A clock time today, a date and time before: when an answer came, the way a chat shows it. */
+/** A clock time today, a day and time before: when an answer came, the way a chat shows it. */
 function clock(at: string, now: number): string {
-  const d = new Date(at);
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return new Date(now).toDateString() === d.toDateString() ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
+  const words = pointInTime(at, { now });
+  return words.startsWith('today ') ? clockTime(at) : words;
 }
 
 /** Long words fold to a few lines, the toggle under them at the left (org-threads.css cuts them). */

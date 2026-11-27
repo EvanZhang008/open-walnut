@@ -16,6 +16,7 @@
  *    and extra usage is unavailable too.
  */
 import type { HostLimitFrame, LimitStatus, LimitWindow } from '@/api/subscription-limits';
+import { fullTime, pointInTime, timeAgo } from '@/utils/time';
 
 export const AGE_SHOWN_AFTER_MS = 10 * 60_000;
 /** The CLI's own WARNING_THRESHOLD (services/rateLimitMessages.ts). */
@@ -64,11 +65,6 @@ export interface LimitReadout {
   hint: { level: 'warning' | 'rejected'; text: string } | null;
 }
 
-export interface FormatOpts {
-  locale?: string;
-  timeZone?: string;
-}
-
 export function limitLabel(type: string | undefined): string {
   if (!type) return 'Usage limit';
   if (LABELS[type]) return LABELS[type];
@@ -76,30 +72,18 @@ export function limitLabel(type: string | undefined): string {
   return `${words.charAt(0).toUpperCase()}${words.slice(1)} limit`;
 }
 
-function fmt(at: number, opts: FormatOpts, parts: Intl.DateTimeFormatOptions): string {
-  return new Intl.DateTimeFormat(opts.locale, { ...parts, ...(opts.timeZone ? { timeZone: opts.timeZone } : {}) }).format(new Date(at));
+/** "today 3:40 PM", "Oct 9, 9:00 AM": the reset, as every screen writes a time. */
+export function formatResetTime(at: number, now: number): string {
+  return pointInTime(at, { now });
 }
 
-/** "3:40 PM" within the next 20 hours, "Tue" within the week, "Oct 9" beyond. */
-export function formatResetTime(at: number, now: number, opts: FormatOpts = {}): string {
-  const ahead = at - now;
-  if (ahead < 20 * 60 * 60_000) return fmt(at, opts, { hour: 'numeric', minute: '2-digit' });
-  if (ahead < 6.5 * 24 * 60 * 60_000) return fmt(at, opts, { weekday: 'short' });
-  return fmt(at, opts, { month: 'short', day: 'numeric' });
-}
-
-function fullTime(at: number, opts: FormatOpts): string {
-  return fmt(at, opts, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
-
-/** "12m ago", "3h ago", "2d ago". */
+/** "12m ago", "3h ago", "2d ago" for an age in ms (timeAgo, from a zero instant). */
 export function formatAge(ms: number): string {
-  const m = Math.max(1, Math.floor(ms / 60_000));
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 48) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
+  return timeAgo(new Date(0).toISOString(), { now: Math.max(0, ms) });
 }
+
+/** A reading's age from the readout's clock. */
+const seenAgo = (seenAt: number, now: number) => timeAgo(new Date(seenAt).toISOString(), { now });
 
 const pctOf = (u: number) => `${Math.round(u * 100)}%`;
 
@@ -117,7 +101,7 @@ function liveStatus(frame: HostLimitFrame, now: number): { status: LimitStatus; 
   return c;
 }
 
-function rowFor(w: LimitWindow, live: ReturnType<typeof liveStatus>, now: number, opts: FormatOpts): LimitRow {
+function rowFor(w: LimitWindow, live: ReturnType<typeof liveStatus>, now: number): LimitRow {
   const label = limitLabel(w.type);
   const expired = w.resetsAt !== undefined && w.resetsAt <= now;
   const status = live && live.type === w.type ? live.status : 'allowed';
@@ -129,23 +113,23 @@ function rowFor(w: LimitWindow, live: ReturnType<typeof liveStatus>, now: number
     : w.utilization !== undefined ? pctOf(w.utilization)
     : state === 'rejected' ? 'reached' : undefined;
   const when = expired ? 'reset'
-    : w.resetsAt !== undefined ? `resets ${formatResetTime(w.resetsAt, now, opts)}` : undefined;
+    : w.resetsAt !== undefined ? `resets ${formatResetTime(w.resetsAt, now)}` : undefined;
   const old = now - w.seenAt > AGE_SHOWN_AFTER_MS;
-  const age = !expired && old ? `as of ${formatAge(now - w.seenAt)}` : undefined;
+  const age = !expired && old ? `as of ${seenAgo(w.seenAt, now)}` : undefined;
   const title = [
     expired
-      ? `${label}: reset ${fullTime(w.resetsAt!, opts)}. A new window starts with the next request.`
-      : `${label}: ${w.utilization !== undefined ? `${pctOf(w.utilization)} used` : state === 'rejected' ? 'reached' : 'usage not reported yet'}${w.resetsAt !== undefined ? `, resets ${fullTime(w.resetsAt, opts)}` : ''}.`,
-    `Reported by Claude Code ${formatAge(Math.max(0, now - w.seenAt))}.`,
+      ? `${label}: reset ${fullTime(w.resetsAt!)}. A new window starts with the next request.`
+      : `${label}: ${w.utilization !== undefined ? `${pctOf(w.utilization)} used` : state === 'rejected' ? 'reached' : 'usage not reported yet'}${w.resetsAt !== undefined ? `, resets ${fullTime(w.resetsAt)}` : ''}.`,
+    `Reported by Claude Code ${seenAgo(w.seenAt, now)}.`,
   ].join(' ');
   return { type: w.type, label, ...(value ? { value } : {}), ...(when ? { when } : {}), ...(age ? { age } : {}), state, title };
 }
 
-function overageLine(frame: HostLimitFrame, live: ReturnType<typeof liveStatus>, now: number, opts: FormatOpts): LimitReadout['overage'] {
+function overageLine(frame: HostLimitFrame, live: ReturnType<typeof liveStatus>, now: number): LimitReadout['overage'] {
   const o = frame.overage;
   if (!o || ruledOut(frame, o.seenAt)) return undefined;
   if (o.resetsAt !== undefined && o.resetsAt <= now) return undefined;
-  const resets = o.resetsAt !== undefined ? ` · resets ${formatResetTime(o.resetsAt, now, opts)}` : '';
+  const resets = o.resetsAt !== undefined ? ` · resets ${formatResetTime(o.resetsAt, now)}` : '';
   if (o.isUsingOverage) {
     if (o.status === 'rejected') return { text: `Extra usage used up${resets}`, state: 'rejected' };
     if (o.status === 'allowed_warning') return { text: `Extra usage nearly used up${resets}`, state: 'warning' };
@@ -158,11 +142,11 @@ function overageLine(frame: HostLimitFrame, live: ReturnType<typeof liveStatus>,
   return undefined;
 }
 
-function hintFor(frame: HostLimitFrame, live: ReturnType<typeof liveStatus>, now: number, opts: FormatOpts): LimitReadout['hint'] {
+function hintFor(frame: HostLimitFrame, live: ReturnType<typeof liveStatus>, now: number): LimitReadout['hint'] {
   const overage = frame.overage && !ruledOut(frame, frame.overage.seenAt) ? frame.overage : undefined;
   if (live) {
     const label = limitLabel(live.type);
-    const resets = live.resetsAt !== undefined ? ` · resets ${formatResetTime(live.resetsAt, now, opts)}` : '';
+    const resets = live.resetsAt !== undefined ? ` · resets ${formatResetTime(live.resetsAt, now)}` : '';
     if (live.status === 'rejected') {
       // Past the limit but running on extra usage: worth a look, not a stop.
       if (overage?.isUsingOverage && overage.status !== 'rejected') return { level: 'warning', text: `${label} reached · using extra usage` };
@@ -181,7 +165,7 @@ function hintFor(frame: HostLimitFrame, live: ReturnType<typeof liveStatus>, now
 }
 
 /** The whole readout for one host, or null when there is nothing to show. */
-export function computeLimitReadout(frame: HostLimitFrame | null | undefined, now: number, opts: FormatOpts = {}): LimitReadout | null {
+export function computeLimitReadout(frame: HostLimitFrame | null | undefined, now: number): LimitReadout | null {
   if (!frame) return null;
   const live = liveStatus(frame, now);
   const windows = Object.values(frame.windows ?? {})
@@ -191,8 +175,8 @@ export function computeLimitReadout(frame: HostLimitFrame | null | undefined, no
       const ib = ORDER.indexOf(b.type);
       return (ia < 0 ? ORDER.length : ia) - (ib < 0 ? ORDER.length : ib) || a.type.localeCompare(b.type);
     });
-  const rows = windows.map((w) => rowFor(w, live, now, opts));
-  const overage = overageLine(frame, live, now, opts);
+  const rows = windows.map((w) => rowFor(w, live, now));
+  const overage = overageLine(frame, live, now);
   if (rows.length === 0 && !overage) return null;
-  return { rows, ...(overage ? { overage } : {}), hint: hintFor(frame, live, now, opts) };
+  return { rows, ...(overage ? { overage } : {}), hint: hintFor(frame, live, now) };
 }

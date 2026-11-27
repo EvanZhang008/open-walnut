@@ -4,39 +4,14 @@
  * tests/web/settings-addons-format.test.ts.
  */
 
-const DAY_MS = 24 * 60 * 60 * 1000
+import { lineStart, pointInTime } from '@/utils/time'
 
-function sameLocalDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-}
-
-function startOfLocalDay(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
-}
-
-/**
- * Absolute time that never goes stale on screen (no `ago`):
- * today `11:44 PM`, within the last 6 days `Fri 11:44 PM`, older `Sep 12, 11:44 PM`.
- */
-export function formatAbsoluteTime(value: string | number | Date, now: Date = new Date()): string {
-  const d = value instanceof Date ? value : new Date(value)
-  if (Number.isNaN(d.getTime())) return ''
-  // ICU puts a narrow no-break space before AM/PM; settings copy uses a plain space.
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/[\u202f\u00a0]/g, ' ')
-  if (sameLocalDay(d, now)) return time
-  const days = Math.round((startOfLocalDay(now) - startOfLocalDay(d)) / DAY_MS)
-  if (days > 0 && days <= 6) {
-    return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${time}`
-  }
-  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`
-}
-
-/** `11:44 PM, 212 events cached` (the Calendar `Last refreshed` help). */
+/** `Today 11:44 PM, 212 events cached` (the Calendar `Last refreshed` help). */
 export function formatLastRefreshed(lastRefresh: string | undefined, eventCount: number | undefined, now?: Date): string {
   const count = eventCount ?? 0
   const events = `${count} ${count === 1 ? 'event' : 'events'} cached`
   if (!lastRefresh) return `Not refreshed yet, ${events}`
-  return `${formatAbsoluteTime(lastRefresh, now)}, ${events}`
+  return `${lineStart(pointInTime(lastRefresh, { now: now?.getTime() }))}, ${events}`
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i

@@ -25,6 +25,7 @@ import { triggerPillTitle } from '@/components/routines/TriggerPill';
 import { formatWaitUntil, WAIT_UNTIL_ICON } from './TaskStatusControl';
 import { taskUserState } from '@/utils/session-status';
 import { checksBackWords } from '../common/date-time-pick';
+import { pointInTime } from '@/utils/time';
 import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf } from '@open-walnut/user-status';
 import { ICON_PHASE_IN_PROGRESS, ICON_TO_READ } from '@/components/common/Icons';
 import { AgentText } from '@/components/common/AgentText';
@@ -81,7 +82,7 @@ export function waitingDetailSourcedLines(task: DetailTask, triggersText = ''): 
   if (reads === 'working') own(`Its own work runs (a build, a test run or a deploy of its change), so it reads ${USER_STATE_LABELS.working}.`);
   if (reads === 'read') own('Nothing is asked: there is a result to read.');
   own(task.wait_until
-    ? `Wakes by itself ${new Date(task.wait_until).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, or sooner when something happens.`
+    ? `Wakes by itself ${pointInTime(task.wait_until)}, or sooner when something happens.`
     : 'No clock: it waits until something happens (a trigger fires, a message arrives).'); // empty-state-ok: a line of the chip's explanation
   const on = task.user_status?.waitingOn?.trim();
   if (on && reads === 'waiting') lines.push({ text: `Waiting on ${on}.`, source: taskTextSource(task as Task, 'waiting') });

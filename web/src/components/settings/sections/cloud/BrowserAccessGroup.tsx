@@ -41,6 +41,7 @@ import { isDeviceCaller } from './device-caller';
 import { phoneLinkQr } from './phone-link-qr';
 import { SignInWays } from './SignInWays';
 import '@/styles/browser-access.css';
+import { clockTime } from '@/utils/time';
 
 const PATH = '/api/expose';
 
@@ -463,7 +464,7 @@ export function BrowserAccessGroup({ heading }: { heading?: string } = {}) {
         />
       ) : (() => {
         const address = code?.addresses[0];
-        const until = code ? new Date(code.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+        const until = code ? clockTime(code.expiresAt) : '';
         const qrData = address ? drawnQr.get(address.link) : undefined;
         return (
           <SettingsRow

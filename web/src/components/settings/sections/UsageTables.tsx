@@ -7,30 +7,15 @@ import type { UsageByGroup, UsageRecord } from '@/api/usage';
 import { formatTokens } from '@/utils/format';
 import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { usageDisplayName } from '@/utils/usageLabels';
+import { fullTime, lineStart, pointInTime } from '@/utils/time';
+import { usageDay } from '@/components/usage/breakdown-model';
 
-/** "Sep 23, 1:25 AM": one date and time format across settings (F32). */
-export function usageTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  // Built from two parts: WebKit joins a combined date+time format with "at".
-  const day = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  return `${day}, ${time}`;
-}
-
-/** A `YYYY-MM-DD` day as "Sep 16", read in local time. */
-export function usageDay(day: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
-  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(day);
-  if (Number.isNaN(d.getTime())) return day;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
 
 /** Heading trailer for Recent activity: "Since Sep 16", "Sep 16 to Sep 20" or "All time" (F12). */
 export function usageRangeHint(start?: string | null, end?: string | null): string {
   if (!start) return 'All time';
-  if (end && end !== start) return `${usageDay(start)} to ${usageDay(end)}`;
-  if (end === start) return usageDay(start);
+  if (end && end !== start) return `${lineStart(usageDay(start))} to ${usageDay(end)}`;
+  if (end === start) return lineStart(usageDay(start));
   return `Since ${usageDay(start)}`;
 }
 
@@ -149,7 +134,7 @@ export function SettingsUsageRecent({ data, loading }: { data: UsageRecord[]; lo
           const cache = `Cache read ${r.cache_read_input_tokens === null ? 'Unknown' : formatTokens(r.cache_read_input_tokens)}, cache write ${r.cache_creation_input_tokens === null ? 'Unknown' : formatTokens(r.cache_creation_input_tokens)}`;
           return (
             <tr key={r.id} title={cache}>
-              <td className="num-font">{usageTime(r.timestamp)}</td>
+              <td className="num-font" title={fullTime(r.timestamp)}>{lineStart(pointInTime(r.timestamp))}</td>
               <td title={via ? `${source}, ${via}` : source}>
                 {source}
                 {via && <span className="settings-usage-via"> {via}</span>}

@@ -22,6 +22,7 @@ import {
   type MailInviteResponse,
 } from '@/api/mail';
 import { log } from '@/utils/log';
+import { lineStart } from '@/utils/time';
 import { CalendarIcon } from './mail-icons';
 import { INVITE_BUTTONS, answeredAs, inviteAnswerLine, inviteWhen } from './mail-invite-state';
 
@@ -166,7 +167,7 @@ export function MailInviteCard({ accountId, messageId, kind }: Props) {
       <span className="mail-invite-glyph" aria-hidden="true"><CalendarIcon /></span>
       <div className="mail-invite-text">
         <p className="mail-invite-when" data-testid="mail-invite-when">
-          {when || (checking && !details ? 'Checking your calendar…' : 'Meeting invite')}
+          {lineStart(when) || (checking && !details ? 'Checking your calendar…' : 'Meeting invite')}
         </p>
         {details?.location && (
           <p className="mail-invite-where" data-testid="mail-invite-where">

@@ -5,7 +5,7 @@
  * open this group for (2026-11-21, the user: "where is the fucking path").
  * Pure (no React), unit tested in tests/web/session-kebab-meta.test.ts.
  */
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import { hostDisplayLabel } from '@/utils/host-display-label';
 
 export interface KebabMetaRow {
@@ -29,24 +29,11 @@ interface SessionMeta {
   hostname?: string;
 }
 
-const NBSP_RE = /[\u202f\u00a0]/g;
-
-/**
- * `Mon, Sep 28, 2026, 3:02:05 PM`: the exact time behind a relative one. Date and
- * time are formatted apart and joined here, because one combined format joins them
- * with ", " in V8 (Chrome) but " at " in JavaScriptCore (WebKit, so the Mac app).
- */
-function exactTime(d: Date): string {
-  const date = d.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
-  return `${date}, ${time}`.replace(NBSP_RE, ' ');
-}
-
 function timeRow(key: 'created' | 'updated', label: string, iso: string | undefined, now: number): KebabMetaRow | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return { key, label, value: timeAgo(iso, { now }), title: exactTime(d) };
+  return { key, label, value: timeAgo(iso, { now }), title: fullTime(d) };
 }
 
 /** A missing or unparseable time drops its row rather than printing "Invalid Date"; no folder, no Folder row. */

@@ -13,6 +13,7 @@
  * Pure, so tests/web pin it (parked-bubbles.test.ts).
  */
 import { sendFailureWords } from '@/utils/operation-error-words';
+import { clockTime } from '@/utils/time';
 
 export interface ParkableBubble {
   queueId: string;
@@ -67,7 +68,7 @@ export function nextTryLabel(iso: string): string {
   const at = Date.parse(iso);
   if (!Number.isFinite(at)) return '';
   if (at <= Date.now()) return 'Trying again now.';
-  return `Next try at ${new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: at - Date.now() < 60_000 ? '2-digit' : undefined })}.`;
+  return `Next try at ${clockTime(at)}.`;
 }
 
 /**

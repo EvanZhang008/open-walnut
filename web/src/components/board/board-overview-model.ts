@@ -30,6 +30,7 @@
  * inside its section.
  */
 import { checksBackWords, midSentence } from '@/components/common/date-time-pick';
+import { pointInTime } from '@/utils/time';
 import { matchIdRef, refNamesId } from '../../../../src/lib/id-ref';
 import type { Task } from '@open-walnut/core';
 import { projectIdentity } from '@/utils/project-display';
@@ -365,7 +366,7 @@ export function describeTask(
   else if (reason === 'board') now = running ? `${board} · ${activityText(live?.activity)}` : board;
   else if (running) now = activityText(live?.activity);
   else if (task.phase === 'WAITING') {
-    const when = task.wait_until ? (opts.formatWaitUntil ?? ((iso: string) => new Date(iso).toLocaleString()))(task.wait_until) : '';
+    const when = task.wait_until ? (opts.formatWaitUntil ?? pointInTime)(task.wait_until) : '';
     // Parked while its work runs (its workers, its own build): Working, and its clock checks back.
     if (taskUserState(task) === 'working') now = when ? `${USER_STATE_LABELS.working}, ${checksBackWords(when)}` : USER_STATE_LABELS.working;
     else now = when ? `Until ${midSentence(when)}` : 'Until something happens';
@@ -687,13 +688,6 @@ export function rollupText(o: Pick<TeamOverview, 'members' | 'open' | 'done'>): 
 /** Done share of the team, 0-100, rounded. */
 export function donePercent(o: Pick<TeamOverview, 'members' | 'done'>): number {
   return o.members ? Math.round((o.done / o.members) * 100) : 0;
-}
-
-/** A row's time, short: "now", "3m", "2h", "4d", "3w", "5mo" ('' for no time). */
-export function compactAgo(ago: string): string {
-  if (!ago) return '';
-  if (ago === 'just now') return 'now';
-  return ago.replace(/ ago$/, '');
 }
 
 /** The row's hover text: the whole story in one place (the narrow pane hides the "now" line). */

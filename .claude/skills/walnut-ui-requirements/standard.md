@@ -627,6 +627,13 @@ chips" and "org_send". `tests/web/ui-words-ratchet.test.ts` counts what breaks t
    `<code>`.
 6. **Times read as a person says them**: one format in one list ("until today 1:30 AM", "until
    Nov 30, 6:00 PM"), the same clock (12 or 24 hour) everywhere, a duration in words ("1 hour").
+   One module writes every point in time, `web/src/utils/time.ts`: `timeAgo` for an age ("6d ago",
+   long "6 days ago" in a sentence), `clockTime` ("9:40 PM"), `dayDate` ("today", "Nov 20",
+   "Nov 20, 2025"), `pointInTime` ("today 9:40 PM", "Nov 20, 9:40 PM") and `fullTime` for a hover or
+   a reader's head ("Fri, Nov 20, 2026, 9:40 PM"). A 12-hour clock, no seconds, no leading zero,
+   the year only when it is not this year. Why: the 2026-11-27 audit counted eight ways on the
+   user's data ("Nov 20, 2026", "09:40 PM", "11/17/2026, 6:05:45 AM", "built 2026-11-27").
+   `tests/web/time-words-guard.test.ts` fails on any other way of writing a date in web/src.
 7. **Plain English, sentence case** for labels and buttons ("Clear all", not "Clear All"); no
    em dashes.
 8. **A setting is a label, a control and at most one short help line** (120 characters, about two

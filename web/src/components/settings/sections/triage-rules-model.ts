@@ -3,6 +3,7 @@
  * picker's matches. No React and no network (tests/web/triage-rules-model.test.ts).
  */
 import type { TriageRoutingRuleView } from '@/api/triage-rules';
+import { dayDate } from '@/utils/time';
 
 export const ROUTING_COPY = {
   heading: 'Routing rules',
@@ -19,13 +20,6 @@ export const ROUTING_COPY = {
   off: 'Inbox triage is off, so these rules route nothing until it is turned on.',
 } as const;
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-function day(at: number): string {
-  const d = new Date(at);
-  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
-}
-
 type Author = TriageRoutingRuleView['author'];
 
 function whoOf(a: Author): string {
@@ -35,13 +29,13 @@ function whoOf(a: Author): string {
 /** `Added by you · Nov 5`, `Added by Walnut VP · Nov 5 · changed by you Nov 6`. */
 export function provenanceLine(rule: Pick<TriageRoutingRuleView, 'author' | 'createdBy' | 'createdAt' | 'updatedAt'>): string {
   const added = rule.createdBy ?? rule.author;
-  const head = `Added by ${whoOf(added)}${rule.createdAt > 0 ? ` · ${day(rule.createdAt)}` : ''}`;
+  const head = `Added by ${whoOf(added)}${rule.createdAt > 0 ? ` · ${dayDate(rule.createdAt)}` : ''}`;
   if (rule.updatedAt <= rule.createdAt + 1000) return head;
   // "Added by you · Nov 5 · changed by you Nov 5" says nothing new: name a change only by
   // another writer or on another day.
   const sameWriter = whoOf(rule.author) === whoOf(added) && rule.author.taskId === added.taskId;
-  if (sameWriter && day(rule.updatedAt) === day(rule.createdAt)) return head;
-  return `${head} · changed by ${whoOf(rule.author)} ${day(rule.updatedAt)}`;
+  if (sameWriter && dayDate(rule.updatedAt) === dayDate(rule.createdAt)) return head;
+  return `${head} · changed by ${whoOf(rule.author)} ${dayDate(rule.updatedAt)}`;
 }
 
 /** `Routed 3 items, last "Offer letter" · Nov 5`, or `Nothing routed yet`. */
@@ -49,7 +43,7 @@ export function routedLine(rule: Pick<TriageRoutingRuleView, 'recent' | 'routedC
   const count = rule.routedCount ?? 0;
   const last = rule.recent?.[0];
   if (!count || !last) return 'Nothing routed yet';
-  return `Routed ${count} ${count === 1 ? 'item' : 'items'}, last "${last.item}" · ${day(last.at)}`;
+  return `Routed ${count} ${count === 1 ? 'item' : 'items'}, last "${last.item}" · ${dayDate(last.at)}`;
 }
 
 /** What the rule's task line says: its live title, or that it is gone or finished. */

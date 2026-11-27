@@ -241,6 +241,9 @@ describe('clock labels', () => {
     expect(clockRange(9 * 60 + 15, 9 * 60 + 45)).toBe('9:15 – 9:45 AM')
     expect(clockRange(11 * 60 + 30, 13 * 60)).toBe('11:30 AM – 1:00 PM')
     expect(clockRange(23 * 60, 24 * 60)).toBe('11:00 PM – 12:00 AM')
-    expect(longDayLabel('2026-11-16')).toBe('Nov 16, 2026')
+    // A day reads as every screen writes one (web/src/utils/time.ts dayDate).
+    expect(longDayLabel('2025-11-16')).toBe('Nov 16, 2025')
+    const t = new Date()
+    expect(longDayLabel(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`)).toBe('today')
   })
 })

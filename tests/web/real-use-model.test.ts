@@ -8,8 +8,9 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_WATCH_CHECKS, alarmLine, noteRecipientName, slowText, alarmStatus, checksText, failuresText, matchesFind, msText, noteStatus, pageKindParts, pctText,
-  recordedText, sizeText, sizesText, slowIsHigh, sortRows, spilledText, stamp, summaryOf, targetResultText, watchStatus, watchWhen,
+  recordedText, sizeText, sizesText, slowIsHigh, sortRows, spilledText, summaryOf, targetResultText, watchStatus, watchWhen,
 } from '../../web/src/components/settings/sections/real-use-model'
+import { pointInTime } from '../../web/src/utils/time'
 import type { UsageRow } from '../../web/src/api/usage-watch'
 
 function row(over: Partial<UsageRow> = {}): UsageRow {
@@ -38,12 +39,6 @@ describe('number and time words', () => {
     expect(pctText(0, 10)).toBe('')
     expect(pctText(1, 0)).toBe('')
     expect(pctText(1, 100_000)).toBe('<0.1%')
-  })
-
-  it('writes a local time with its date, or only the clock on the same day', () => {
-    expect(stamp(new Date(2026, 10, 14, 13, 20).getTime())).toBe('11-14 13:20')
-    expect(stamp(new Date(2026, 10, 21, 9, 5).getTime(), NOW)).toBe('09:05')
-    expect(stamp(new Date(2026, 10, 20, 9, 5).getTime(), NOW)).toBe('11-20 09:05')
   })
 
   it('names the share recorded only when part of the range is missing', () => {
@@ -145,8 +140,8 @@ describe("a row's detail", () => {
   it('says the alarm and what Walnut did, as a dot and a word', () => {
     const since = new Date(2026, 10, 21, 13, 13).getTime()
     expect(alarmLine(null, NOW)).toBe('No alarm has read it yet.')
-    expect(alarmLine({ id: 'a', state: 'ALARM', since, did: 'delivered to "Walnut VP"' }, NOW)).toBe('In alarm since 13:13. What Walnut did: delivered to "Walnut VP"')
-    expect(alarmLine({ id: 'a', state: 'OK', since }, NOW)).toBe('No alarm since 13:13.')
+    expect(alarmLine({ id: 'a', state: 'ALARM', since, did: 'delivered to "Walnut VP"' }, NOW)).toMatch(/^In alarm since today 1:13\sPM\. What Walnut did: delivered to "Walnut VP"$/)
+    expect(alarmLine({ id: 'a', state: 'OK', since }, NOW)).toMatch(/^No alarm since today 1:13\sPM\.$/)
     expect(alarmStatus({ id: 'a', state: 'ALARM', since })).toEqual({ tone: 'error', text: 'Alarm' })
     expect(alarmStatus({ id: 'a', state: 'OK', since })).toEqual({ tone: 'ok', text: 'No alarm' })
     expect(alarmStatus({ id: 'a', state: 'INSUFFICIENT_DATA', since })).toEqual({ tone: 'muted', text: 'No data' })
@@ -209,8 +204,8 @@ describe('watches', () => {
 
   it('says when it checks, or when it was checked', () => {
     const at = new Date(2026, 10, 22, 13, 2).getTime()
-    expect(watchWhen({ state: 'watching', checkAt: at }, NOW)).toBe('checks 11-22 13:02')
-    expect(watchWhen({ state: 'passed', checkAt: at, checkedAt: at }, NOW)).toBe('checked 11-22 13:02')
+    expect(watchWhen({ state: 'watching', checkAt: at }, NOW)).toMatch(/^checks tomorrow 1:02\sPM$/)
+    expect(watchWhen({ state: 'passed', checkAt: at, checkedAt: at }, NOW)).toMatch(/^checked tomorrow 1:02\sPM$/)
     expect(watchWhen({ state: 'exempt', checkAt: at }, NOW)).toBe('')
   })
 })
@@ -219,7 +214,7 @@ describe('notes', () => {
   it('says sent, when the next goes, or why it was not delivered', () => {
     const due = new Date(2026, 10, 21, 17, 0).getTime()
     expect(noteStatus({ state: 'sent', dueAt: due, tries: 1 }, NOW)).toEqual({ tone: 'ok', text: 'Sent' })
-    expect(noteStatus({ state: 'pending', dueAt: due, tries: 0 }, NOW)).toEqual({ tone: 'live', text: 'Next at 17:00' })
+    expect(noteStatus({ state: 'pending', dueAt: due, tries: 0 }, NOW)).toEqual({ tone: 'live', text: `Next ${pointInTime(due, { now: NOW })}` })
     expect(noteStatus({ state: 'failed', dueAt: due, tries: 6, detail: '"Fix it" has no session to tell' }, NOW))
       .toEqual({ tone: 'error', text: 'Not delivered after 6 tries: "Fix it" has no session to tell' })
     expect(noteStatus({ state: 'failed', dueAt: due, tries: 1 }, NOW).text).toBe('Not delivered after 1 try')

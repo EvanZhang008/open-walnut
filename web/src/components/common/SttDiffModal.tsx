@@ -10,6 +10,7 @@ import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { diffSpeech, diffStats } from '@/utils/stt-diff';
 import type { VoiceRecording } from '@/api/stt';
 import { ICON_CLOSE } from './Icons';
+import { pointInTime } from '@/utils/time';
 
 interface SttDiffModalProps {
   rec: VoiceRecording;
@@ -27,9 +28,7 @@ export function SttDiffModal({ rec, onInsert, onClose }: SttDiffModalProps) {
   const segs = useMemo(() => diffSpeech(primaryText, secondaryText), [primaryText, secondaryText]);
   const stats = useMemo(() => diffStats(segs), [segs]);
   const identical = stats.aOnly === 0 && stats.bOnly === 0;
-  const time = rec.timestamp
-    ? new Date(rec.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : '';
+  const time = pointInTime(rec.timestamp);
 
   return createPortal(
     <div className="app-modal-overlay wn-scrim" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>

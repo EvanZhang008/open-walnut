@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ChangeBlocker, ChangeDeploy, ChangeStage, ChangeStageDetail } from '../../../../src/core/changes/model';
 import { apiGet } from '@/api/client';
 import { log } from '@/utils/log';
+import { lineStart } from '@/utils/time';
 import { BLOCKER_WORDS, STAGE_WORDS, deployCounts, foldOf, stageRows, stageTime, trackGroups, untilWords } from './change-status';
 import { OutIcon, StatusIcon } from './ChangeIcons';
 import { DisclosureChevron } from '@/components/controls';
@@ -93,7 +94,7 @@ function StageRow({ stage, last, open, state, onToggle }: {
         </span>
         <span className="change-card-stage-end">
           {loud && <span className="change-card-stage-words" data-tone={stage.status}>{word}</span>}
-          {when && <span className="change-card-stage-at" title={stage.blocker?.until ? 'When it moves on by itself' : 'When it was deployed'}>{stage.blocker?.until ? `opens ${when}` : when}</span>}
+          {when && <span className="change-card-stage-at" title={stage.blocker?.until ? 'When it moves on by itself' : 'When it was deployed'}>{stage.blocker?.until ? `opens ${when}` : lineStart(when)}</span>}
         </span>
       </button>
       {open && <StageDetail state={state} />}

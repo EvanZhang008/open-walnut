@@ -81,17 +81,3 @@ export function placePins<P extends SessionPinnedMessage>(
       return a.pin.pinnedAt.localeCompare(b.pin.pinnedAt);
     });
 }
-
-/** The outline row's time: the clock for today's rows, the date as well for any
- *  other day. A bare "3:08 PM" on a row from two days ago read as this afternoon,
- *  which is what made the mis-ordering above look impossible. */
-export function outlineTimeLabel(timestamp: string | undefined, now: Date = new Date()): string {
-  if (!timestamp) return '';
-  const d = new Date(timestamp);
-  if (Number.isNaN(d.getTime())) return '';
-  const sameDay = d.getFullYear() === now.getFullYear()
-    && d.getMonth() === now.getMonth()
-    && d.getDate() === now.getDate();
-  if (sameDay) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}

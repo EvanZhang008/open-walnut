@@ -12,7 +12,8 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { keepKeysInside } from '@/utils/keep-keys-inside';
 import { MonthGrid } from './MonthGrid';
-import { dateTimeWords, hourPickerMin, localDateTimeIso, parseClock, timeTarget, tomorrowTimePills } from './date-time-pick';
+import { hourPickerMin, localDateTimeIso, parseClock, timeTarget, tomorrowTimePills } from './date-time-pick';
+import { dayDate, fullTime, pointInTime } from '@/utils/time';
 
 export { tomorrowTimePills } from './date-time-pick';
 
@@ -54,14 +55,36 @@ function buildDayPills(): { label: string; date: string }[] {
   return pills;
 }
 
-/** Format a due_date value for display. */
+/**
+ * A task date as every screen writes a time ('@/utils/time'): a day alone ("today", "Nov 30",
+ * "Nov 30, 2027") or, with its hour, a point ("today 3:30 PM", "Nov 30, 6:00 PM"). A value that
+ * does not parse reads as written.
+ */
+function dateWords(iso: string, nowMs?: number): string {
+  const d = parseDateLocal(iso);
+  if (isNaN(d.getTime())) return iso;
+  const opts = nowMs === undefined ? undefined : { now: nowMs };
+  return iso.includes('T') ? pointInTime(d, opts) : dayDate(d, opts);
+}
+
+/** The whole date for a hover: "Mon, Nov 30, 2026, 6:00 PM", or the day alone for a date-only value. */
+function dateHover(iso: string): string {
+  const d = parseDateLocal(iso);
+  if (isNaN(d.getTime())) return iso;
+  return iso.includes('T') ? fullTime(d) : dayDate(d);
+}
+
+/**
+ * Format a due_date value for a pill: how long is left while it is near ("<1m", "40m", "3h",
+ * "3d": a countdown, not a point in time), "Today" / "Tomorrow", else its date ("Nov 30").
+ */
 export function formatDateDisplay(iso: string | undefined | null, nowMs = Date.now()): string {
   if (!iso) return '';
   const d = parseDateLocal(iso);
   if (isNaN(d.getTime())) return iso;
   const now = new Date(nowMs);
 
-  // Time-level dates (contains 'T'): show relative
+  // Time-level dates (contains 'T'): how long is left
   if (iso.includes('T')) {
     const diffMs = d.getTime() - now.getTime();
     if (diffMs < 0) return 'Overdue';
@@ -78,29 +101,16 @@ export function formatDateDisplay(iso: string | undefined | null, nowMs = Date.n
   if (diffDays === 0) return 'Today';
   if (diffDays === 1) return 'Tomorrow';
   if (diffDays <= 7) return `${diffDays}d`;
-  return `${d.getMonth() + 1}/${d.getDate()}`;
+  return dayDate(d, { now: nowMs });
 }
 
 /**
- * Format a due_date for confirmation contexts (e.g. Quick Task chips) —
- * absolute clock time with a friendly day name, so the user can verify what
- * the AI actually understood ("Tomorrow 10:00", not "19h").
+ * Format a due_date for confirmation contexts (e.g. Quick Task chips): the date and, when it has
+ * one, its clock time, so the user can verify what the AI actually understood ("tomorrow
+ * 10:00 AM", not "19h"). A passed date still reads as its date here.
  */
 export function formatDateTimeDisplay(iso: string | undefined | null): string {
-  if (!iso) return '';
-  const d = parseDateLocal(iso);
-  if (isNaN(d.getTime())) return iso;
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const dueDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const diffDays = Math.round((dueDay.getTime() - todayStart.getTime()) / 86_400_000);
-  const day =
-    diffDays === 0 ? 'Today'
-    : diffDays === 1 ? 'Tomorrow'
-    : diffDays > 1 && diffDays <= 7 ? DOW[d.getDay()]
-    : `${d.getMonth() + 1}/${d.getDate()}`;
-  if (!iso.includes('T')) return day;
-  return `${day} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return iso ? dateWords(iso) : '';
 }
 
 /**
@@ -278,7 +288,7 @@ function DatePickerContent({ date, onChange, minDate, withTime }: Pick<DatePicke
               title={target.past ? PAST_NOTE : undefined}
               onClick={(e) => { e.stopPropagation(); applyTime(); }}
             >
-              Set {dateTimeWords(target.iso)}
+              Set {pointInTime(target.iso)}
             </button>
           ) : null}
           {timeNote && <span className="dp-time-note" role="alert">{timeNote}</span>}
@@ -348,7 +358,7 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare
         ref={btnRef}
         className={`dp-trigger${overdue ? ' dp-trigger-overdue' : ''}${display ? ' dp-trigger-has-date' : ''}${!display && (ghostWhenEmpty || bare) ? ' dp-trigger-ghost' : ''}${bare ? ' dp-trigger-bare' : ''}`}
         onClick={handleToggle}
-        title={date ? `${label ?? 'Date'}: ${date}` : `Set ${(label ?? 'date').toLowerCase()}`}
+        title={date ? `${label ?? 'Date'}: ${dateHover(date)}` : `Set ${(label ?? 'date').toLowerCase()}`}
       >
         {bare
           ? (display || 'Set date')

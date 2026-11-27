@@ -17,6 +17,7 @@ import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useCalendarVisibility } from '@/hooks/useCalendarEvents';
 import type { CalendarEvent, CalendarInfo } from '@/api/calendar';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import { dayDate, lineStart, pointInTime } from '@/utils/time';
 import './visibility.css';
 
 interface Props {
@@ -30,8 +31,7 @@ interface Props {
 function formatWhen(ev: CalendarEvent): string {
   const at = new Date(ev.start.includes('T') ? ev.start : `${ev.start}T00:00:00`);
   if (Number.isNaN(at.getTime())) return ev.start;
-  const day = at.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-  return ev.allDay ? day : `${day}, ${at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+  return ev.allDay ? dayDate(at) : pointInTime(at);
 }
 
 /** Its own portalled flyout, so a long list scrolls instead of growing the parent. */
@@ -60,7 +60,7 @@ function HiddenEventsFlyout({ anchorRef, events, onShow, onClose }: {
           <span className="cal-settings-dot" style={{ background: ev.color ?? 'var(--accent)' }} />
           <span className="cal-hidden-events-text">
             <span className="cal-cals-name" title={ev.title}>{ev.title || '(No title)'}</span>
-            <span className="cal-hidden-events-when">{formatWhen(ev)}</span>
+            <span className="cal-hidden-events-when">{lineStart(formatWhen(ev))}</span>
           </span>
           <button type="button" className="cal-hidden-events-show" onClick={() => onShow(ev.id)}>
             Show

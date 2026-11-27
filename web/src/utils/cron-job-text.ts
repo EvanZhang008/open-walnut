@@ -1,19 +1,9 @@
 import type { SessionCronJob } from '@open-walnut/core';
+import { pointInTime } from '@/utils/time';
 
-/** Calendar-aware clock text: "Today 9:23 AM", "Tomorrow 9:23 AM", else "Tue, Sep 22, 12:43 PM". */
+/** A cron's next or last run as every screen writes a time: "today 9:23 AM", "Sep 22, 12:43 PM". */
 export function formatCronClock(at: number, now = Date.now()): string {
-  const date = new Date(at);
-  const time = date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  const dayStart = (value: number) => {
-    const d = new Date(value);
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  };
-  const dayOffset = Math.round((dayStart(at) - dayStart(now)) / 86_400_000);
-  if (dayOffset === 0) return `Today ${time}`;
-  if (dayOffset === 1) return `Tomorrow ${time}`;
-  if (dayOffset === -1) return `Yesterday ${time}`;
-  return `${date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, ${time}`;
+  return pointInTime(at, { now });
 }
 
 /** Distance to a future or past instant: "in 12h 40m", "in 3m", "due now", "2h ago". */

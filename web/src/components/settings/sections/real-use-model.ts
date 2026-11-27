@@ -6,6 +6,7 @@
  */
 import type { NoticeTone } from '@/components/common/NoticeCard';
 import { fmtTokenCount } from '@/components/sessions/session-cost-format';
+import { pointInTime } from '@/utils/time';
 import type { UsageKind, UsageNote, UsageRange, UsageRow, UsageRowAlarm, UsageTargetResult, UsageWatch, UsageWatchState } from '@/api/usage-watch';
 
 /** Rows a table shows before its "Show all" (f1/f2 of the design). */
@@ -47,18 +48,6 @@ export function pctText(part: number, whole: number): string {
   return v < 0.1 ? '<0.1%' : `${v.toFixed(1)}%`;
 }
 
-const pad = (n: number): string => String(n).padStart(2, '0');
-
-/** A local time as `11-21 13:05`, or only `13:05` when it falls on the same day as `now`. */
-export function stamp(ms: number, now?: number): string {
-  const d = new Date(ms);
-  const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  if (now !== undefined) {
-    const n = new Date(now);
-    if (n.getFullYear() === d.getFullYear() && n.getMonth() === d.getMonth() && n.getDate() === d.getDate()) return clock;
-  }
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${clock}`;
-}
 
 export const rangeWord = (range: UsageRange): string => (range === '7d' ? '7 days' : '24 hours');
 export const stepWord = (range: UsageRange): string => (range === '7d' ? 'per day' : 'per 4 hours');
@@ -152,7 +141,7 @@ export function spilledText(n: number): string | null {
 /** The row's alarm in one sentence, with what Walnut did about it. */
 export function alarmLine(a: UsageRowAlarm | null, now: number): string {
   if (!a) return 'No alarm has read it yet.';
-  const since = stamp(a.since, now);
+  const since = pointInTime(a.since, { now });
   const state = a.state === 'ALARM' ? `In alarm since ${since}` : a.state === 'OK' ? `No alarm since ${since}` : `Too little data for its alarms since ${since}`;
   return a.did ? `${state}. What Walnut did: ${a.did}` : `${state}.`;
 }
@@ -220,10 +209,10 @@ export function watchStatus(state: UsageWatchState): { tone: NoticeTone; text: s
   return WATCH_STATUS[state] ?? { tone: 'muted', text: state };
 }
 
-/** "checks 11-22 13:02" while it watches, "checked 11-21 10:02" once judged. */
+/** "checks tomorrow 1:02 PM" while it watches, "checked today 10:02 AM" once judged. */
 export function watchWhen(w: Pick<UsageWatch, 'state' | 'checkAt' | 'checkedAt'>, now: number): string {
-  if (w.state === 'watching') return `checks ${stamp(w.checkAt, now)}`;
-  return w.checkedAt ? `checked ${stamp(w.checkedAt, now)}` : '';
+  if (w.state === 'watching') return `checks ${pointInTime(w.checkAt, { now })}`;
+  return w.checkedAt ? `checked ${pointInTime(w.checkedAt, { now })}` : '';
 }
 
 /**
@@ -238,7 +227,7 @@ export function noteRecipientName(n: Pick<UsageNote, 'recipient' | 'recipientTit
 
 export function noteStatus(n: Pick<UsageNote, 'state' | 'dueAt' | 'tries' | 'detail'>, now: number): { tone: NoticeTone; text: string } {
   if (n.state === 'sent') return { tone: 'ok', text: 'Sent' };
-  if (n.state === 'pending') return { tone: 'live', text: `Next at ${stamp(n.dueAt, now)}` };
+  if (n.state === 'pending') return { tone: 'live', text: `Next ${pointInTime(n.dueAt, { now })}` };
   const tries = `${n.tries} ${n.tries === 1 ? 'try' : 'tries'}`;
   return { tone: 'error', text: `Not delivered after ${tries}${n.detail ? `: ${n.detail}` : ''}` };
 }

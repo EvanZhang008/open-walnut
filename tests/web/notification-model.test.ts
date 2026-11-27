@@ -448,11 +448,12 @@ describe('sessionLabelOf', () => {
 });
 
 describe('formatRelative', () => {
-  it('accepts epoch ms directly (no Date→ISO→Date round-trip at the call sites)', () => {
-    expect(formatRelative(Date.now() - 5_000)).toBe('5s ago');
+  it('accepts epoch ms directly, and reads as the console\'s one row age (timeAgo)', () => {
+    expect(formatRelative(Date.now() - 5_000)).toBe('just now');
     expect(formatRelative(Date.now() - 3 * 60_000)).toBe('3m ago');
     expect(formatRelative(Date.now() - 5 * 3_600_000)).toBe('5h ago');
     expect(formatRelative(Date.now() - 2 * 86_400_000)).toBe('2d ago');
+    expect(formatRelative(Date.now() - 20 * 86_400_000)).toBe('2w ago');
   });
 
   it('still accepts an ISO string (the git-sync lastCommitAt is one)', () => {

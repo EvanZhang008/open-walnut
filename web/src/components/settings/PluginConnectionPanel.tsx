@@ -17,7 +17,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { SettingsRow, SettingsTag } from './SettingsSection';
 import { SettingsButton } from './inputs/SettingsButton';
 import { CopyButton } from './inputs/CopyButton';
-import { formatAbsoluteTime } from './sections/addons-format';
+import { pointInTime } from '@/utils/time';
 import '@/styles/settings-sections-addons.css';
 
 export type ConnectionState = 'connected' | 'signing-in' | 'sign-in-required' | 'unreachable' | 'not-configured';
@@ -52,11 +52,11 @@ export const CONNECTION_BADGE: Record<ConnectionState, { label: string; tone: Ta
   'not-configured': { label: 'Not set up', tone: 'neutral', help: 'Add the missing settings under Configure.' },
 };
 
-/** `Renews automatically, last synced 11:44 PM`: absolute times, never `ago`. */
+/** `Renews automatically, last synced today 11:44 PM`: a day and its clock (pointInTime), never `ago`. */
 export function connectedHelp(report: Pick<ConnectionReport, 'credentialExpiresAt' | 'sync'>, now?: Date): string {
   const parts: string[] = [];
   if (report.credentialExpiresAt) parts.push('Renews automatically');
-  if (report.sync?.lastOkAt) parts.push(`last synced ${formatAbsoluteTime(report.sync.lastOkAt, now)}`);
+  if (report.sync?.lastOkAt) parts.push(`last synced ${pointInTime(report.sync.lastOkAt, { now: now?.getTime() })}`);
   const text = parts.join(', ');
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
 }
@@ -228,7 +228,7 @@ export function PluginConnectionPanel({ pluginId, initial, onReport }: Props) {
           state="warning"
           help={
             `Sync has failed ${report.sync.consecutiveFailures} time${report.sync.consecutiveFailures === 1 ? '' : 's'} in a row` +
-            (report.sync.lastFailureAt ? `, last at ${formatAbsoluteTime(report.sync.lastFailureAt)}` : '') +
+            (report.sync.lastFailureAt ? `, last ${pointInTime(report.sync.lastFailureAt)}` : '') +
             (report.sync.lastError ? `: ${report.sync.lastError}` : '.') +
             (report.sync.lastFailureKind === 'unreachable' ? ' It keeps retrying on its own.' : '')
           }
@@ -242,7 +242,7 @@ export function PluginConnectionPanel({ pluginId, initial, onReport }: Props) {
           <SettingsRow
             indent
             label="Code"
-            help={`Expires at ${formatAbsoluteTime(report.signIn.expiresAt)}; this updates by itself once you finish.`}
+            help={`Expires ${pointInTime(report.signIn.expiresAt)}; this updates by itself once you finish.`}
             control={
               <>
                 <code className="settings-addons-mono plugin-connection-code" data-testid={`plugin-signin-code-${pluginId}`}>

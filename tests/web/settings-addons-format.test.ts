@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest'
 import {
   LatestWriteQueue,
   calendarDisplayName,
-  formatAbsoluteTime,
   formatLastRefreshed,
   hiddenAfterBulk,
   hiddenAfterToggle,
@@ -23,26 +22,9 @@ import { plainText, updateDisabledTitle, REASON_DIRTY } from '../../web/src/comp
 
 const NOW = new Date(2026, 8, 23, 15, 30) // Wed Sep 23 2026, 3:30 PM local
 
-describe('formatAbsoluteTime', () => {
-  it('today is just the time', () => {
-    expect(formatAbsoluteTime(new Date(2026, 8, 23, 23, 44), NOW)).toBe('11:44 PM')
-  })
-  it('within six days is weekday plus time', () => {
-    expect(formatAbsoluteTime(new Date(2026, 8, 20, 9, 5), NOW)).toBe('Sun 9:05 AM')
-    expect(formatAbsoluteTime(new Date(2026, 8, 17, 9, 5), NOW)).toBe('Thu 9:05 AM')
-  })
-  it('older than six days is month, day and time', () => {
-    expect(formatAbsoluteTime(new Date(2026, 8, 12, 23, 44), NOW)).toBe('Sep 12, 11:44 PM')
-  })
-  it('never says ago and ignores junk', () => {
-    expect(formatAbsoluteTime(new Date(2026, 8, 23, 1, 0), NOW)).not.toMatch(/ago/)
-    expect(formatAbsoluteTime('not a date', NOW)).toBe('')
-  })
-})
-
 describe('calendar wording', () => {
   it('Last refreshed help', () => {
-    expect(formatLastRefreshed(new Date(2026, 8, 23, 23, 44).toISOString(), 212, NOW)).toBe('11:44 PM, 212 events cached')
+    expect(formatLastRefreshed(new Date(2026, 8, 23, 23, 44).toISOString(), 212, NOW)).toMatch(/^Today 11:44\sPM, 212 events cached$/)
     expect(formatLastRefreshed(undefined, 1, NOW)).toBe('Not refreshed yet, 1 event cached')
   })
   it('id-looking and empty titles become Untitled calendar', () => {

@@ -5,6 +5,7 @@ import { isHiddenFromTaskLists } from '@open-walnut/org-tree'
 import type { Task } from '@open-walnut/core'
 import { taskUserState } from '@/utils/session-status'
 import type { ActiveFocus } from './focus-store'
+import { clockTime } from '@/utils/time'
 
 /** "Walnut, Interview · 2 tasks": what a space or a focus holds, in a few words. */
 export function scopeLine(scope: { projects?: readonly string[]; tasks?: readonly string[] }, titleOf?: (id: string) => string | undefined): string {
@@ -66,10 +67,10 @@ export function durationWords(minutes: number): string {
   return m ? `${h} h ${m} min` : `${h} h`
 }
 
-/** "until 15:30", or nothing for a focus with no end. */
+/** "until 3:30 PM", or nothing for a focus with no end. */
 export function untilWords(until: number | undefined): string {
   if (until === undefined) return ''
-  return `until ${new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+  return `until ${clockTime(until)}`
 }
 
 /** The lengths the person picks from when entering; null = until they leave. */

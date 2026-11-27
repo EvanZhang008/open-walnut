@@ -24,6 +24,7 @@ import { clockLabel, longDayLabel } from '@/utils/calendar-date';
 import type { CreateSeed } from './QuickCreatePopover';
 import { getCalendarSourcesEntry } from '@/stores/calendar-events-store';
 import { newEventCalendars } from './item-tint';
+import { lineStart } from '@/utils/time';
 
 export interface EventPreview {
   title: string;
@@ -390,7 +391,7 @@ function TimeField({ value, onChange, onKeyDown, label }: {
   );
 }
 
-/** One day of the when-line: reads as text ("Mon, Nov 16, 2026"), opens a month flyout. */
+/** One day of the when-line: reads as text ("today", "Nov 16"), opens a month flyout. */
 function DayButton({ day, onChange, label }: { day: string; onChange: (day: string) => void; label: string }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -400,7 +401,7 @@ function DayButton({ day, onChange, label }: { day: string; onChange: (day: stri
   return (
     <>
       <button ref={btnRef} type="button" className="cal-when-part cal-when-day" aria-label={label} data-day={day} onClick={() => setOpen((v) => !v)}>
-        {longDayLabel(day)}
+        {lineStart(longDayLabel(day))}
       </button>
       {open && createPortal(
         <>

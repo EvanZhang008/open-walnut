@@ -11,6 +11,7 @@
  * the composer only sends the pair of ids that names the message being answered.
  */
 import type { MailAddress } from '@/api/mail';
+import { fullTime } from '@/utils/time';
 import { addressKey } from './mail-address';
 
 /**
@@ -214,7 +215,5 @@ function stamp(message: ReplyTargetMessage): string {
   if (header && !ISO_STAMP.test(header)) return header;
   const at = header ? Date.parse(header) : message.sentAt;
   if (!Number.isFinite(at) || at <= 0) return '';
-  return new Date(at).toLocaleString(undefined, {
-    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+  return fullTime(at);
 }

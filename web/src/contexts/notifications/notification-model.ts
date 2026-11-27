@@ -17,6 +17,7 @@ import type { Notification, NotificationAcpOption, NotificationKind } from './ty
 import { wireActionsOf } from './notification-actions';
 import { shortSessionId } from './notice-face';
 import { taskPath } from '@/utils/task-path';
+import { timeAgo } from '@/utils/time';
 import { FOUND_HOST_CARD_PREFIX } from '@open-walnut/found-host-offer';
 
 export type NotificationSection = 'action' | 'inbox' | 'errors' | 'automation' | 'all';
@@ -634,20 +635,10 @@ export function groupErrorsByCategory(items: Notification[]): ErrorCategoryGroup
 }
 
 /**
- * Short relative age for card timestamps ("12s ago" … "3d ago"). Accepts epoch ms
- * directly — feed timestamps ARE epoch ms, and the old string-only signature
- * forced every caller through a number→Date→ISO→Date round-trip per render.
- * Lives here (not in a surface file) because the panel and the System pane both
- * need it and neither should import the other.
+ * A card timestamp's age, the console's one row age (`timeAgo`: "just now", "3m ago", "3d ago").
+ * Accepts epoch ms too: feed timestamps ARE epoch ms. '' for a time that does not parse.
  */
 export function formatRelative(at: string | number): string {
-  const then = typeof at === 'number' ? at : new Date(at).getTime();
-  if (Number.isNaN(then)) return '';
-  const secs = Math.floor((Date.now() - then) / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
+  const then = typeof at === 'number' ? at : Date.parse(at);
+  return Number.isFinite(then) ? timeAgo(new Date(then).toISOString()) : '';
 }

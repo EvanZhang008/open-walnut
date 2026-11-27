@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
 import type { DayTime, TaskDayTime } from './api'
 import { Bar, Group, Stat, type KindKey, type Row } from './reports'
-import { TREND_DAYS, averageLanes, dayLanes, scopeDates, scopeHint, type DayLanes, type Scope } from './time-scope'
-import { formatDuration } from './time-timeline'
+import { TREND_DAYS, averageLanes, dayLanes, scopeDates, scopeHint, shortDayLabel, type DayLanes, type Scope } from './time-scope'
+import { dayLabel, formatDuration } from './time-timeline'
 
 /**
  * Overview — the four numbers first, then the week, then where the time went.
@@ -166,14 +166,15 @@ function LaneTrend({ lanes, today, selected, onPick }: {
             data-choice-exempt="the bars of one day in the 7-day chart: a press reads that day"
             data-date={lane.date}
             aria-pressed={isSelected}
-            title={`${lane.date}: you ${formatDuration(lane.humanMs)}, agents ${formatDuration(lane.agentMs)}`}
+            title={`${dayLabel(lane.date)}: you ${formatDuration(lane.humanMs)}, agents ${formatDuration(lane.agentMs)}`}
             onClick={() => onPick(lane.date)}
           >
             <div className="wt-trend-pair">
               <span className="wt-trend-bar wt-trend-bar-human" style={{ height: barHeight(lane.humanMs, peak) }} />
               <span className="wt-trend-bar wt-trend-bar-agent" style={{ height: barHeight(lane.agentMs, peak) }} />
             </div>
-            <span className="wt-trend-label">{lane.date.slice(5)}</span>
+            {/* The day as the page writes it above ("Nov 21"), never the raw "11-21". */}
+            <span className="wt-trend-label">{shortDayLabel(lane.date)}</span>
           </button>
         )
       })}

@@ -3,6 +3,7 @@
  * GET /api/plugin-runtime/:id/jobs (src/core/plugin-jobs/manager.ts PluginJobsView),
  * read defensively, and the words of each row. Pure, so the copy is pinned without rendering.
  */
+import { timeAgo } from '@/utils/time'
 
 export type PluginJobKind = 'every' | 'long-running'
 export type PluginJobRunState = 'idle' | 'starting' | 'running' | 'retrying' | 'refused'
@@ -118,7 +119,8 @@ export function spanWords(ms: number): string {
   return `${Math.round(h / 24)} days`
 }
 
-const ago = (at: number, now: number): string => (now - at < 60_000 ? 'just now' : `${spanWords(now - at)} ago`)
+/** How long ago a moment in ms was, as every age reads in a sentence (timeAgo long). */
+const ago = (at: number, now: number): string => timeAgo(new Date(at).toISOString(), { long: true, now })
 
 export function placementTone(state: PluginJobsPlacement): 'neutral' | 'warning' | 'success' | 'error' {
   if (state === 'running') return 'success'
@@ -174,7 +176,7 @@ export function jobHelp(decl: { kind: PluginJobKind; every?: string }, row: Plug
     if (row && row.runs > 0) parts.push(`${row.runs} ${row.runs === 1 ? 'run' : 'runs'}${row.failures > 0 ? `, ${row.failures} failed` : ''}.`)
   } else {
     parts.push('Runs all the time; restarted when it stops.')
-    if ((row?.state === 'running' || row?.state === 'starting') && row.startedAt) parts.push(`Up since ${ago(row.startedAt, now)}.`)
+    if ((row?.state === 'running' || row?.state === 'starting') && row.startedAt) parts.push(`Up for ${spanWords(now - row.startedAt)}.`)
     if (row?.state === 'retrying' && row.nextRunAt) parts.push(row.nextRunAt <= now ? 'Starting again now.' : `Starting again in ${spanWords(row.nextRunAt - now)}.`)
     if (row && row.restarts > 0) parts.push(`Restarted ${row.restarts === 1 ? 'once' : `${row.restarts} times`}${row.failures > 0 ? `, ${row.failures} after a failure` : ''}.`)
   }

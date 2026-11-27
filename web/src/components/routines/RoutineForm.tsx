@@ -4,7 +4,7 @@ import type {
   RoutineCheckTestResult, RoutineCheckTimeLimit, ExecutorInfo, ExecutorOptions, ExecutorFieldSpec,
 } from '@/api/routines';
 import { testRoutineCheck } from '@/api/routines';
-import { CUSTOM_SCHEDULE, describeSchedule, describeWake } from '@/utils/routine-format';
+import { CUSTOM_SCHEDULE, describeSchedule, describeWake, isViewerZone, viewerZone, zoneName } from '@/utils/routine-format';
 import '@/styles/routine-description.css';
 import '@/styles/routine-mic.css';
 import '@/styles/header-fit.css';
@@ -66,12 +66,10 @@ interface TriggerState {
   everyMsStored?: number;
 }
 
-const localTz = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
-
 function defaultTrigger(): TriggerState {
   return {
     preset: 'weekdays', time: '09:00', minute: 0, weeklyDay: 1, at: '',
-    customKind: 'cron', expr: '0 9 * * 1-5', tz: localTz(), everyMin: 60,
+    customKind: 'cron', expr: '0 9 * * 1-5', tz: viewerZone(), everyMin: 60,
   };
 }
 
@@ -96,7 +94,7 @@ function scheduleToTrigger(s: RoutineSchedule | undefined): TriggerState {
     t.everyMsStored = s.everyMs;
     return t;
   }
-  t.tz = s.tz ?? localTz();
+  t.tz = s.tz ?? viewerZone();
   t.expr = s.expr;
   const m = s.expr.trim().match(/^(\d{1,2})\s+(\S+)\s+\*\s+\*\s+(\S+)$/);
   if (m) {
@@ -117,7 +115,7 @@ function scheduleToTrigger(s: RoutineSchedule | undefined): TriggerState {
 }
 
 function triggerToSchedule(t: TriggerState): RoutineSchedule | null {
-  const tz = t.tz || localTz();
+  const tz = t.tz || viewerZone();
   if (t.preset === 'once') {
     if (!t.at) return null;
     return { kind: 'at', at: new Date(t.at).toISOString() };
@@ -174,16 +172,6 @@ function draftToCheck(d: CheckDraft): RoutineCheck | null {
     // An empty field is the default (24); 0 means no limit.
     ...(Number.isFinite(cap) && cap >= 0 ? { maxFiresPerDay: Math.floor(cap) } : {}),
   };
-}
-
-/** Short tz name for the header line, e.g. "PDT". */
-function tzAbbrev(tz: string): string {
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date());
-    return parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
-  } catch {
-    return '';
-  }
 }
 
 /** A multi-line executor field with the composer's mic. `resetKey` changes when the form is refilled. */
@@ -434,15 +422,14 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   const schedule = useMemo(() => triggerToSchedule(trigger), [trigger]);
   const headerLine = useMemo(() => {
     if (!schedule) return 'Pick when it runs';
-    // The zone only when it is not this computer's, as the list says times (a review:
-    // "UTC" here and no zone in the list read as two clocks).
-    const abbr = schedule.kind === 'cron' && schedule.tz && schedule.tz !== localTz() ? tzAbbrev(schedule.tz) : '';
-    // "Runs every day", "Runs weekdays", but "Runs Mondays": a day keeps its capital.
+    // "Runs every day", "Runs weekdays", but "Runs Mondays": a day keeps its capital. The words
+    // carry the zone just as the list row does (only when it is not this computer's).
     const said = describeSchedule(schedule);
     const lead = /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)/.test(said) ? said : said.replace(/^./, (c) => c.toLowerCase());
-    // The person editing a schedule the words cannot say still sees what they wrote.
-    const custom = schedule.kind === 'cron' && said.startsWith(CUSTOM_SCHEDULE) ? ` (${schedule.expr})` : '';
-    return `Runs ${lead}${custom}${abbr ? ` ${abbr}` : ''}`;
+    // The person editing a schedule the words cannot say still sees what they wrote, and its zone.
+    const zone = schedule.kind === 'cron' && !isViewerZone(schedule.tz) ? ` ${zoneName(schedule.tz!)}` : '';
+    const custom = schedule.kind === 'cron' && said === CUSTOM_SCHEDULE ? ` (${schedule.expr}${zone})` : '';
+    return `Runs ${lead}${custom}`;
   }, [schedule]);
 
   // Instructions + model are hoisted into the prominent top section; the

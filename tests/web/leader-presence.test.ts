@@ -114,12 +114,13 @@ describe('the words', () => {
     expect(agoText(now, now)).toBe('just now')
     expect(agoText(now + 5_000, now)).toBe('just now') // a host clock a little ahead
     expect(agoText(now - 44_000, now)).toBe('just now')
-    expect(agoText(now - 50_000, now)).toBe('1 min ago')
+    expect(agoText(now - 50_000, now)).toBe('just now')
+    expect(agoText(now - 61_000, now)).toBe('1 min ago')
     expect(agoText(now - 2 * MIN, now)).toBe('2 min ago')
     expect(agoText(now - 59 * MIN, now)).toBe('59 min ago')
     expect(agoText(now - 60 * MIN, now)).toBe('1 h ago')
     expect(agoText(now - 23 * 60 * MIN, now)).toBe('23 h ago')
-    expect(agoText(now - 24 * 60 * MIN, now)).toBe('1 day ago')
+    expect(agoText(now - 24 * 60 * MIN, now)).toBe('yesterday')
     expect(agoText(now - 3 * 24 * 60 * MIN, now)).toBe('3 days ago')
   })
 

@@ -32,6 +32,7 @@ import type { FirstRunStep } from '@/api/first-run';
 import { WalkthroughSteps, useSshKey } from '@/components/hosts/SshWalkthrough';
 import { addedRowState, firstRunHostRows, type FirstRunHostRow } from './first-run-model';
 import { EmptyState } from '@/components/common/EmptyState';
+import { clockTime } from '@/utils/time';
 import '@/styles/first-run.css';
 
 export type FirstRunMode = 'first-run' | 'picker';
@@ -121,7 +122,7 @@ function AddedFailure({ row, onUndo, onRetry }: { row: FirstRunHostRow; onUndo: 
         </button>
         {retryError
           ? <span className="fr-error" role="alert">{retryError}</span>
-          : retriedAt && !retrying && <span className="fr-tried" role="status" data-testid={`first-run-tried-${row.alias}`}>{`Still not connected (tried at ${new Date(retriedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })})`}</span>}
+          : retriedAt && !retrying && <span className="fr-tried" role="status" data-testid={`first-run-tried-${row.alias}`}>{`Still not connected (tried at ${clockTime(retriedAt)})`}</span>}
       </div>
     </div>
   );

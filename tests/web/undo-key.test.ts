@@ -66,12 +66,12 @@ describe('who owns mod+z', () => {
 describe('snooze toast words', async () => {
   const { formatSnoozeDate } = await import('../../web/src/undo/undo-labels')
   const now = new Date('2026-11-04T09:00:00')
-  it('a day for a date, a time for later today, both for another day', () => {
-    expect(formatSnoozeDate('2026-11-06', now)).toMatch(/Nov\s*6/)
-    expect(formatSnoozeDate(new Date('2026-11-04T15:30:00').toISOString(), now)).toMatch(/3:30/)
-    const other = formatSnoozeDate(new Date('2026-11-05T08:00:00').toISOString(), now)
-    expect(other).toMatch(/Nov\s*5/)
-    expect(other).toMatch(/8:00/)
+  it('a day for a date, a day and its clock for a time (pointInTime)', () => {
+    expect(formatSnoozeDate('2026-11-06', now)).toBe('Nov 6')
+    expect(formatSnoozeDate('2026-11-05', now)).toBe('tomorrow')
+    expect(formatSnoozeDate(new Date('2026-11-04T15:30:00').toISOString(), now)).toBe('today 3:30 PM')
+    expect(formatSnoozeDate(new Date('2026-11-05T08:00:00').toISOString(), now)).toBe('tomorrow 8:00 AM')
+    expect(formatSnoozeDate(new Date('2026-11-09T08:00:00').toISOString(), now)).toBe('Nov 9, 8:00 AM')
     expect(formatSnoozeDate('not a date', now)).toBe('not a date')
   })
 })

@@ -35,6 +35,7 @@ import {
   noResultsText, stepRowId, survivorAfterRemove, type RemovedPinPlaceholder, type TreeRow,
 } from '@/utils/thread-tree-rows';
 import { log } from '@/utils/log';
+import { timeAgo } from '@/utils/time';
 
 export const PLACEHOLDER_MS = 8000;
 /** A pin as logs name it: its id, or the message it sits on. A pin key without
@@ -57,15 +58,10 @@ function revealRow(el: HTMLElement | null): void {
   else if (r.bottom > b.bottom) box.scrollTop += Math.min(r.bottom - b.bottom, r.top - b.top);
 }
 
-/** `Answered 12 min ago` for the unread dot's tooltip. */
-export function answeredAgo(atMs: number | undefined, nowMs: number): string | undefined {
-  if (atMs === undefined) return undefined;
-  const min = Math.floor(Math.max(0, nowMs - atMs) / 60_000);
-  if (min < 1) return 'Answered just now';
-  if (min < 60) return `Answered ${min} min ago`;
-  const h = Math.floor(min / 60);
-  if (h < 24) return `Answered ${h} h ago`;
-  return `Answered ${Math.floor(h / 24)} d ago`;
+/** `Answered 12 min ago` for an unread answer's tooltip (the tree, the map, the asked-from list). */
+export function answeredAgo(atMs: number | undefined, nowMs: number = Date.now()): string | undefined {
+  if (atMs === undefined || !Number.isFinite(atMs)) return undefined;
+  return `Answered ${timeAgo(new Date(atMs).toISOString(), { long: true, now: nowMs })}`;
 }
 
 export interface ThreadTreeRowsHandle {

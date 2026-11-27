@@ -23,6 +23,7 @@ import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { resolveMainProvider } from './main-provider';
+import { pointInTime } from '@/utils/time';
 
 // Providers we actively test and support. `api` matches ProviderConfig.api.
 type ProviderApi = 'anthropic-messages' | 'openai-chat' | 'bedrock' | 'google-generative-ai' | 'ollama' | 'claude-cli';
@@ -150,7 +151,7 @@ function CredentialTraceRows() {
   };
 
   const verifyText = !verify ? null
-    : verify.status === 'valid' ? `Works as ${verify.arn ?? 'unknown'}${verify.expiration ? `, expires ${new Date(verify.expiration).toLocaleTimeString()}` : ''}.`
+    : verify.status === 'valid' ? `Works as ${verify.arn ?? 'unknown'}${verify.expiration ? `, expires ${pointInTime(verify.expiration)}` : ''}.`
     : verify.status === 'invalid' ? `Doesn't work: ${truncateError(verify.error ?? 'unknown error', 120)}`
     : verify.status === 'unverifiable' ? "Bearer tokens can't be checked this way; use Test connection instead."
     : null;

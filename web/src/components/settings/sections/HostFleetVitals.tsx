@@ -14,6 +14,7 @@ import {
 } from './host-fleet-dashboard-model';
 import { fleetRows, usd } from './host-fleet-model';
 import { readFailure, readLabel } from './host-fleet-read-model';
+import { fullTime } from '@/utils/time';
 import { FleetNumber, UNKNOWN_MARK } from './FleetNumber';
 import { badge, type BadgeTone } from '@/components/common/badge';
 
@@ -94,7 +95,7 @@ export function FleetVitals({ host, now, system }: { host: FleetHost; now: numbe
       <p className="hf-card-meta">
         {system?.meta}
         {read && (
-          <span className="hf-read" data-testid="host-fleet-read-age" title={typeof host.readAt === 'number' ? `Read ${new Date(host.readAt).toLocaleString()}` : undefined}>{read}</span>
+          <span className="hf-read" data-testid="host-fleet-read-age" title={typeof host.readAt === 'number' ? `Read ${fullTime(host.readAt)}` : undefined}>{read}</span>
         )}
       </p>
       <div className="hf-vitals">

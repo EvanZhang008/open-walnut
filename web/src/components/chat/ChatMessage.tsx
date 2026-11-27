@@ -18,6 +18,7 @@ import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { projectDisplayName } from '@/utils/project-display';
+import { clockTime } from '@/utils/time';
 import { useSelectionFrozen } from '@/utils/selection-guard';
 import { useStableHtml, stableHtml } from '@/hooks/useStableHtml';
 import { SubagentBlock } from './SubagentBlock';
@@ -88,13 +89,6 @@ function sameTextSource(a: AgentTextSource | undefined, b: AgentTextSource | und
 // imported above, so registration runs before any render here. It was moved
 // out of this file because the session renderer inherits those extensions via
 // the global marked singleton and must not depend on ChatMessage existing.
-
-function formatTimestamp(ts: string | undefined): string {
-  if (!ts) return '';
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
 
 /** Inline-only markdown: renders bold, links, task pills — no <p> wrapper.
  *  Used for single-line contexts like collapsed summaries. */
@@ -924,7 +918,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
   const isHeartbeat = source === 'heartbeat';
   const isNotification = notification || source === 'session' || source === 'session-error' || source === 'agent-error';
   const isErrorNotification = source === 'session-error' || source === 'agent-error';
-  const time = formatTimestamp(timestamp);
+  const time = clockTime(timestamp);
 
   // Unified entity click handler for .task-link, .session-link, and .file-link anchors
   const handleEntityClick = useEntityClickHandler(onSessionClick, file.onFileOpen, file.fileHost, file.fileSessionId, file.refusesAll);
@@ -1379,7 +1373,7 @@ function arePropsEqual(prev: ChatMessageProps, next: ChatMessageProps): boolean 
  * hooks), so the dispatcher below can branch on it.
  */
 function specialChatRow({ role, content, timestamp, source, notification }: ChatMessageProps): ReactNode | undefined {
-  const time = formatTimestamp(timestamp);
+  const time = clockTime(timestamp);
 
   // Compaction in progress: spinner divider
   if (source === 'compacting') {

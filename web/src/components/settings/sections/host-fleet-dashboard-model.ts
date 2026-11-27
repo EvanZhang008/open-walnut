@@ -7,6 +7,7 @@
  */
 import type { FleetHost } from '@/api/hosts-fleet';
 import { gb, notAnswering, pct, span } from './host-fleet-model';
+import { clockTime, timeAgo } from '@/utils/time';
 
 export type Tone = 'good' | 'warn' | 'bad' | 'muted';
 
@@ -94,7 +95,7 @@ export function problemsOf(h: FleetHost, now: number): Problem[] {
       : { key: 'disk', text: `Low on disk space: ${size(disk)} free`, detail: `${size(disk)} of disk is free; a large build or clone may not fit`, tone: 'warn' });
   }
   if (h.now && notAnswering(h)) {
-    out.push({ key: 'stale', text: `Last reading ${span(now - h.now.at)} ago`, detail: `The host did not answer in time; this is its reading from ${span(now - h.now.at)} ago`, tone: 'muted' });
+    out.push({ key: 'stale', text: `Last reading ${timeAgo(new Date(h.now.at).toISOString(), { long: true, now })}`, detail: `The host did not answer in time; this is its reading from ${timeAgo(new Date(h.now.at).toISOString(), { long: true, now })}`, tone: 'muted' });
   }
   const week = h.history?.windows.find((w) => w.days === 7);
   // A day of record at least, as the long-running verdict asks: an hour with one drop says little.
@@ -120,10 +121,6 @@ export function problemTitle(list: Problem[]): string {
 /** `note`, on a leading stretch with no record: the words the lane says beside it (a gap never reads as a line). */
 export interface Segment { from: number; to: number; tone: 'good' | 'warn' | 'bad' | 'none'; title: string; note?: string }
 
-function clock(t: number): string {
-  return new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-}
-
 /**
  * The last 12 hours as runs of one state: up and linked (good), up while Walnut had no link
  * (warn), down (bad), before the record began (none). `from`/`to` are shares of the width.
@@ -145,19 +142,19 @@ export function timeline(h: FleetHost, now: number): Segment[] {
     .map((o) => ({ from: Math.max(o.from, cov), to: Math.min(o.to, end), kind: o.kind }))
     .sort((a, b) => a.from - b.from);
   const out: Segment[] = [];
-  if (cov > start) out.push({ from: 0, to: at(cov), tone: 'none', title: cov === listed ? `Too many drops to show before ${clock(cov)}` : `No record before ${clock(cov)}`, note: cov === listed ? `Shown since ${clock(cov)}` : `Recording since ${clock(cov)}` });
+  if (cov > start) out.push({ from: 0, to: at(cov), tone: 'none', title: cov === listed ? `Too many drops to show before ${clockTime(cov)}` : `No record before ${clockTime(cov)}`, note: cov === listed ? `Shown since ${clockTime(cov)}` : `Recording since ${clockTime(cov)}` });
   let cursor = cov;
   for (const m of marks) {
     const from = Math.max(m.from, cursor);
     if (m.to <= from) continue;
-    if (from > cursor) out.push({ from: at(cursor), to: at(from), tone: 'good', title: `${clock(cursor)} to ${clock(from)}: up and linked` });
+    if (from > cursor) out.push({ from: at(cursor), to: at(from), tone: 'good', title: `${clockTime(cursor)} to ${clockTime(from)}: up and linked` });
     out.push({
       from: at(from), to: at(m.to), tone: m.kind === 'down' ? 'bad' : 'warn',
-      title: `${clock(from)} to ${clock(m.to)}: ${m.kind === 'down' ? 'down' : 'up, but Walnut had no link'} (${span(m.to - from)})`,
+      title: `${clockTime(from)} to ${clockTime(m.to)}: ${m.kind === 'down' ? 'down' : 'up, but Walnut had no link'} (${span(m.to - from)})`,
     });
     cursor = m.to;
   }
-  if (end > cursor) out.push({ from: at(cursor), to: 1, tone: 'good', title: `${clock(cursor)} to ${clock(end)}: up and linked` });
+  if (end > cursor) out.push({ from: at(cursor), to: 1, tone: 'good', title: `${clockTime(cursor)} to ${clockTime(end)}: up and linked` });
   return out;
 }
 
@@ -199,7 +196,7 @@ export function sessionsTitle(h: FleetHost, now: number): string {
   }
   // A kept count says how old it is; it stays until the host's next reading replaces it.
   const at = h.sessions.at ?? h.now?.at ?? null;
-  return at !== null && h.now?.stale ? `Counted by the host ${span(now - at)} ago (its last reading)` : 'Counted by the host itself';
+  return at !== null && h.now?.stale ? `Counted by the host ${timeAgo(new Date(at).toISOString(), { long: true, now })} (its last reading)` : 'Counted by the host itself';
 }
 
 function load(share: number | null): Tone {

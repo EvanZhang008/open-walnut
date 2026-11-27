@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { pointInTime } from '../../../web/src/utils/time';
 import { EVIDENCE, expectContentActionsOnly, expectNewTaskOnlyDrafts, home, itemRow, mailItem, markUnreadElsewhere, openLetter, openMarkReadAgain, receipt, runLegacyCreate, sendItems, sendLegacyItems, settledCreate } from './inbox-items-helpers';
 
 test.describe.configure({ mode: 'serial' });
@@ -21,7 +22,7 @@ test('narrow task details expose current observation and use the full item width
   const details = row.locator('.hii-receipt-details'); await details.locator('summary').click();
   await expect(details.locator('.hii-current-task')).toContainText('Current task status');
   await expect(details.locator('.hii-current-task')).toContainText('Completed · Checked');
-  await expect(details).toContainText('Started at');
+  await expect(details).toContainText('Started ');
   const widths = await row.evaluate(el => {
     const card = el as HTMLElement; const details = card.querySelector('.hii-receipt-details') as HTMLElement;
     const current = details.querySelector('.hii-current-task') as HTMLElement;
@@ -38,15 +39,15 @@ test('remote read restriction keeps the successful action history in a separate 
   const sent = await sendItems(request, [mailItem('polish-remote')]);
   await home(page); const row = itemRow(await openLetter(page, sent.subject), 'polish-remote');
   await row.getByRole('button', { name: /^Mark read for/ }).click();
-  await expect(row.locator('.hii-receipts')).toContainText('Marked read at');
+  await expect(row.locator('.hii-receipts')).toContainText('Marked read ');
   const before = await receipt(request, sent.id, 'polish-remote');
   await page.route('**/human-inbox/*/items/**', route => route.continue({ headers: { ...route.request().headers(), 'x-walnut-origin': 'remote-http' } }));
   await row.getByRole('button', { name: /^Check status for/ }).click();
-  await expect(row.locator('.hii-read-status')).toContainText('Marked read previously at');
+  await expect(row.locator('.hii-read-status')).toContainText('Marked read previously, ');
   await expect(row.locator('.hii-read-status')).toContainText('Available on Mac only');
   await expect(row.locator('.hii-action-read')).toBeDisabled();
   await row.locator('.hii-receipt-details summary').click();
-  await expect(row.locator('.hii-read-history')).toContainText(new Date(before.receipts[0].updatedAt).toLocaleString());
+  await expect(row.locator('.hii-read-history')).toContainText(pointInTime(before.receipts[0].updatedAt));
   await page.screenshot({ path: `${EVIDENCE}/${info.project.name}-polish-remote-history.png`, scale: 'css' });
 });
 

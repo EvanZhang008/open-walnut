@@ -8,6 +8,7 @@
  * offers no confirm. Nothing else: a copy that works says nothing here. Pure:
  * ReplicaRemovalGroup renders it, tests read it.
  */
+import { clockTime } from '@/utils/time'
 
 export type ReplicaTargetKind = 'companion' | 'host'
 
@@ -68,11 +69,6 @@ export function rowNoun(kind: string): string {
   return NOUNS[kind] ?? `${kind.replace(/-/g, ' ')} entries`;
 }
 
-function clock(ms: number): string {
-  const d = new Date(ms);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
 function sizeText(kind: string, r: ReplicaRefusal): string {
   const noun = rowNoun(kind);
   return typeof r.local === 'number' && typeof r.removing === 'number'
@@ -89,7 +85,7 @@ export function outdatedText(kind: string, r: ReplicaRefusal): string {
 }
 
 export function armedText(kind: string, armed: { entries: number; expiresAt: number }): string {
-  return `Confirmed: the next copy keeps only this Mac's ${armed.entries} ${rowNoun(kind)} there. The confirmation lapses if they change first, and at ${clock(armed.expiresAt)} at the latest.`;
+  return `Confirmed: the next copy keeps only this Mac's ${armed.entries} ${rowNoun(kind)} there. The confirmation lapses if they change first, and at ${clockTime(armed.expiresAt)} at the latest.`;
 }
 
 /** The rows to show, for the targets of `only` (all when unset), in the order the status lists them. */

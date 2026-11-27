@@ -8,13 +8,14 @@ import { useState } from 'react'
 import { vaultApi, type VaultItem } from '@/api/vault'
 import { useConfirm } from '@/hooks/useConfirm'
 import { TrashIcon } from './pw-icons'
+import { dayDate } from '@/utils/time'
 
 type Passkey = Record<string, unknown>
 const str = (v: unknown) => (typeof v === 'string' && v ? v : '')
 
 function saved(pk: Passkey): string {
   const at = str(pk.creationDate)
-  const when = at ? new Date(at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : ''
+  const when = dayDate(at)
   const from = pk.madeBy === 'walnut' ? 'Saved by Walnut' : 'Imported'
   return when ? `${from} ${when}` : from
 }

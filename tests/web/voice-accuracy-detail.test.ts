@@ -29,6 +29,7 @@ vi.mock('@/utils/view-memory', () => ({ usePageView: (_p: string, _n: string, d:
 import type { CompareEngineRow, CompareTake, CompareTakeDetail } from '../../web/src/api/stt-compare'
 import { DiffText, VoiceAccuracyTakeDetail } from '../../web/src/components/settings/sections/VoiceAccuracyTakeDetail'
 import { VoiceAccuracyTakes } from '../../web/src/components/settings/sections/VoiceAccuracyTakes'
+import { clockTime } from '../../web/src/utils/time'
 
 const GUESS = 'Walnut test take 0: the second one is Tailscale, is the pairing related to it'
 const TEXTS = {
@@ -199,7 +200,7 @@ describe('Voice Accuracy: an opened recording', () => {
       setChecked?.call(input, true)
       input.dispatchEvent(new win.Event('click', { bubbles: true }))
     })
-    const at = new Date('2026-11-18T10:31:00.000Z').toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+    const at = clockTime('2026-11-18T10:31:00.000Z')
     expect(q('va-sent-heading')!.textContent).toBe(`Probably what you sent (matched by text, ${at})`)
     expect(q('va-sent-heading')!.getAttribute('title')).toContain('82% alike')
     // Kept as sent: the trailing space is still there.

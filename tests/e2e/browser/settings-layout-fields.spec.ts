@@ -228,7 +228,7 @@ test('F01: Recent guesses are one row per guess, never drawn over each other', a
   }))
   for (let i = 1; i < boxes.length; i++) expect(boxes[i].top).toBeGreaterThanOrEqual(boxes[i - 1].bottom - 0.5)
   for (const b of boxes) expect(b.chipsInside).toBe(true)
-  await expect(rows.first().locator('.suggest-accuracy-when')).toHaveText(/^Aug 23, \d{1,2}:31\s(AM|PM)$/)
+  await expect(rows.first().locator('.suggest-accuracy-when')).toHaveText(/^Aug 23, (\d{4}, )?\d{1,2}:31\s(AM|PM)$/)
   await page.screenshot({ path: '/tmp/settings-redesign/fx-suggest-accuracy.png' })
 })
 

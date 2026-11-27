@@ -6,31 +6,29 @@
  * only repeated when the meeting runs past midnight.
  */
 import type { MailInviteDetails, MailInviteResponse } from '@/api/mail';
-
-const DAY: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric' };
-const TIME: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
+import { clockTime, dayDate, pointInTime } from '@/utils/time';
 
 function sameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-/** `Thu, Oct 22, 3:00 PM to 4:00 PM`, `Thu, Oct 22, all day`, or '' when the calendar gave no time. */
-export function inviteWhen(details: Pick<MailInviteDetails, 'start' | 'end' | 'allDay'>, locale?: string): string {
+/** `Oct 22, 3:00 PM to 4:00 PM`, `tomorrow, all day`, or '' when the calendar gave no time. */
+export function inviteWhen(details: Pick<MailInviteDetails, 'start' | 'end' | 'allDay'>, now?: number): string {
   if (!details.start) return '';
   const start = new Date(details.start);
-  const day = start.toLocaleDateString(locale, DAY);
+  const opts = now === undefined ? undefined : { now };
   if (details.allDay) {
     // An all-day item ends at the NEXT midnight, so a one-day meeting's end is the following day.
     const last = details.end ? new Date(details.end - 1) : start;
-    return sameDay(start, last) ? `${day}, all day` : `${day} to ${last.toLocaleDateString(locale, DAY)}, all day`;
+    const day = dayDate(start, opts);
+    return sameDay(start, last) ? `${day}, all day` : `${day} to ${dayDate(last, opts)}, all day`;
   }
-  const from = start.toLocaleTimeString(locale, TIME);
-  if (!details.end) return `${day}, ${from}`;
+  const from = pointInTime(start, opts);
+  if (!details.end) return from;
   const end = new Date(details.end);
-  const to = end.toLocaleTimeString(locale, TIME);
   return sameDay(start, end)
-    ? `${day}, ${from} to ${to}`
-    : `${day}, ${from} to ${end.toLocaleDateString(locale, DAY)}, ${to}`;
+    ? `${from} to ${clockTime(end)}`
+    : `${from} to ${pointInTime(end, opts)}`;
 }
 
 /** Where things stand, in the person's own terms. */

@@ -216,10 +216,10 @@ test('N3 N4 N22: the change label reads whole on its own line; a card the user a
   const id = team.idle[1]
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/cards/${id}`, { lane: 'mitigating', summary: 'The leader rewrote this summary after the rollback.' }, leaderHeaders())
   const label = card(pane, id).getByTestId('kanban-card-changed')
-  await expect(label).toHaveText(/^Moved by the leader \d{2}:\d{2} \+1$/, { timeout: 10_000 })
+  await expect(label).toHaveText(/^Moved by the leader \d{1,2}:\d{2} [AP]M \+1$/, { timeout: 10_000 })
   // Round 3 N12: the label takes the foot's one line (cut with a tooltip, `+1` always shown), not a block of its own.
   expect(await label.evaluate((el) => !!el.closest('[data-testid="kanban-card-foot"]') && el.getBoundingClientRect().height > 0 && el.getBoundingClientRect().height <= 18)).toBe(true)
-  expect(await label.getAttribute('title')).toMatch(/^Moved from Investigating by the leader · \d{2}:\d{2}\n\+1 more/)
+  expect(await label.getAttribute('title')).toMatch(/^Moved from Investigating by the leader · \d{1,2}:\d{2} [AP]M\n\+1 more/)
   await expect(label.locator('.kanban-card-foot-change-more')).toBeVisible()
   await card(pane, id).screenshot({ path: `${SHOTS}/${engine}-leader-moved-card.png` })
   await expect(card(pane, addedId).getByTestId('kanban-card-changed')).toHaveCount(0)
@@ -299,11 +299,12 @@ test('N5 N14 N11 N12 C57: Edit waiting on outside a wait lane says why; the lane
   // N11 N12: the parked card in Waiting on others.
   const parked = card(pane, team.waiting)
   await parked.scrollIntoViewIfNeeded()
-  await expect(parked.getByTestId('kanban-card-status')).toHaveText(/^Waiting until (Today|Tomorrow|Sun|Mon|Tue|Wed|Thu|Fri|Sat|[A-Z][a-z]{2} \d{1,2}) \d{2}:\d{2}$/)
+  await expect(parked.getByTestId('kanban-card-status')).toHaveText(/^Waiting until (today |tomorrow |[A-Z][a-z]{2} \d{1,2}(, \d{4})?, )\d{1,2}:\d{2} [AP]M$/)
   const row = parked.getByTestId('kanban-card-parked')
   if (await row.count()) await expect(row).not.toContainText('until')
   const tip = await parked.locator('.kanban-card-active').getAttribute('title')
-  expect(tip ?? '').not.toMatch(/\b(AM|PM)\b/)
+  // The hover gives the whole time, as every hover does (web/src/utils/time.ts fullTime).
+  expect(tip ?? '').toMatch(/^Last activity [A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M$/)
 })
 
 test('N15 N16: a suggestion is one line with both buttons and is not repeated in the foot; the 409 says a readable time', async ({ page }) => {

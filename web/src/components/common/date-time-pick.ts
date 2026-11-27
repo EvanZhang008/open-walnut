@@ -7,6 +7,8 @@
  * now and the picked day still lands on the hour picked.
  */
 
+import { pointInTime } from '@/utils/time';
+
 const pad = (n: number) => String(n).padStart(2, '0');
 
 /** A local day as YYYY-MM-DD. */
@@ -50,51 +52,20 @@ export function localDateTimeIso(ymd: string, hhmm: string): string | null {
   return new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]), t.h, t.m).toISOString();
 }
 
-/** "3:30 PM": the same 12-hour words as the Tomorrow 8 AM / 12 PM / 6 PM chips. */
-export function clockWords(d: Date): string {
-  const h = d.getHours() % 12 || 12;
-  return `${h}:${pad(d.getMinutes())} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
-}
-
-const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-/** "Today 3:30 PM", "Tomorrow 9:00 AM", "Thu Nov 13, 3:30 PM" ("…, 2027" in another year). */
-export function dateTimeWords(iso: string, nowMs = Date.now()): string {
-  const d = new Date(iso);
-  const now = new Date(nowMs);
-  const dayMs = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((dayMs(d) - dayMs(now)) / 86_400_000);
-  if (days === 0) return `Today ${clockWords(d)}`;
-  if (days === 1) return `Tomorrow ${clockWords(d)}`;
-  const year = d.getFullYear() !== now.getFullYear() ? ` ${d.getFullYear()}` : '';
-  return `${DOW[d.getDay()]} ${MONTH[d.getMonth()]} ${d.getDate()}${year}, ${clockWords(d)}`;
-}
-
 /**
- * When a timed snooze runs out, short enough for a closed row or a pill (2026-11-11, the Walnut
- * VP: "Snoozed until Sun 3:30 PM", not "4d"): "Today 3:30 PM", "Tomorrow 9:00 AM", a weekday
- * within the week ("Sun 3:30 PM"), else "Nov 20, 3:30 PM" ("…, 2027" in another year). A
- * date-only value (YYYY-MM-DD, its day's midnight) has no hour to show: null, and the caller
- * keeps its day words.
+ * When a timed snooze runs out, as every screen writes a time (2026-11-11, the Walnut VP:
+ * "Snoozed until 3:30 PM", not "4d"): "today 3:30 PM", "tomorrow 9:00 AM", "Nov 20, 3:30 PM"
+ * ("Nov 20, 2027, ..." in another year). A date-only value (YYYY-MM-DD, its day's midnight) has
+ * no hour to show: null, and the caller keeps its day words.
  */
 export function snoozeWhenWords(value: string, nowMs = Date.now()): string | null {
   if (!value.includes('T')) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  const now = new Date(nowMs);
-  const dayMs = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((dayMs(d) - dayMs(now)) / 86_400_000);
-  if (days === 0) return `Today ${clockWords(d)}`;
-  if (days === 1) return `Tomorrow ${clockWords(d)}`;
-  if (days > 1 && days < 7) return `${DOW[d.getDay()]} ${clockWords(d)}`;
-  const year = d.getFullYear() !== now.getFullYear() ? `, ${d.getFullYear()}` : '';
-  return `${MONTH[d.getMonth()]} ${d.getDate()}${year}, ${clockWords(d)}`;
+  return pointInTime(value, { now: nowMs }) || null;
 }
 
 /**
  * A row's "until ..." words mid-sentence, from snoozeWhenWords or the day words: "until today
- * 1:30 AM", "until Sun 3:30 PM", "until Nov 30, 6:00 PM". Every Home row's waiting and snoozed
+ * 1:30 AM", "until tomorrow 3:30 PM", "until Nov 30, 6:00 PM". Every Home row's waiting and snoozed
  * pill reads this one shape (2026-11-21 words audit: "until Today 1:30", "until 11/30 18:00"
  * and "Apr 9, 2027, 3:30 PM" in one list).
  */

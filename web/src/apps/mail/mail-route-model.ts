@@ -7,7 +7,7 @@
  */
 import type { MailboxDto, MailboxRole, MailMessageDto, MailRouteDto, MailRouteStatus, MailRoutingCoverage } from '@/api/mail';
 import { ORG_MAIN_NODE, orgProjectNode } from '@open-walnut/org-tree';
-import { formatMailDate } from './mail-format';
+import { fullTime, pointInTime } from '@/utils/time';
 
 export interface MailRouteLink { kind: 'task' | 'vp' | 'letter'; id: string }
 
@@ -151,7 +151,7 @@ function withBy(view: MailRouteView, route: MailRouteDto, area?: { name?: string
   const areaName = clean(area?.name);
   const name = named || (areaName ? `the ${areaName} router` : 'a router');
   const lead = route.origin === 'legacy' ? 'Recorded by' : 'Reviewed by';
-  const when = typeof route.at === 'number' ? formatMailDate(route.at) : '';
+  const when = typeof route.at === 'number' ? pointInTime(route.at) : '';
   const routerId = route.router?.available && clean(route.router.id) ? clean(route.router.id) : undefined;
   const text = `${lead} ${name}` + (when ? ` · ${when}` : '');
   return { ...view, title: `${lead} ${name} · ${view.title}`, by: { lead, name, ...(routerId ? { routerId } : {}), ...(when ? { when } : {}), text } };
@@ -168,7 +168,7 @@ function build(
 ): MailRouteView {
   const head = name ? `${lead} ${name}` : lead;
   const text = detail ? `${head} · ${detail}` : head;
-  const when = typeof at === 'number' ? formatMailDate(at) : '';
+  const when = typeof at === 'number' ? fullTime(at) : '';
   const title = [text, extra].filter(Boolean).join(' · ') + (when ? ` (${when})` : '');
   return { status, lead, ...(name ? { name } : {}), link, detail, text, title };
 }

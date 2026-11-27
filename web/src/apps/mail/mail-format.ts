@@ -7,70 +7,63 @@
  */
 import type { MailAddress, MailAttachmentMeta } from '@/api/mail';
 import { formatSize } from '@/utils/format';
-import { timeAgo } from '@/utils/time';
+import { dayDate, fullTime, timeAgo } from '@/utils/time';
 import { cleanAttachmentName, safeFilename } from '../../../../src/integrations/mail/attachment-name';
 
 /** Past this, an age stops answering "when" and the date is what the reader wants. */
 const AGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** The date a stamp older than a week prints: `5 Sep 2026` (the locale's own order). */
-const MAIL_DATE_OPTIONS: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' };
-
-const dateFormats = new Map<string, Intl.DateTimeFormat>();
-
 /**
- * One `Intl.DateTimeFormat` per locale and options, made once and reused.
+ * The day a stamp older than a week prints (`dayDate`: `Nov 20`, `Nov 20, 2025`), kept per local day.
  *
- * `toLocaleDateString(locale, options)` builds a new formatter on every call, and a formatter is
- * the expensive part: the dense grouped inbox's redraw spent 360 to 460 ms of main-thread CPU in
- * `formatMailTime` alone (2026-11-10, a CPU profile of the 3,000 mail draw). With date fields in
- * `options` both produce the same text (`tests/web/mail-format-cached-date.test.ts` compares them).
- *
- * A formatter keeps the locale and time zone the page had when it was made, so the cache is
- * dropped when the browser's language changes and whenever the page comes back into view (the
+ * Every row of the dense grouped inbox asks for one, and building the words is the expensive part
+ * (2026-11-10, a CPU profile of the 3,000 mail draw: 360 to 460 ms of main-thread CPU in
+ * `formatMailTime`, when each call built a new date formatter). `dayDate`'s words depend only on the
+ * stamp's local day and today's, so the cache is keyed by both and a few hundred days serve every row.
+ * It is dropped when the browser's language changes and whenever the page comes back into view (the
  * moment a time zone change, such as a laptop waking up after a flight, can first be seen).
  */
-export function cachedDateFormat(locale: string | undefined, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
-  const key = `${locale ?? ''}\u0000${JSON.stringify(options)}`;
-  let format = dateFormats.get(key);
-  if (!format) {
-    format = new Intl.DateTimeFormat(locale, options);
-    dateFormats.set(key, format);
-  }
-  return format;
-}
+const dayWords = new Map<string, string>();
 
-/** Forget every cached formatter (the next stamp makes a fresh one for the page's locale and zone). */
-export function resetCachedDateFormats(): void {
-  dateFormats.clear();
+const localDay = (ms: number) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+
+/** Forget every cached day (the next stamp makes its words again in the page's zone). */
+export function resetMailDayCache(): void {
+  dayWords.clear();
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('languagechange', resetCachedDateFormats);
+  window.addEventListener('languagechange', resetMailDayCache);
   if (typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resetCachedDateFormats(); });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resetMailDayCache(); });
   }
 }
 
 /**
- * A message's stamp: an age inside the last week, a date beyond it.
+ * A message's stamp: an age inside the last week (`3d ago`), its day beyond it (`Nov 20`).
  *
  * `sentAt` is epoch milliseconds (mail dates are instants). A provider that sent no date at all
  * gets no invented one: an empty string, so the row simply has no stamp.
  */
 export function formatMailTime(sentAt: number): string {
   if (!Number.isFinite(sentAt) || sentAt <= 0) return '';
-  const age = Date.now() - sentAt;
-  if (age >= AGE_WINDOW_MS) return cachedDateFormat(undefined, MAIL_DATE_OPTIONS).format(sentAt);
-  return timeAgo(new Date(sentAt).toISOString());
+  const now = Date.now();
+  if (now - sentAt < AGE_WINDOW_MS) return timeAgo(new Date(sentAt).toISOString(), { now });
+  const key = `${localDay(sentAt)}|${localDay(now)}`;
+  let words = dayWords.get(key);
+  if (words === undefined) {
+    words = dayDate(sentAt, { now });
+    dayWords.set(key, words);
+  }
+  return words;
 }
 
-/** The full local date, for the reader's header. `sentAtHeader` rides its title attribute. */
+/**
+ * The whole stamp (`fullTime`: `Fri, Nov 20, 2026, 9:40 PM`) for the reader's head and an ask's
+ * `Date:` line, and nothing for a provider that sent no date (never the epoch's `Jan 1, 1970`).
+ */
 export function formatMailDate(sentAt: number): string {
-  if (!Number.isFinite(sentAt) || sentAt <= 0) return '';
-  return new Date(sentAt).toLocaleString(undefined, {
-    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+  return Number.isFinite(sentAt) && sentAt > 0 ? fullTime(sentAt) : '';
 }
 
 /** An attachment chip. v1 shows metadata only: nothing here is downloadable yet. */

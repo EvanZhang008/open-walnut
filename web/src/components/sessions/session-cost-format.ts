@@ -1,5 +1,6 @@
 /** Pure formatting for the picker's cost block (SessionCostBlock). */
 import { formatModelName } from '@/utils/model-name';
+import { dayDate } from '@/utils/time';
 import type { SessionCost, SessionCostComparisonRow, SessionCostLine, SessionCostModel, SessionCostRates, SessionCostTier } from '@/api/session-cost';
 
 /** $29.19, $0.42, $0.0031 (small amounts keep two significant digits). */
@@ -90,7 +91,7 @@ export function fmtPriceSource(m: SessionCostModel): string {
   if (!src) return '';
   if (src.kind === 'override') return `your price for ${src.key} (config.yaml usage.prices)`;
   if (src.kind === 'builtin') return `Walnut's built-in table (${src.key})`;
-  const day = src.asOf ? new Date(src.asOf).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  const day = dayDate(src.asOf);
   return `LiteLLM price list (${src.key}${day ? `, ${day}` : ''})`;
 }
 

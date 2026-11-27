@@ -18,6 +18,7 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { HealthErrorLog } from './HealthErrorLog';
 import '@/styles/settings-sections-addons.css';
 import '@/styles/health-monitor.css';
+import { lineStart, pointInTime, timeAgo } from '@/utils/time';
 
 export const HEALTH_BLURB = 'Walnut watches its own health every minute: disk, host links, stalls, slow sends, hung sessions, restarts and every kind of warning or error in its logs. An alarm first tries a safe fix, then files one fix task; only what needs you reaches you.';
 
@@ -31,14 +32,8 @@ const STATE_LABEL: Record<AlarmState, string> = { ALARM: 'Alarm', OK: 'OK', INSU
 /** An alarm's state is a dot and a word: red when it fires, green when clear, grey with no data. */
 const STATE_TONE: Record<AlarmState, NoticeTone> = { ALARM: 'error', OK: 'ok', INSUFFICIENT_DATA: 'muted' };
 
-function ago(ms: number, now: number): string {
-  const m = Math.max(0, Math.round((now - ms) / 60_000));
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m} min ago`;
-  const h = Math.round(m / 60);
-  if (h < 48) return `${h} h ago`;
-  return `${Math.round(h / 24)} days ago`;
-}
+/** How long ago a moment in ms was, as every age reads in a sentence (timeAgo long). */
+const ago = (ms: number, now: number): string => timeAgo(new Date(ms).toISOString(), { long: true, now });
 
 function fmt(v: number | null, unit: string): string {
   if (v === null) return '-';
@@ -146,7 +141,7 @@ function AlarmDetailView({ id, now, onChanged }: { id: string; now: number; onCh
           <ul className="health-list">
             {[...detail.history].reverse().slice(0, 12).map((e) => (
               <li key={e.at}>
-                <span className="health-when">{new Date(e.at).toLocaleString()}</span>
+                <span className="health-when">{lineStart(pointInTime(e.at))}</span>
                 {STATE_LABEL[e.from]} → <b>{STATE_LABEL[e.to]}</b>: {e.reason}
               </li>
             ))}

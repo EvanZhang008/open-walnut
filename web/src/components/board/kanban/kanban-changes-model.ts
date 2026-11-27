@@ -10,6 +10,7 @@ import {
   laneById, type BoardCard, type BoardCardWriter, type BoardKanbanSeenCard, type BoardLane,
 } from '../../../../../src/core/boards/board-lanes';
 import { clockText } from './kanban-time';
+import { lineStart } from '@/utils/time';
 import type { KanbanCardVM } from './kanban-card-model';
 
 export type KanbanChangeKind = 'moved' | 'summary' | 'suggestion' | 'output' | 'new';
@@ -185,7 +186,7 @@ export function changeLog(cards: readonly Pick<KanbanCardVM, 'taskId' | 'change'
   for (const c of cards) {
     for (const item of c.change?.items ?? []) {
       const clock = clockText(item.at, now);
-      out.push({ at: item.at, taskId: c.taskId, kind: item.kind, text: clock ? `${clock} ${item.sentence}` : item.sentence });
+      out.push({ at: item.at, taskId: c.taskId, kind: item.kind, text: clock ? `${lineStart(clock)} ${item.sentence}` : item.sentence });
     }
   }
   const ms = (s: string) => { const t = Date.parse(s); return Number.isFinite(t) ? t : 0; };

@@ -134,7 +134,7 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsid
       out.push({
         key: 'others',
         taskId: null,
-        title: tasksOpen ? `收起这 ${restTotals.length} 个任务` : `其他 ${restTotals.length} 个任务(快碰合并)`,
+        title: tasksOpen ? `Fold these ${restTotals.length} tasks` : `${restTotals.length} other tasks (brief touches merged)`,
         ms: restTotals.reduce((sum, t) => sum + t.ms, 0),
         // Expanded: the merged bars move into the child rows below.
         blocks: tasksOpen ? [] : human.filter((b) => !topIds.has(b.taskId)).map(spanOf),
@@ -169,7 +169,7 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsid
         out.push({
           key: 'outside-others',
           taskId: null,
-          title: appsOpen ? `收起这 ${count} 个 app` : `其他 ${count} 个 app`,
+          title: appsOpen ? `Fold these ${count} apps` : `${count} other apps`,
           ms: restApps.reduce((sum, a) => sum + a.ms, 0) + dropped.ms,
           blocks: appsOpen ? [] : restApps.flatMap((a) => a.blocks.map((b) => ({
             // Distinct taskId per app: two apps' bars must not draw-merge into one.
@@ -185,7 +185,7 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsid
             out.push({
               key: 'outside-dropped',
               taskId: null,
-              title: `还有 ${dropped.apps} 个 app(用时太短,未逐个展开)`,
+              title: `${dropped.apps} more apps (too brief to list one by one)`,
               ms: dropped.ms,
               blocks: [],
               kind: 'outside',
@@ -217,7 +217,7 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsid
         kind: 'device',
         // Every bar in the row is the same device, so name it plus the caveat that
         // makes the bar's width honest.
-        barLabel: () => `${device.deviceName}(Apple 按小时记录,时段内某处)`,
+        barLabel: () => `${device.deviceName} (Apple records by the hour: somewhere in this hour)`,
       })
     }
 
@@ -280,7 +280,7 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsid
                   data-choice-exempt="a lane title that is its own fold button, wearing the DisclosureChevron markup of the host"
                   data-testid={`time-app-lanes-expand-${row.kind}`}
                   aria-expanded={row.expandable.expanded}
-                  title={row.expandable.expanded ? '收起' : `展开 ${row.expandable.count} 行`}
+                  title={row.expandable.expanded ? 'Fold' : `Show ${row.expandable.count} rows`}
                   onClick={row.expandable.toggle}
                 >
                   <FoldChevron open={row.expandable.expanded} inline />

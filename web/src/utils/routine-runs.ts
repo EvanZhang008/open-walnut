@@ -3,10 +3,11 @@
  * 2026-11-08: the daily org reflection did not run and no surface said so.
  */
 import type { RoutineMissedRun, RoutineRunEntry } from '@/api/routines';
+import { clockTime, lineStart, pointInTime } from '@/utils/time';
 
-/** "Sun, Nov 8, 8:00 AM", in this browser's time. */
+/** "Nov 8, 8:00 AM" ("today 8:00 AM"), in this browser's time. */
 export function describeSlotTime(ms: number): string {
-  return new Date(ms).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return pointInTime(ms);
 }
 
 function seconds(ms: number): string {
@@ -17,14 +18,14 @@ function seconds(ms: number): string {
   return `${m} min ${Math.round(s - m * 60)} s`;
 }
 
-/** "Missed Sun, Nov 8, 8:00 AM: Not started: this Mac had no room..." */
+/** "Missed Nov 8, 8:00 AM: Not started: this Mac had no room..." */
 export function describeMissed(m: RoutineMissedRun): string {
   return `Missed ${describeSlotTime(m.slotMs)}: ${m.reason}`;
 }
 
-/** One History row: "Sun, Nov 8, 8:00 AM · failed after 48 s: <error> · will try again 8:01 AM". */
+/** One History row: "Nov 8, 8:00 AM · failed after 48 s: <error> · will try again 8:01 AM". */
 export function describeRunEntry(e: RoutineRunEntry): string {
-  const when = describeSlotTime(e.atMs);
+  const when = lineStart(describeSlotTime(e.atMs));
   const tags: string[] = [];
   if (typeof e.catchUpMs === 'number') tags.push(`catch-up for ${describeSlotTime(e.catchUpMs)}`);
   else if (e.manual) tags.push('Run now');
@@ -38,7 +39,7 @@ export function describeRunEntry(e: RoutineRunEntry): string {
   else verdict = `skipped${e.error ? `: ${e.error}` : e.summary ? `: ${e.summary}` : ''}`;
   if (e.repeats && e.repeats > 1) verdict += ` (${e.repeats} times in a row since ${describeSlotTime(e.firstAtMs ?? e.atMs)})`;
   const retry = typeof e.willRetryAtMs === 'number'
-    ? ` · tries again ${new Date(e.willRetryAtMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+    ? ` · tries again ${clockTime(e.willRetryAtMs)}`
     : '';
   return `${head} · ${verdict}${retry}`;
 }

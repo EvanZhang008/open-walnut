@@ -21,7 +21,7 @@ import type { FocusTier } from '@/api/focus';
 import { isBuiltinTier } from '@/api/focus';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { taskNeedsAction, taskUserState } from '@/utils/session-status';
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import * as ICONS from '../common/Icons';
 import { AgentText } from '../common/AgentText';
 import { DisclosureChevron } from '@/components/controls';
@@ -208,7 +208,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
   const snoozeDate = sectionKey !== 'waiting' ? ''
     : task.user_status ? task.user_status.snoozed?.until ?? ''
     : task.phase !== 'WAITING' ? task.start_date ?? '' : '';
-  // A timed snooze says its hour ("Sun 3:30 PM"), a date-only one its day words.
+  // A timed snooze says its hour ("tomorrow 3:30 PM"), a date-only one its day words.
   const snoozedUntil = snoozeDate ? (snoozeWhenWords(snoozeDate) ?? formatStartDateDisplay(snoozeDate)) : '';
   // Under Waiting / snoozed: why it waits (not started, stopped, a watch, ...). Under Needs you:
   // what to do with it, then what it asks or has to read (2026-11-03, the user: "thridline cna
@@ -300,7 +300,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
         : `Waiting ${untilWords(formatWaitUntil(task.wait_until))}, or until something happens first`}`}
     >
       {/* One line (a project's folds) is narrow: a time today needs no "Today", the title keeps the room. */}
-      <span>{parkClockWords(taskUserState(task) === 'working', twoLine ? formatWaitUntil(task.wait_until) : formatWaitUntil(task.wait_until).replace(/^Today /, ''))}</span>
+      <span>{parkClockWords(taskUserState(task) === 'working', twoLine ? formatWaitUntil(task.wait_until) : formatWaitUntil(task.wait_until).replace(/^today /, ''))}</span>
     </span>
   ) : null;
   // What it asks, line by line with its answers (ActionNeeded): its Needs you line would say the same.
@@ -311,7 +311,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey: drawnIn, handl
   const alsoWorking = !isDone && task.user_status?.working ? <span className="status-card-also-working" data-testid="status-card-also-working">Working</span> : null;
   const inlineReason = twoLine || (wake && !need && reasonText !== 'Snoozed') ? null : shownReason;
   const agoEl = ago ? (
-    <span className="todo-recent-ago" title={isDone && task.completed_at ? `Completed ${new Date(task.completed_at).toLocaleString()}` : recentActivityTitle(activity)}>{ago}</span>
+    <span className="todo-recent-ago" title={isDone && task.completed_at ? `Completed ${fullTime(task.completed_at)}` : recentActivityTitle(activity)}>{ago}</span>
   ) : null;
   const card = (
     <div

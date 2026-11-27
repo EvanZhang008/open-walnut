@@ -37,12 +37,12 @@ describe('sessionKebabMetaRows', () => {
     expect(folder).toMatchObject({ key: 'folder', value: '/work/old', gone: true, title: '/work/old no longer exists on this host' })
   })
 
-  it('hovering a time gives the exact time', () => {
+  it('hovering a time gives the whole time (utils/time.ts fullTime), never seconds', () => {
     // The same text on V8 (Node, Chrome) and JavaScriptCore (bun, WebKit), whose
-    // combined date-time format would say "2026 at 10:14:00 AM".
+    // combined date-time format would say "2026 at 10:14 AM".
     const [, created, updated] = sessionKebabMetaRows(session, NOW)
-    expect(created.title).toBe('Sun, Sep 20, 2026, 10:14:00 AM')
-    expect(updated.title).toBe('Mon, Sep 28, 2026, 4:02:05 PM')
+    expect(created.title).toBe('Sun, Sep 20, 2026, 10:14 AM')
+    expect(updated.title).toBe('Mon, Sep 28, 2026, 4:02 PM')
     expect(`${created.title}${updated.title}`).not.toMatch(/[\u202f\u00a0]/)
   })
 

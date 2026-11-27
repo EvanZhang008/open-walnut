@@ -28,6 +28,7 @@ import { MAX_COMMENT_CHARS, snippetOf } from '@/utils/passage-comments';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { isImeKey } from '@/hooks/usePanelKeyRouter';
 import { log } from '@/utils/log';
+import { pointInTime } from '@/utils/time';
 import type { SessionPassageComment } from '@/types/session';
 import type { SessionCommentsApi } from '@/contexts/SessionCommentsContext';
 import { anchorRectOf, caretAtPoint, pointInRangeRects } from './QuotePinPopover';
@@ -56,12 +57,6 @@ interface Props {
 const EDIT_JUMP_WAIT_MS = 5_000;
 
 interface Marker { id: string; x: number; y: number; sent: boolean; comment: string }
-
-function timeOf(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
 
 export function PassageCommentMarks({ containerRef, comments, panelKey, renderNonce, onRemove, onUpdate, jump, resetKey }: Props) {
   // A plain Quote leaves no mark once sent; a comment does.
@@ -400,7 +395,7 @@ export function PassageCommentMarks({ containerRef, comments, panelKey, renderNo
           <div className="passage-comment-card-head">
             <span>{openItem.comment ? 'Comment' : 'Quote'}</span>
             <span className="passage-comment-card-state">
-              {openItem.sentAt ? `Sent ${timeOf(openItem.sentAt)}` : 'Goes with your next message'}
+              {openItem.sentAt ? `Sent ${pointInTime(openItem.sentAt)}` : 'Goes with your next message'}
             </span>
           </div>
           <div className="passage-comment-card-quote" title={openItem.text}>❝ {snippetOf(openItem.text, 120)}</div>

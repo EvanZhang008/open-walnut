@@ -20,7 +20,7 @@ import { Breakable } from '@/components/common/Breakable';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { APPROVALS_SWITCH_LABEL, listApprovals, type Approval } from '@/api/approvals';
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import { log } from '@/utils/log';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import '@/styles/approvals-ask-row.css';
@@ -121,7 +121,7 @@ function UnaskedList({ off }: { off: boolean }) {
                       {text !== a.what && (<><dt>What</dt><dd>{a.what}</dd></>)}
                       {a.requester.command && (<><dt>Command</dt><dd><code>{a.requester.command}</code></dd></>)}
                       <dt>From</dt><dd>{fromText(a, hostLabel)}</dd>
-                      <dt>When</dt><dd>{same.map((x) => new Date(whenOf(x)).toLocaleString()).join(', ')}</dd>
+                      <dt>When</dt><dd>{same.map((x) => fullTime(whenOf(x))).join('; ')}</dd>
                       {a.detail && (<><dt>Detail</dt><dd><pre>{a.detail}</pre></dd></>)}
                     </dl>
                   </details>

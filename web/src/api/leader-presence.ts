@@ -25,6 +25,8 @@
  * state is "the Mac answers" and nothing renders. Pure: no React, no socket.
  */
 
+import { timeAgo } from '@/utils/time'
+
 export interface LeaderPresenceState {
   /** The Mac answers (also: this console is not behind a host replica at all). */
   answers: boolean
@@ -217,17 +219,9 @@ export function _resetLeaderPresenceForTesting(): void {
   listeners.clear()
 }
 
-/** "just now", "1 min ago", "2 min ago", "3 h ago", "2 days ago"; null when the age is not known. */
+/** The copy's age inside a sentence (timeAgo long): "just now", "2 min ago", "yesterday"; null when it is not known. */
 export function agoText(asOf: number | null, now: number): string | null {
-  if (asOf === null || !(asOf > 0)) return null
-  const s = Math.max(0, Math.round((now - asOf) / 1000))
-  if (s < 45) return 'just now'
-  const m = Math.round(s / 60)
-  if (m < 60) return `${Math.max(1, m)} min ago`
-  const h = Math.round(m / 60)
-  if (h < 24) return `${h} h ago`
-  const d = Math.round(h / 24)
-  return d === 1 ? '1 day ago' : `${d} days ago`
+  return asOf !== null && asOf > 0 ? timeAgo(new Date(asOf).toISOString(), { long: true, now }) : null
 }
 
 /** The quiet line while the Mac is away, or null while it answers. */

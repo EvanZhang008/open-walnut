@@ -22,6 +22,7 @@
  * The box, the toast and the navigation need the app shell; ContentActionsHost registers them.
  */
 import { newTaskDraftText, normalizeContentItem, type ContentItem } from '@open-walnut/content-item';
+import { fullTime } from '@/utils/time';
 import { apiGet, apiPost } from '@/api/client';
 import type { ImageAttachment } from '@/api/chat';
 import { openSessionOnHome } from '@/utils/open-session';
@@ -269,16 +270,10 @@ export async function sendToCeo(raw: ContentItem, note: string, images: readonly
   if (answer.held) throw new Error(`${who === 'the CEO' ? 'The CEO' : who} is waiting on your answer`);
 }
 
-function localTime(iso: string): string {
-  const d = new Date(iso);
-  return Number.isFinite(d.getTime())
-    ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-    : iso;
-}
-
 /** The draft text "New task" fills in (also what a test reads back). */
 export function contentDraftText(raw: ContentItem): string {
-  return newTaskDraftText(itemOf(raw), localTime);
+  // The draft keeps its words: a whole time, never "today", which goes stale.
+  return newTaskDraftText(itemOf(raw), (iso) => fullTime(iso) || iso);
 }
 
 export async function newTaskFromContent(raw: ContentItem): Promise<void> {

@@ -14,18 +14,11 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
 import '@/styles/settings-sections-addons.css';
 import '@/styles/page-use.css';
+import { dayDate, fullTime, timeAgo } from '@/utils/time';
 
 export const PAGE_USE_BLURB = 'How often you open each page and Settings pane on this Mac. Only counts and dates are kept, never what was on the page, and nothing leaves this machine.';
 
 const DAY_MS = 86_400_000;
-
-function relative(iso: string, now: number): string {
-  const days = Math.floor((now - Date.parse(iso)) / DAY_MS);
-  if (days <= 0) return 'today';
-  if (days === 1) return 'yesterday';
-  if (days < 60) return `${days} days ago`;
-  return new Date(iso).toLocaleDateString();
-}
 
 function lastDays(days: Record<string, number>, n: number, now: number): number {
   const cutoff = new Date(now - n * DAY_MS).toISOString().slice(0, 10);
@@ -79,7 +72,7 @@ export function PageUseSection({ corePanes }: { corePanes: ReadonlyArray<PaneNam
         {store && (
           <SettingsGroup
             heading="Opened"
-            footer={`Counting since ${new Date(store.since).toLocaleDateString()}.`}
+            footer={`Counting since ${dayDate(store.since)}.`}
           >
             {opened.length === 0 && <EmptyState title="Nothing counted yet" hint="Open a page and it shows here within a few seconds." />}
             {opened.length > 0 && (
@@ -95,7 +88,7 @@ export function PageUseSection({ corePanes }: { corePanes: ReadonlyArray<PaneNam
                         <td>{place.where}</td>
                         <td>{entry.count}</td>
                         <td>{lastDays(entry.days, 30, now)}</td>
-                        <td>{relative(entry.lastAt, now)}</td>
+                        <td title={fullTime(entry.lastAt)}>{timeAgo(entry.lastAt, { now })}</td>
                       </tr>
                     ))}
                   </tbody>

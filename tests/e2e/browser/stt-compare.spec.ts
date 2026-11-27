@@ -243,7 +243,7 @@ test('summary, a recording opened, a consent ticked, and the phone layout', asyn
   await expect(detail.getByTestId('va-engine-text')).toHaveText(TAKES[0]!.whisper)
   await expect(detail.getByTestId('va-missing-list')).toContainText('the')
   await detail.getByTestId('va-show-sent').click()
-  await expect(detail.getByTestId('va-sent-heading')).toHaveText(/^Probably what you sent \(matched by text, \d\d:\d\d\)$/)
+  await expect(detail.getByTestId('va-sent-heading')).toHaveText(/^Probably what you sent \(matched by text, \d{1,2}:\d\d\s(AM|PM)\)$/)
   await expect(detail.getByTestId('va-engine-text')).toHaveText(TAKES[0]!.a3)
   await detail.getByTestId('va-show-in-use').click()
   // The switch shows the text it picked: In use is the one picked, Probably sent no longer.

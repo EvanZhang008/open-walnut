@@ -3,6 +3,8 @@
  * The server's side is src/web/routes/browser-view-v1.ts; the extension's agent-view.ts.
  */
 
+import { pointInTime } from '../../utils/time';
+
 export interface BrowserViewTab {
   device: string;
   browser: string;
@@ -54,16 +56,6 @@ export const REPLAY_REREAD_MS = 5000;
 export function pictureIndex(steps: readonly Pick<ReplayStep, 'picture'>[], i: number): number {
   for (let j = Math.min(i, steps.length - 1); j >= 0; j--) if (steps[j]?.picture) return j;
   return -1;
-}
-
-/** A step's time: the clock time, with the day when it was not today. */
-export function replayTimeLine(at: string, now: number): string {
-  const d = new Date(at);
-  if (Number.isNaN(d.getTime())) return '';
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const today = new Date(now);
-  const same = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
-  return same ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
 }
 
 /** What a step's icon draws (SessionBrowserReplay.tsx STEP_ICONS). */
@@ -182,9 +174,9 @@ export function spanLine(seconds: number): string {
   return `${Math.round(seconds / 86_400)} d`;
 }
 
-/** A step's time in the list: from the first step (m:ss) while the whole run is under an hour, else its clock time. */
+/** A step's time in the list: from the first step (m:ss) while the whole run is under an hour, else its day and clock. */
 export function stepTimeLine(at: string, first: string, runSeconds: number, now: number): string {
-  if (runSeconds >= 3600) return replayTimeLine(at, now);
+  if (runSeconds >= 3600) return pointInTime(at, { now });
   const s = Math.max(0, Math.round((Date.parse(at) - Date.parse(first)) / 1000));
   if (!Number.isFinite(s)) return '';
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;

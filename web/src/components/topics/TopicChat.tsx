@@ -26,6 +26,7 @@ import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
 import { hasOpenOverlayLayer } from '@/hooks/useOverlayLayer';
 import { isImeKey } from '@/utils/ime-key';
+import { clockTime, lineStart, pointInTime } from '@/utils/time';
 import { usePageView, isBoolean } from '@/utils/view-memory';
 import { authorOf, continuesBlock, nameContext, reachSummary, shortName, topicSubtitle } from './topic-model';
 import { MemberAvatar, StackedAvatars } from './TopicAvatars';
@@ -67,20 +68,6 @@ function useSheetKeys(open: boolean, close: () => void, closeRef: RefObject<HTML
   }, [open, close, closeRef, returnRef]);
 }
 
-function when(at: string): string {
-  const d = new Date(at);
-  if (Number.isNaN(d.getTime())) return '';
-  const today = new Date().toDateString() === d.toDateString();
-  return today
-    ? `Today ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-    : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-}
-
-function clock(at: string): string {
-  const d = new Date(at);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
 /**
  * One message as a chat bubble, the way a group chat app draws it (iMessage, WhatsApp groups): a
  * member's on the left, its avatar beside the first bubble of its block and its name, a small Host
@@ -108,7 +95,7 @@ function Message({ m, topic, cont }: { m: LocalMessage; topic: Topic; cont: bool
       {!human && (
         <span className="topic-msg-gutter">
           {cont
-            ? <time className="topic-msg-clock" dateTime={m.at}>{clock(m.at)}</time>
+            ? <time className="topic-msg-clock" dateTime={m.at}>{clockTime(m.at)}</time>
             : <MemberAvatar who={{ name: who.kind === 'member' ? who.name : '', ...(ref ? { ref } : {}) }} size={32} />}
         </span>
       )}
@@ -121,7 +108,7 @@ function Message({ m, topic, cont }: { m: LocalMessage; topic: Topic; cont: bool
             {context && <span className="topic-msg-context">{context}</span>}
             {!human && who.kind === 'member' && who.member?.role === 'host' && <span className="badge topic-msg-tag">Host</span>}
             {m.via === 'mail' && <span className="badge topic-msg-tag" data-testid="topic-message-mail">Email</span>}
-            <time className="topic-msg-time" dateTime={m.at}>{clock(m.at)}</time>
+            <time className="topic-msg-time" dateTime={m.at}>{clockTime(m.at)}</time>
           </span>
         )}
         <div ref={words} className="topic-msg-bubble" data-testid="topic-message-text">
@@ -209,7 +196,7 @@ export function TopicChat({ topicId, onBack }: { topicId: string; onBack?: () =>
               const cont = !gap && continuesBlock(prev, m);
               prev = m;
               return [
-                gap ? <li key={`t-${m.id}`} className="topic-time" aria-hidden="true"><span>{when(m.at)}</span></li> : null,
+                gap ? <li key={`t-${m.id}`} className="topic-time" aria-hidden="true"><span>{lineStart(pointInTime(m.at))}</span></li> : null,
                 <Message key={m.id} m={m} topic={topic} cont={cont} />,
               ];
             })}

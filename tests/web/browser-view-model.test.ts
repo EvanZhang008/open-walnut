@@ -175,13 +175,13 @@ describe('the Browser replay\'s words (SessionBrowserReplay.tsx)', () => {
     expect(pictureIndex([], 0)).toBe(-1)
   })
 
-  it('gives a step\'s time, with its day when it was not today', async () => {
-    const { replayTimeLine } = await import('../../web/src/components/sessions/browser-view-model')
+  it('gives a long run\'s step its day and clock (utils/time.ts pointInTime), never seconds', async () => {
+    const { stepTimeLine } = await import('../../web/src/components/sessions/browser-view-model')
     const now = new Date(2026, 10, 14, 15, 0, 0).getTime()
-    expect(replayTimeLine(new Date(2026, 10, 14, 14, 3, 22).toISOString(), now)).toMatch(/14|2/)
-    expect(replayTimeLine(new Date(2026, 10, 14, 14, 3, 22).toISOString(), now)).not.toMatch(/Nov/)
-    expect(replayTimeLine(new Date(2026, 10, 12, 9, 0, 0).toISOString(), now)).toMatch(/Nov/)
-    expect(replayTimeLine('not a time', now)).toBe('')
+    const first = new Date(2026, 10, 12, 8, 0, 0).toISOString()
+    expect(stepTimeLine(new Date(2026, 10, 14, 14, 3, 22).toISOString(), first, 7200, now)).toBe('today 2:03 PM')
+    expect(stepTimeLine(new Date(2026, 10, 12, 9, 0, 0).toISOString(), first, 7200, now)).toBe('Nov 12, 9:00 AM')
+    expect(stepTimeLine('not a time', first, 7200, now)).toBe('')
   })
 
   it('the pill offers the replay once no tab is left (SessionBrowserChip.tsx)', async () => {

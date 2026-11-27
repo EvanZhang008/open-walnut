@@ -202,8 +202,8 @@ describe('shortNextRun', () => {
     expect(shortNextRun(undefined, NOW)).toBeNull();
     expect(shortNextRun(NOW + 10 * 60_000, NOW)).toBe('next in 10 min');
     expect(shortNextRun(NOW + 5 * 3_600_000, NOW)).toMatch(/^next at \d/);
-    expect(shortNextRun(NOW + 24 * 3_600_000, NOW)).toMatch(/^tomorrow at \d/);
-    expect(shortNextRun(NOW + 3 * 24 * 3_600_000, NOW)).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) at \d/);
+    expect(shortNextRun(NOW + 24 * 3_600_000, NOW)).toMatch(/^tomorrow \d{1,2}:\d{2}\s[AP]M$/);
+    expect(shortNextRun(NOW + 3 * 24 * 3_600_000, NOW)).toMatch(/^Nov 7, \d{1,2}:\d{2}\s[AP]M$/);
     expect(shortNextRun(NOW + 9 * 24 * 3_600_000, NOW)).toMatch(/^on [A-Z][a-z]{2} \d+$/);
     expect(shortNextRun(NOW + 24 * 3_600_000, NOW, true)).toBe('tomorrow');
   });

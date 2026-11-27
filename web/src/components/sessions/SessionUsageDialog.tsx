@@ -8,6 +8,7 @@ import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey, readDraft } from '@/utils/drafts';
+import { pointInTime } from '@/utils/time';
 import {
   budgetPauseLabel, checkCadence, draftFromUsage, formatUsageCost, parseBudgetLimit,
   reconcileBudgetDraft, remainingAllowance, type BudgetDraft,
@@ -156,7 +157,7 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
               <SessionCostBlock sessionId={sessionId} budgetRow={false} />
             </section>
             <p className="session-usage-hint session-usage-disclaimer">{checkCadence(data)} Estimated from token usage, not an invoice. Requests in flight may pass the limit. Raising or removing a limit does not send a message.</p>
-            {data.checkedAt && <p className="session-usage-hint">Last checked: {new Date(data.checkedAt).toLocaleString()}</p>}
+            {data.checkedAt && <p className="session-usage-hint">Last checked: {pointInTime(data.checkedAt)}</p>}
           </>
         )}
         <footer className="app-modal-actions wn-dialog-foot"><button type="button" className="btn" onClick={onClose}>Close</button></footer>

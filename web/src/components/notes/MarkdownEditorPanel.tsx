@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
-import { timeAgo } from '@/utils/time';
+import { fullTime, lineStart, pointInTime, timeAgo } from '@/utils/time';
 import type { Editor } from '@tiptap/core';
 import { NOTES_PLACEHOLDER, NotesEditor } from './NotesEditor';
 import { NotesFormatToolbar } from './NotesFormatToolbar';
@@ -563,8 +563,8 @@ export function MarkdownEditorPanel({
             <SaveStatusIndicator status={saveStatus} />
             {updatedAt && (
               // A phone reads "Edited 5m ago"; the exact time stays in the title (N2-29).
-              <span className="notes-editor-updated" title={new Date(updatedAt).toLocaleString()}>
-                {isPhoneLayout() ? `Edited ${timeAgo(new Date(updatedAt).toISOString())}` : new Date(updatedAt).toLocaleString()}
+              <span className="notes-editor-updated" title={fullTime(updatedAt)}>
+                {isPhoneLayout() ? `Edited ${timeAgo(new Date(updatedAt).toISOString())}` : lineStart(pointInTime(updatedAt))}
               </span>
             )}
           </div>

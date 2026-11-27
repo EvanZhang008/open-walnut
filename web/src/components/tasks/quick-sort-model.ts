@@ -9,6 +9,7 @@ import type { Task } from '@open-walnut/core';
 import { isHiddenFromTaskLists } from '@open-walnut/org-tree';
 import { taskUserState } from '@/utils/session-status';
 import { parseDateLocal } from '@/components/common/DatePicker';
+import { clockTime, dayDate, lineStart, pointInTime } from '@/utils/time';
 import type { CustomTierDef } from '@/api/focus';
 import { boardMoveIds, homeBoardTier } from './home-board-model';
 import { shownTier } from '@/api/focus';
@@ -228,9 +229,6 @@ export function projectSnoozeTargets(project: SortProject, until: string): Task[
 
 export interface SnoozePreset { id: string; label: string; hint: string; date: string }
 
-const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
 /** Morning of a day, local time: a snooze that runs out at 9:00, not at midnight. A day past the
  *  month's end rolls into the next month, except for a month step (`clampToMonth`): Jan 31 plus a
  *  month is Feb 28, not Mar 3. */
@@ -242,10 +240,9 @@ function morning(y: number, m: number, d: number, clampToMonth = false): Date {
 /** "Check again later" for one ask (core/action-needed.ts): an hour or three from now, before the day presets. */
 export function soonSnoozePresets(nowMs = Date.now()): SnoozePreset[] {
   const at = (h: number) => new Date(nowMs + h * 3_600_000);
-  const hm = (x: Date) => `${x.getHours()}:${String(x.getMinutes()).padStart(2, '0')}`;
   return [
-    { id: 'one-hour', label: 'In 1 hour', hint: hm(at(1)), date: at(1).toISOString() },
-    { id: 'three-hours', label: 'In 3 hours', hint: hm(at(3)), date: at(3).toISOString() },
+    { id: 'one-hour', label: 'In 1 hour', hint: clockTime(at(1)), date: at(1).toISOString() },
+    { id: 'three-hours', label: 'In 3 hours', hint: clockTime(at(3)), date: at(3).toISOString() },
   ];
 }
 
@@ -257,27 +254,22 @@ export function snoozePresets(nowMs = Date.now()): SnoozePreset[] {
   const week = morning(y, m, d + toMonday);
   const month = morning(y, m + 1, d, true);
   const quarter = morning(y, m + 3, d, true);
-  const day = (x: Date) => `${MONTH[x.getMonth()]} ${x.getDate()}`;
+  // A hint is its own cell beside the label: "Next week   Tomorrow" on a Sunday.
+  const day = (x: Date) => lineStart(dayDate(x, { now: nowMs }));
   return [
-    { id: 'tomorrow', label: 'Tomorrow', hint: `${DOW[tomorrow.getDay()]} 9:00`, date: tomorrow.toISOString() },
-    { id: 'next-week', label: 'Next week', hint: `Mon ${day(week)}`, date: week.toISOString() },
+    { id: 'tomorrow', label: 'Tomorrow', hint: clockTime(tomorrow), date: tomorrow.toISOString() },
+    { id: 'next-week', label: 'Next week', hint: day(week), date: week.toISOString() },
     { id: 'next-month', label: 'Next month', hint: day(month), date: month.toISOString() },
     { id: 'three-months', label: 'In 3 months', hint: day(quarter), date: quarter.toISOString() },
   ];
 }
 
-/** When a snooze runs out, in words: "tomorrow 9:00", "Mon Nov 9", "Tue Feb 9 2027". */
+/** When a snooze runs out, in words: "tomorrow 9:00 AM", "Nov 10", "Feb 9, 2027" (a midnight has no clock). */
 export function snoozeUntilText(start: string, nowMs = Date.now()): string {
   const d = parseDateLocal(start);
   if (Number.isNaN(d.getTime())) return start;
-  const now = new Date(nowMs);
-  const time = start.includes('T') && (d.getHours() || d.getMinutes()) ? ` ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}` : '';
-  const dayStart = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((dayStart(d) - dayStart(now)) / DAY_MS);
-  if (days === 0) return `today${time}`;
-  if (days === 1) return `tomorrow${time}`;
-  const year = d.getFullYear() !== now.getFullYear() ? ` ${d.getFullYear()}` : '';
-  return `${DOW[d.getDay()]} ${MONTH[d.getMonth()]} ${d.getDate()}${year}${time}`;
+  const timed = start.includes('T') && (d.getHours() || d.getMinutes());
+  return timed ? pointInTime(d, { now: nowMs }) : dayDate(d, { now: nowMs });
 }
 
 /** Today as YYYY-MM-DD (the calendar's first pickable day). */

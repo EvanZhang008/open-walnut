@@ -111,7 +111,7 @@ const leaderSet = (task: string, body: Record<string, unknown>) =>
 const seenAll = () => call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/kanban-seen`, { cards: 'all' })
 interface SeenPayload { kanban_seen: { at: string; previous_at?: string } | null }
 const seenNow = () => call<SeenPayload>(api, 'GET', `/api/v1/tasks/${team.leader}/board?team=1&fields=kanban`)
-const CLOCK = '\\d{2}:\\d{2}'
+const CLOCK = '\\d{1,2}:\\d{2} [AP]M'
 
 async function cardMenu(page: Page, c: Locator, row: string): Promise<void> {
   await c.hover()
@@ -240,7 +240,8 @@ test('C63: a visit that ends (the Page view) makes what was shown the baseline; 
   await pane.getByTestId('board-view-cards').click()
   await expect.poll(() => chipCount(changed), { timeout: 15_000 }).toBe(0)
   const hm = new Date(after!.at)
-  const clock = `${String(hm.getHours()).padStart(2, '0')}:${String(hm.getMinutes()).padStart(2, '0')}`
+  // The console's one clock (web/src/utils/time.ts clockTime): 12-hour, no leading zero.
+  const clock = `${hm.getHours() % 12 || 12}:${String(hm.getMinutes()).padStart(2, '0')} ${hm.getHours() < 12 ? 'AM' : 'PM'}`
   await expect(changed).toHaveAttribute('title', `Nothing changed since you last looked (${clock})`)
   // A change after the visit counts again (C28 left this card in Mitigating).
   await leaderSet(team.all[11], { lane: 'investigating' })

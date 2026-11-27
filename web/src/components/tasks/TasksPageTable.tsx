@@ -1,5 +1,6 @@
 import { EmptyState } from '@/components/common/EmptyState';
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { fullTime } from '@/utils/time';
 import { MicField, type BoxMicHandle, MicInput } from '@/components/common/BoxMic';
 import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { useDraft } from '@/hooks/useDraft';
@@ -22,7 +23,7 @@ import { sortTasks, groupTasksByProject, type TpSort, type TpSortKey } from './t
 import { ROW_H, GROUP_H, GHOST_H, WINDOW_MIN_ITEMS } from './tasks-table-window';
 import { useTableWindow } from './useTableWindow';
 import {
-  TP_DEFAULT_COLUMNS, visibleColumns, gridTemplate, formatTableTime, formatTableTimeTitle,
+  TP_DEFAULT_COLUMNS, visibleColumns, gridTemplate, formatTableTime,
   type TpColumnDef, type TpColumnId,
 } from './tasks-table-columns';
 import { TasksColumnsMenu } from './TasksColumnsMenu';
@@ -722,7 +723,7 @@ export function TasksPageTable({
 function TableTimeCell({ colId, iso }: { colId: string; iso: string | undefined | null }) {
   const text = useMinuteValue((now) => formatTableTime(iso, now));
   return (
-    <span data-col={colId} className="tp-cell-time" title={formatTableTimeTitle(iso)}>
+    <span data-col={colId} className="tp-cell-time" title={fullTime(iso)}>
       {text || <span className="tp-cell-empty">–</span>}
     </span>
   );

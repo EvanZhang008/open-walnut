@@ -83,16 +83,3 @@ export function typeLabel(t: VaultItemSummary['type']): string {
   return t === 'login' ? 'Login' : t === 'note' ? 'Secure Note' : t === 'card' ? 'Card' : t === 'api_key' ? 'API Key' : 'Identity'
 }
 
-/** A short "3 days ago" for a time. */
-export function ago(iso: string | undefined, now = Date.now()): string {
-  if (!iso) return 'never'
-  const s = Math.max(0, Math.round((now - Date.parse(iso)) / 1000))
-  if (s < 60) return 'just now'
-  const m = Math.round(s / 60)
-  if (m < 60) return `${m} min ago`
-  const h = Math.round(m / 60)
-  if (h < 24) return `${h} h ago`
-  const d = Math.round(h / 24)
-  if (d < 60) return `${d} day${d === 1 ? '' : 's'} ago`
-  return new Date(iso).toLocaleDateString()
-}

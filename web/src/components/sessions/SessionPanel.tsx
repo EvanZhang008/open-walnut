@@ -132,7 +132,7 @@ import { EditableSessionTitle } from './EditableSessionTitle';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useStoreTask, useTaskStoreActions } from '@/contexts/TasksContext';
 import type { FocusTier } from '@/api/focus';
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import { SessionForkButton } from './SessionForkButton';
 import { HEADER_TOOL_CLASS, headerPlanFacts, headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER } from './header-record-gate';
 import { useTaskControlSlot } from './useTaskControlSlot';
@@ -2792,7 +2792,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const sessionFallbackTitle = session?.title || session?.description || session?.slug || null;
   const headerTitle = (session?.taskId ? taskTitle : null) || sessionFallbackTitle;
   const activityAge = shownFullscreen && session?.lastActiveAt ? timeAgo(session.lastActiveAt).replace(/ ago$/, '') : '';
-  const activityTimeTitle = activityAge ? `Last active: ${new Date(session!.lastActiveAt!).toLocaleString()}` : '';
+  const activityTimeTitle = activityAge ? `Last active: ${fullTime(session!.lastActiveAt!)}` : '';
 
   // With its writer: a from-plan session shows another session's plan.
   const planContentValue = useMemo(

@@ -13,6 +13,7 @@ import { SegmentedControl } from '../inputs/SegmentedControl'
 import { saveErrorMessage } from '../settings-pane-context'
 import { BrowserExtensionGroup } from './BrowserExtensionGroup'
 import type { ExtSeen, ExtShipped } from './browser-extension-model'
+import { dayDate } from '@/utils/time'
 
 type SiteMode = 'ask' | 'any'
 export interface BrowserStatus {
@@ -93,7 +94,7 @@ export function BrowserSection() {
           <SettingsRow
             key={s.site}
             label={s.site}
-            help={`Allowed ${new Date(s.addedAt).toLocaleDateString()}`}
+            help={`Allowed ${dayDate(s.addedAt)}`}
             control={<SettingsButton variant="danger" busy={busy === s.site} onClick={() => void save(s.site, { removeSite: s.site })}>Remove</SettingsButton>}
           />
         ))}

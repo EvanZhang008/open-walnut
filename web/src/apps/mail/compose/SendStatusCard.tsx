@@ -8,12 +8,12 @@
  * The server refuses that retry with a 409; this is the half that never offers it.
  */
 import { NoticeClose } from '@/components/common/NoticeClose';
+import { clockTime } from '@/utils/time';
 import { AlertCircleIcon, CheckCircleIcon, ClockIcon, DraftsIcon } from '../mail-icons';
 import { selectMailbox } from '../mail-actions';
 import type { MailComposer } from '../mail-store';
 import {
   canRetry,
-  clockOf,
   statusDetail,
   statusHeadline,
 } from './send-status';
@@ -86,7 +86,7 @@ export function SendStatusCard({ composer, inboxMailboxId, onDiscard }: Props) {
         {status.settledAt && status.phase !== 'sent' && (
           <>
             <dt>Settled</dt>
-            <dd>{clockOf(status.settledAt)}</dd>
+            <dd>{clockTime(status.settledAt)}</dd>
           </>
         )}
       </dl>

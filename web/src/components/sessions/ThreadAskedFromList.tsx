@@ -9,21 +9,10 @@ import { memo, type KeyboardEvent } from 'react';
 import { ThreadStatusDot } from '@/components/sessions/ThreadStatusDot';
 import { ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { DRAFT_ROW_LABEL, type AskedFromRow } from '@/utils/thread-stack-state';
+import { answeredAgo } from '@/components/sessions/ThreadTreeRows';
 
 export type { AskedFromRow };
 export const ASKED_FROM_HEADING = 'Asked from this answer';
-
-/** `12 min ago` style, for the unread row's tooltip. */
-export function relativeAgo(thenMs: number, nowMs: number = Date.now()): string {
-  const s = Math.max(0, Math.round((nowMs - thenMs) / 1000));
-  if (s < 60) return 'just now';
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m} min ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h} hr ago`;
-  const d = Math.round(h / 24);
-  return `${d} day${d === 1 ? '' : 's'} ago`;
-}
 
 interface Props {
   rows: AskedFromRow[];
@@ -68,7 +57,7 @@ export const ThreadAskedFromList = memo(function ThreadAskedFromList({ rows, onO
     <section className="thread-asked-from" aria-label={ASKED_FROM_HEADING}>
       <div className="thread-asked-heading">{ASKED_FROM_HEADING}</div>
       {rows.map((row) => {
-        const tip = row.unread && row.answeredAt ? `Answered ${relativeAgo(row.answeredAt)}` : undefined;
+        const tip = row.unread && row.answeredAt ? answeredAgo(row.answeredAt) : undefined;
         return (
           <div
             key={row.key}

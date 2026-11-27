@@ -21,6 +21,7 @@ import type {
 } from '@/api/mail';
 import { providerIdOf } from '@/api/mail';
 import type { NoticeTone } from '@/components/common/NoticeCard';
+import { clockTime } from '@/utils/time';
 
 /** What the composer pane shows. `composing` means the form, everything else means the card. */
 export type SendPhase = 'composing' | 'waiting' | 'sending' | 'sent' | 'failed' | 'unknown' | 'discarded';
@@ -196,7 +197,7 @@ export function statusHeadline(status: SendStatus): string {
   switch (status.phase) {
     case 'waiting': return 'Waiting for approval on your phone';
     case 'sending': return 'Sending…';
-    case 'sent': return status.settledAt ? `Sent at ${clockOf(status.settledAt)}` : 'Sent';
+    case 'sent': return status.settledAt ? `Sent at ${clockTime(status.settledAt)}` : 'Sent';
     case 'failed': return 'Not sent';
     case 'unknown': return 'Walnut cannot tell whether this was sent';
     case 'discarded': return 'Discarded';
@@ -220,11 +221,6 @@ export function statusDetail(status: SendStatus): string {
     default:
       return '';
   }
-}
-
-/** `HH:MM` in the human's own clock. Mail stamps are instants, never wall time. */
-export function clockOf(at: number): string {
-  return new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
 /** Whether a phase still shows the form rather than the card. */

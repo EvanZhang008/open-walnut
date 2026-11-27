@@ -675,7 +675,7 @@ test('all three timeline views hold up on the dense day', async ({ page }) => {
   // Nineteen seeded tasks plus the taskless iOS chat bucket: six named rows
   // plus fourteen unfolded children.
   await expect(page.getByTestId('time-app-lanes-row-task')).toHaveCount(20)
-  await expect(page.getByTestId('time-app-lanes-expand-others')).toContainText('收起')
+  await expect(page.getByTestId('time-app-lanes-expand-others')).toContainText('Fold')
   await shoot(page, 'views-app-lanes-others-expanded')
   await page.getByTestId('time-app-lanes-expand-others').click()
   await expect(page.getByTestId('time-app-lanes-row-task')).toHaveCount(6)

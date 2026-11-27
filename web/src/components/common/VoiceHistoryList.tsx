@@ -17,19 +17,11 @@ import { visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 import { NoticeStatus } from '@/components/common/NoticeCard';
 import { EmptyState, LoadingState } from '@/components/common/EmptyState';
+import { lineStart, pointInTime } from '@/utils/time';
 import '@/styles/voice-history.css';
 
 
 const REFRESH_MS = 5_000;
-
-/** The time alone for a take from today, the day before it otherwise. */
-function recordedAt(timestamp: string | number): string {
-  const d = new Date(timestamp);
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return d.toDateString() === new Date().toDateString()
-    ? time
-    : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
-}
 
 function CopyIcon() {
   return (
@@ -131,7 +123,7 @@ export function VoiceHistoryList() {
         // Text AND an error: the final pass failed after the draft was kept,
         // so this is the start of what was said. Redo gets the rest.
         const partial = !failed && !!rec.error;
-        const time = rec.timestamp ? recordedAt(rec.timestamp) : '';
+        const time = lineStart(pointInTime(rec.timestamp));
         return (
           // Natural rows, matching the Notifications panel: the whole row is
           // clickable (insert — the overwhelmingly common action), icon

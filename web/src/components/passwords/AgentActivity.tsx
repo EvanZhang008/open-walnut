@@ -12,7 +12,7 @@ import { useMinuteNow } from '@/utils/minute-clock';
 import { vaultApi, VaultApiError, isLockedError, type AgentLogEntry, type AgentPolicy, type AgentsSwitch, type VaultItemSummary } from '@/api/vault'
 import { SiteTile } from './ItemView'
 import { RobotIcon } from './pw-icons'
-import { ago } from './passwords-model'
+import { fullTime, pointInTime, timeAgo } from '@/utils/time'
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel'
 import { Radio } from '@/components/controls'
 import { EmptyState, LoadingState } from '@/components/common/EmptyState'
@@ -26,7 +26,7 @@ export const SWITCH: Array<{ value: AgentsSwitch; label: string; help: string }>
 const USE_TEXT: Record<string, string> = { reveal: 'showed plaintext', env: 'gave it to a command', fill: 'filled it into a page' }
 
 function untilText(until: string | null): string {
-  return until === null ? 'until you revoke it' : `until ${new Date(until).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+  return until === null ? 'until you revoke it' : `until ${pointInTime(until)}`
 }
 
 const REASON: Record<string, string> = {
@@ -160,7 +160,7 @@ export function AgentActivity({ items, onOpen, onLocked }: { items: VaultItemSum
                   <span className="pw-agent-why">{e.purpose ? `“${e.purpose}”` : ''}{e.purpose && e.command ? ' · ' : ''}{e.command && <code>{e.command}</code>}</span>
                 )}
               </span>
-              <span className="pw-agent-when" title={`${new Date(e.at).toLocaleString()}${e.sessionId ? ` · session ${e.sessionId}` : ''}`}>{ago(e.at)}</span>
+              <span className="pw-agent-when" title={`${fullTime(e.at)}${e.sessionId ? ` · session ${e.sessionId}` : ''}`}>{timeAgo(e.at)}</span>
             </div>
           )
         })}

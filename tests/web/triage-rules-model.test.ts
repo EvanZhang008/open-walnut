@@ -1,27 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { pickTasks, provenanceLine, routedLine, senderNeedle, shadowingRule, taskLine } from '../../web/src/components/settings/sections/triage-rules-model';
 
-const at = new Date(2026, 10, 5, 9).getTime();
+// A past year, so the year always shows (dayDate leaves out only this year's).
+const at = new Date(2025, 10, 5, 9).getTime();
 
 describe('routing rule lines in Settings', () => {
   it('says who added or changed it', () => {
-    expect(provenanceLine({ author: { by: 'human' }, createdAt: at, updatedAt: at })).toBe('Added by you · Nov 5');
+    expect(provenanceLine({ author: { by: 'human' }, createdAt: at, updatedAt: at })).toBe('Added by you · Nov 5, 2025');
     // An older rule with no createdBy: its author added it.
     // Changed by the one who added it, the same day: nothing new to say.
-    expect(provenanceLine({ author: { by: 'task', name: 'Walnut VP' }, createdAt: at, updatedAt: at + 60_000 })).toBe('Added by Walnut VP · Nov 5');
-    expect(provenanceLine({ author: { by: 'human' }, createdAt: at, updatedAt: at + 86_400_000 })).toBe('Added by you · Nov 5 · changed by you Nov 6');
+    expect(provenanceLine({ author: { by: 'task', name: 'Walnut VP' }, createdAt: at, updatedAt: at + 60_000 })).toBe('Added by Walnut VP · Nov 5, 2025');
+    expect(provenanceLine({ author: { by: 'human' }, createdAt: at, updatedAt: at + 86_400_000 })).toBe('Added by you · Nov 5, 2025 · changed by you Nov 6, 2025');
     expect(provenanceLine({ author: { by: 'human' }, createdBy: { by: 'task', name: 'Walnut VP' }, createdAt: at, updatedAt: at + 60_000 }))
-      .toBe('Added by Walnut VP · Nov 5 · changed by you Nov 5');
+      .toBe('Added by Walnut VP · Nov 5, 2025 · changed by you Nov 5, 2025');
     // The user toggled a VP's rule: the VP still reads as who added it.
     expect(provenanceLine({ author: { by: 'human' }, createdBy: { by: 'task', name: 'Walnut VP' }, createdAt: at, updatedAt: at + 86_400_000 }))
-      .toBe('Added by Walnut VP · Nov 5 · changed by you Nov 6');
-    expect(provenanceLine({ author: { by: 'task' }, createdAt: at, updatedAt: at })).toBe('Added by a Walnut task · Nov 5');
+      .toBe('Added by Walnut VP · Nov 5, 2025 · changed by you Nov 6, 2025');
+    expect(provenanceLine({ author: { by: 'task' }, createdAt: at, updatedAt: at })).toBe('Added by a Walnut task · Nov 5, 2025');
   });
 
   it('says what it routed last', () => {
     expect(routedLine({})).toBe('Nothing routed yet');
-    expect(routedLine({ routedCount: 1, recent: [{ at, item: 'Your offer' }] })).toBe('Routed 1 item, last "Your offer" · Nov 5');
-    expect(routedLine({ routedCount: 3, recent: [{ at, item: 'Weekly' }] })).toBe('Routed 3 items, last "Weekly" · Nov 5');
+    expect(routedLine({ routedCount: 1, recent: [{ at, item: 'Your offer' }] })).toBe('Routed 1 item, last "Your offer" · Nov 5, 2025');
+    expect(routedLine({ routedCount: 3, recent: [{ at, item: 'Weekly' }] })).toBe('Routed 3 items, last "Weekly" · Nov 5, 2025');
   });
 
   it('warns when the task is gone or complete', () => {

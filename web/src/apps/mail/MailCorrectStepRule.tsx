@@ -8,6 +8,7 @@
 import { useId } from 'react';
 import { Radio } from '@/components/controls';
 import { LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import { dayDate, lineStart } from '@/utils/time';
 import {
   COPY,
   matchesLine,
@@ -39,10 +40,6 @@ export interface StepRuleProps {
   onSave: () => void;
   onReload: () => void;
   onRetryLoad: () => void;
-}
-
-function shortDate(at: number): string {
-  return new Date(at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function OptionRow(props: StepRuleProps & { option: RuleOption; name: string }) {
@@ -96,7 +93,7 @@ function OptionRow(props: StepRuleProps & { option: RuleOption; name: string }) 
             <li key={`${sample.accountId}/${sample.messageId}`} className="mail-correct-sample" data-testid="mail-correct-sample">
               <span className="mail-correct-sample-sender">{sample.sender}</span>
               <span className="mail-correct-sample-subject wn-title">{sample.subject || '(no subject)'}</span>
-              <span className="mail-correct-sample-meta">{shortDate(sample.at)} · {props.groupLabel(sample.currentGroup)}</span>
+              <span className="mail-correct-sample-meta">{lineStart(dayDate(sample.at))} · {props.groupLabel(sample.currentGroup)}</span>
             </li>
           ))}
         </ul>

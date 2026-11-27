@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { EmptyState } from '@/components/common/EmptyState';
+import { fullTime, timeAgo } from '@/utils/time';
 import { ICON_FILE } from '@/components/common/Icons';
 import { MarkdownEditorPanel } from '@/components/notes/MarkdownEditorPanel';
 import { useFieldContent } from '@/hooks/useFieldContent';
@@ -27,20 +28,6 @@ interface MemoryContentPanelProps {
 function formatPath(p: string): string {
   if (p === 'MEMORY.md' || p === 'USER.md') return `${STANDING_STORES[p].label} / ${p}`;
   return p.split('/').join(' / ');
-}
-
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) return 'just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 7) return `${diffDay}d ago`;
-  return d.toLocaleDateString();
 }
 
 /**
@@ -118,7 +105,7 @@ export function MemoryContentPanel({
       <div className="memory-content-header">
         <div className="memory-content-header-left">
           <span className="memory-content-path">{formatPath(path)}</span>
-          {updatedAt && <span className="memory-content-time">{formatTime(updatedAt)}</span>}
+          {updatedAt && <span className="memory-content-time" title={fullTime(updatedAt)}>{timeAgo(updatedAt)}</span>}
         </div>
       </div>
       <MarkdownEditorPanel

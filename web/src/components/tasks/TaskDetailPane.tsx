@@ -21,7 +21,7 @@ import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { keptLine, syncStanding } from './private-task-model';
 import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
 import { resolveSessionRecordStatus, sessionStatusStore } from '@/stores/session-status-store';
-import { timeAgo } from '@/utils/time';
+import { fullTime, lineStart, timeAgo } from '@/utils/time';
 import { taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { CopyableId } from '../common/CopyableId';
 import { DatePicker } from '../common/DatePicker';
@@ -51,7 +51,6 @@ const PRIORITY_TEXT: Record<string, string> = {
   backlog: '~ Backlog',
 };
 
-const fullDate = (iso?: string) => (iso ? new Date(iso).toLocaleString() : undefined);
 
 interface TaskDetailPaneProps {
   task: Task;
@@ -304,7 +303,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
           <Fact label="Start"><DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" bare /></Fact>
           <Fact label="Due"><DatePicker date={task.due_date} onChange={handleDateChange} label="Due" bare /></Fact>
           {task.phase === 'WAITING' && task.wait_until && (
-            <Fact label={taskUserState(task) === 'working' ? 'Checks back' : 'Waiting until'} testId="task-detail-wait-until">{formatWaitUntil(task.wait_until)}</Fact>
+            <Fact label={taskUserState(task) === 'working' ? 'Checks back' : 'Waiting until'} testId="task-detail-wait-until">{lineStart(formatWaitUntil(task.wait_until))}</Fact>
           )}
           {/* Plugin facts (walnut.ui.slot 'task.meta'), e.g. the time this task took. */}
           <PluginSlots
@@ -326,8 +325,8 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenTriageForTask, o
             {/* A task kept local in a project that syncs says why, in one line (core/private-tasks/). */}
             {keptText && <div className="tdp-row-sub tdp-kept-local" data-testid="task-detail-kept-local">{keptText}</div>}
           </Fact>
-          {task.created_at && <Fact label="Created" title={fullDate(task.created_at)}>{timeAgo(task.created_at)}</Fact>}
-          {task.updated_at && <Fact label="Updated" title={fullDate(task.updated_at)}>{timeAgo(task.updated_at)}</Fact>}
+          {task.created_at && <Fact label="Created" title={fullTime(task.created_at)}>{timeAgo(task.created_at)}</Fact>}
+          {task.updated_at && <Fact label="Updated" title={fullTime(task.updated_at)}>{timeAgo(task.updated_at)}</Fact>}
           <Fact label="ID"><CopyableId id={task.id} label="" /></Fact>
           </div>
         </aside>

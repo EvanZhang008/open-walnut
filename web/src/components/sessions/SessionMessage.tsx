@@ -80,6 +80,7 @@ import { KebabVerticalIcon } from '@/components/common/PhoneIcons';
 import { computeLineDiff, editDiffIsLarge, toolCardKind, toolDescription, toolInputSummary } from '@open-walnut/tool-header-text';
 import { DisclosureButton, DisclosureChevron } from '@/components/controls';
 import { EngineSignInErrorLine, parseNotSignedIn } from './EngineSignInNote';
+import { clockTime, fullTime } from '@/utils/time';
 
 // ── Edit Diff View ──
 
@@ -284,14 +285,17 @@ interface SessionMessageProps {
   onFileOpen?: (path: string, line?: number) => void;
 }
 
-// One formatter for every message: toLocaleTimeString builds a new one per call, and each
-// draw of a chat formats every message's time (the largest single cost of a send's redraw).
-let timeFormat: Intl.DateTimeFormat | null = null;
+// Each message's clock is written once: clockTime builds a formatter per call, and each draw
+// of a chat formats every message's time (the largest single cost of a send's redraw).
+const clockCache = new Map<string, string>();
 function formatTime(ts: string): string {
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return '';
-  timeFormat ??= new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' });
-  return timeFormat.format(d);
+  let s = clockCache.get(ts);
+  if (s === undefined) {
+    s = clockTime(ts);
+    if (clockCache.size >= 5000) clockCache.clear();
+    clockCache.set(ts, s);
+  }
+  return s;
 }
 
 /** Muted collapsed "Thinking ›" row — same visual language as merged tool
@@ -1690,7 +1694,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
             className="btn btn-icon msg-more-btn"
             aria-label="Message actions"
             aria-haspopup="menu"
-            title={timestamp ? new Date(timestamp).toLocaleString() : undefined}
+            title={timestamp ? fullTime(timestamp) : undefined}
             onClick={(e) => { e.stopPropagation(); rowMenu.open(e, undefined); }}
           >
             <KebabVerticalIcon size={16} />

@@ -11,6 +11,7 @@ import { KeyIcon, LockIcon } from './pw-icons'
 import { CopyButton as SharedCopyButton } from '@/components/common/CopyButton'
 import { Checkbox } from '@/components/controls'
 import { log } from '@/utils/log'
+import { fullTime } from '@/utils/time'
 import { unlockFootText } from './unlock-words'
 import type { UnlockWords } from '@/plugins/passwords-unlock-store'
 import { unlockRefusalText } from '../../../../src/core/vault/unlock-retry'
@@ -313,7 +314,7 @@ function RecoverFlow({ status, onBack, onKit, onBusy }: { status: VaultStatus; o
 
 export function downloadRecoveryKit(kit: RecoveryKit): void {
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
-  const when = new Date().toLocaleString()
+  const when = fullTime(new Date())
   const html = `<!doctype html><meta charset="utf-8"><title>Walnut Passwords recovery kit</title>
 <style>body{font:15px -apple-system,system-ui,sans-serif;max-width:640px;margin:40px auto;color:#1d1d1f}h1{font-size:24px}.k{font:20px ui-monospace,Menlo,monospace;letter-spacing:1px;padding:14px 18px;border:2px solid #1d1d1f;border-radius:10px;margin:12px 0}.box{border:1px dashed #999;border-radius:10px;height:56px;margin:8px 0}small{color:#666}</style>
 <h1>Walnut Passwords recovery kit</h1>

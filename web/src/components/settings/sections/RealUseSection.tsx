@@ -16,7 +16,8 @@ import { SettingsLoadingRow, SettingsNotice } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
 import { SegmentedControl } from '../inputs/SegmentedControl';
-import { isUsageRange, recordedText, stamp, summaryOf } from './real-use-model';
+import { isUsageRange, recordedText, summaryOf } from './real-use-model';
+import { pointInTime } from '@/utils/time';
 import { HEALTH_PATH, PageErrorsBlock, RequestsBlock, ToolsBlock } from './RealUseTables';
 import { NotesBlock, WatchesBlock } from './RealUseWatches';
 import '@/styles/settings-sections-addons.css';
@@ -47,7 +48,7 @@ function Summary({ view }: { view: UsageWatchView }) {
         {item(s.alarms, s.alarms === 1 ? 'alarm' : 'alarms', s.alarms > 0)}
       </p>
       <p className="ru-meta">
-        All hosts (every session's MCP tools and walnut CLI reach this Walnut) · {stamp(view.from)} to {stamp(Math.min(view.to, view.now))}
+        All hosts (every session's MCP tools and walnut CLI reach this Walnut) · {pointInTime(view.from, { now: view.now })} to {pointInTime(Math.min(view.to, view.now), { now: view.now })}
         {recorded && ` · ${recorded}`}
       </p>
     </>

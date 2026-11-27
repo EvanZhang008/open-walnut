@@ -11,6 +11,7 @@ import { buildReviewMessage, buildCommentMessage } from './diffPrefill';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { ICON_REFRESH, ICON_WARNING } from '@/components/common/Icons';
 import { log } from '@/utils/log';
+import { fullTime, lineStart, pointInTime } from '@/utils/time';
 import '@/styles/header-fit.css';
 import { NoticeClose } from '@/components/common/NoticeClose';
 
@@ -42,14 +43,6 @@ export function snapshotLabel(s: TurnSnapshot, all?: TurnSnapshot[]): string {
     return from ? `Restored to ${snapshotLabel(from)}` : 'Restored';
   }
   return `Turn ${s.n}`;
-}
-
-function timeOf(at: number): string {
-  const d = new Date(at);
-  const today = new Date();
-  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  if (d.toDateString() === today.toDateString()) return time;
-  return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`;
 }
 
 function filesLine(s: TurnSnapshot): string {
@@ -286,10 +279,10 @@ export function SessionTurnsView({ sessionId, sessionCwd, sessionHost, onComment
                     className="turns-row"
                     onClick={() => setSelected({ n: s.n, path: null })}
                     aria-current={isSel ? 'true' : undefined}
-                    title={new Date(s.at).toLocaleString()}
+                    title={fullTime(s.at)}
                   >
                     <span className={`turns-row-title wn-title turns-kind-${s.kind}`}>{snapshotLabel(s, snapshots)}</span>
-                    <span className="turns-row-time">{timeOf(s.at)}</span>
+                    <span className="turns-row-time">{lineStart(pointInTime(s.at))}</span>
                     <span className="turns-row-files">{filesLine(s)}</span>
                     {s.capture === 'tracked-only' && (
                       <span className="turns-row-note" title="This repository had more untracked files than a snapshot takes, so only tracked files were recorded.">tracked files only</span>
@@ -328,7 +321,7 @@ export function SessionTurnsView({ sessionId, sessionCwd, sessionHost, onComment
             {snap && (
               <div className="turns-main-head" data-fit-header="">
                 <span className="turns-main-title" data-fit-title="">{snapshotLabel(snap, snapshots)}</span>
-                <span className="turns-main-time" data-fit-sub="">{timeOf(snap.at)}</span>
+                <span className="turns-main-time" data-fit-sub="">{lineStart(pointInTime(snap.at))}</span>
                 <button
                   type="button"
                   className="btn btn-sm turns-restore-btn"

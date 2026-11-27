@@ -17,7 +17,7 @@ import type { ProcessStatus } from '@/types/session';
 import { NEEDS_CATEGORY_LABELS, USER_STATE_LABELS, needsLineOf, storedUserState } from '@open-walnut/user-status';
 import type { BoardSignal, LiveStatus } from '../board-overview-model';
 import { STALE_AFTER_MS, type KanbanPromptRequest } from './kanban-contract';
-import { absoluteText, agoText, clockText, durationText, latestIso } from './kanban-time';
+import { absoluteText, agoText, clockText, durationText, latestIso, waitText } from './kanban-time';
 import { cardChange, cutTitle, footOf, writerLead, writerText, type KanbanCardChange, type KanbanFootChange } from './kanban-changes-model';
 import type { TaskThreadState } from '@open-walnut/thread-groups';
 import { threadCardStatus } from './kanban-thread-status';
@@ -178,7 +178,7 @@ export interface KanbanCardInput {
   thread?: TaskThreadState;
 }
 
-const defaultWaitUntil = (iso: string) => new Date(iso).toLocaleString();
+const defaultWaitUntil = (iso: string) => waitText(iso);
 
 /**
  * Who wrote a card field, read only from what the server stored with it: the user's words open on

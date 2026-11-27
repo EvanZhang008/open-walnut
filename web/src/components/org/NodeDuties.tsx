@@ -10,6 +10,7 @@ import { fetchOrgDuties, setOrgDuty, type OrgDuty } from '@/api/org';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
 import { log } from '@/utils/log';
 import { UnavailableState } from '@/components/common/EmptyState';
+import { pointInTime } from '@/utils/time';
 
 type Caps = NonNullable<Task['org_duties']>;
 
@@ -17,7 +18,7 @@ const errText = (err: unknown) => (err instanceof Error ? err.message : String(e
 
 function stamp(row: Caps[string] | undefined): string {
   if (!row) return 'Off until you turn it on.';
-  const when = new Date(row.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const when = pointInTime(row.at);
   const who = row.by && row.by !== 'human' ? (row.by_name ?? 'an agent') : 'you';
   return `Turned ${row.on ? 'on' : 'off'} by ${who}, ${when}.`;
 }

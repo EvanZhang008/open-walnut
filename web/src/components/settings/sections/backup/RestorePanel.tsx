@@ -17,6 +17,7 @@ import { saveErrorMessage } from '../../settings-pane-context'
 import { apiGet, apiPost } from '@/api/client'
 import { fmtBytes, type BackupDestinationConfig } from './backup-model'
 import { EmptyState } from '@/components/common/EmptyState';
+import { fullTime, lineStart, pointInTime } from '@/utils/time';
 
 export interface RestoreStatus {
   running: boolean
@@ -71,12 +72,6 @@ interface Props {
   /** Told when "Switch and restart" starts (and if it fails): the pane is out of reach meanwhile. */
   onRestarting?: (on: boolean) => void
 }
-
-/** When a backup was made; to the second when another one shares its minute. */
-const whenOf = (iso: string, seconds = false): string =>
-  new Date(iso).toLocaleString(undefined, {
-    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}),
-  })
 
 export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, destLabel, others = [], pendingSwitch, switchError, switchDone, onSwitchChanged, canRestart, onRestarting }: Props) {
   const sources = dest ? [{ label: destLabel ?? 'In use', dest }, ...others] : []
@@ -254,11 +249,11 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
     )
   }
 
-  // One time format for the whole list: to the second when any two share a minute.
-  const listSeconds = !!items && items.some((a) => items.some((b) => b.id !== a.id && whenOf(b.createdAt) === whenOf(a.createdAt)))
   const home = dataDir ?? '~/.open-walnut'
   const swap = restore?.targetDir ? swapCommands(home, restore.targetDir, restore.finishedAt) : null
   // A result shown stands in for the Restore row (Done brings it back): one row, not two.
+  // One time format for the whole list: to the second when any two backups share a minute.
+  const listSeconds = !!items && items.some((a) => items.some((b) => b.id !== a.id && pointInTime(b.createdAt) === pointInTime(a.createdAt)))
   const resultRow = !!shownResult && !items && !pendingSwitch
   return (
     <>
@@ -309,8 +304,8 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
                 onChange={() => setPicked(it.id)}
                 rowClassName="backup-restore-item"
                 label={(
-                  <span className="backup-restore-when">
-                    {whenOf(it.createdAt, listSeconds)}
+                  <span className="backup-restore-when" title={fullTime(it.createdAt)}>
+                    {lineStart(pointInTime(it.createdAt, { seconds: listSeconds }))}
                     {/* The list is newest first; the newest one says so, not only by its place. */}
                     {(it.isLatest || i === 0) && <span className="badge settings-tag backup-restore-latest" data-testid="backup-restore-latest">Latest</span>}
                     {/* Both kinds are kept at one destination: the encrypted ones need their recovery key. */}
@@ -402,7 +397,7 @@ export function RestorePanel({ dest, restore, dataDir, blocked, blockedWhy, dest
             label={restore.source ? `Restored from ${restore.source}` : 'Restored'}
             wide
             data-testid="backup-restore-done"
-            help={<>{(restore.doneFiles ?? 0).toLocaleString()} files ({fmtBytes(restore.doneBytes)}){restore.snapshotAt ? ` from the backup of ${whenOf(restore.snapshotAt)}` : ''}, all checked, in <code>{restore.targetDir}</code>. Nothing changes until you use them.</>}
+            help={<>{(restore.doneFiles ?? 0).toLocaleString()} files ({fmtBytes(restore.doneBytes)}){restore.snapshotAt ? ` from the backup made ${pointInTime(restore.snapshotAt)}` : ''}, all checked, in <code>{restore.targetDir}</code>. Nothing changes until you use them.</>}
             control={
               <span className="settings-inline-pair">
                 <SettingsButton onClick={dismiss} data-testid="backup-restore-dismiss">Done</SettingsButton>

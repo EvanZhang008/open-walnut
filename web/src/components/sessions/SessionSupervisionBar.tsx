@@ -1,6 +1,7 @@
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { useCallback, useContext, useEffect, useSyncExternalStore } from 'react';
 import { useMinuteValue } from '@/utils/minute-clock';
+import { clockTime } from '@/utils/time';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useActiveSessionCron } from '@/hooks/useSessionStatus';
@@ -141,7 +142,7 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
       <div className="session-supervision-footer">
         <span>{STARTUP_LABELS[value?.startup ?? 'unavailable']}</span>
         {requestedEnabled !== null && <span role="status">Saving…</span>}
-        {supervision?.retryAt && !stopPending && <span>Retry after {new Date(supervision.retryAt).toLocaleTimeString()}</span>}
+        {supervision?.retryAt && !stopPending && <span>Retry after {clockTime(supervision.retryAt)}</span>}
         {stopPending || failedStop ? (
           <button type="button" disabled={writing} onClick={onRetryStop}>{failedStop ? 'Stop again' : 'Retry stop'}</button>
         ) : supervision?.state === 'blocked' && value?.available && !unavailable && !archived ? (

@@ -149,16 +149,20 @@ const shiftDay = (value: number, delta: number): [number, number, number] => {
   const [y, m, d] = localDay(value);
   return localDay(new Date(y, m, d + delta, 12).getTime());
 };
-const timeText = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const timeText = (at: number) => new Date(at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/[\u202f\u00a0]/g, ' ');
 
 /** The prefix the calendar says it should be, computed without the helper's day math. */
-const expectedPrefix = (at: number, now: number): 'Today' | 'Tomorrow' | 'Yesterday' | 'dated' => {
+const expectedPrefix = (at: number, now: number): 'today' | 'tomorrow' | 'yesterday' | 'dated' => {
   const day = localDay(at);
-  if (sameDay(day, localDay(now))) return 'Today';
-  if (sameDay(day, shiftDay(now, 1))) return 'Tomorrow';
-  if (sameDay(day, shiftDay(now, -1))) return 'Yesterday';
+  if (sameDay(day, localDay(now))) return 'today';
+  if (sameDay(day, shiftDay(now, 1))) return 'tomorrow';
+  if (sameDay(day, shiftDay(now, -1))) return 'yesterday';
   return 'dated';
 };
+/** The dated form (web/src/utils/time.ts pointInTime): month and day, the year only when it is not now's. */
+const datedText = (at: number, now: number) => new Date(at).toLocaleDateString('en-US', {
+  month: 'short', day: 'numeric', ...(localDay(at)[0] !== localDay(now)[0] ? { year: 'numeric' } : {}),
+});
 
 const assertClock = (at: number, now: number, where: string) => {
   const out = formatCronClock(at, now);
@@ -167,10 +171,7 @@ const assertClock = (at: number, now: number, where: string) => {
   const prefix = expectedPrefix(at, now);
   const detail = `${where} out=${JSON.stringify(out)} expected=${prefix}`;
   if (prefix === 'dated') {
-    // Deliberately no year in the dated form (see formatCronClock) — weekday, month, day only.
-    const weekday = new Date(at).toLocaleDateString(undefined, { weekday: 'short' });
-    expect(out.startsWith(weekday), `${detail} weekday=${weekday}`).toBe(true);
-    expect(out, detail).toBe(`${new Date(at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, ${time}`);
+    expect(out, detail).toBe(`${datedText(at, now)}, ${time}`);
   } else {
     expect(out, detail).toBe(`${prefix} ${time}`);
   }
@@ -198,9 +199,9 @@ describe('formatCronClock across timezones', () => {
       const now = yearStart + Math.floor(random() * 365 * DAY);
       const at = now + Math.round((random() * 2 - 1) * 10 * DAY);
       const out = assertClock(at, now, `seed=${CLOCK_SEED} zone=${zone} case=${i} at=${at} now=${now}`);
-      if (out.startsWith('Today')) today++;
-      else if (out.startsWith('Tomorrow')) tomorrow++;
-      else if (out.startsWith('Yesterday')) yesterday++;
+      if (out.startsWith('today')) today++;
+      else if (out.startsWith('tomorrow')) tomorrow++;
+      else if (out.startsWith('yesterday')) yesterday++;
       else dated++;
     }
     // All four branches must actually be exercised, or the sweep proved nothing.
@@ -236,28 +237,26 @@ describe('formatCronClock across timezones', () => {
     assertClock(midnight + 2 * HOUR + 30 * MINUTE, noon, `${zone} transition-hour`);
     assertClock(nextMidnight - 1, midnight, `${zone} end-of-day`);
     assertClock(nextMidnight, nextMidnight - 1, `${zone} rollover`);
-    expect(formatCronClock(nextMidnight, nextMidnight - 1).startsWith('Tomorrow'), `${zone} rollover label`).toBe(true);
+    expect(formatCronClock(nextMidnight, nextMidnight - 1).startsWith('tomorrow'), `${zone} rollover label`).toBe(true);
   });
 
   it('resolves midnight, year and far-future edges', () => {
     vi.stubEnv('TZ', 'America/Los_Angeles');
     const lastMs = new Date(2026, 8, 15, 23, 59, 59, 999).getTime();
     const nextMidnight = new Date(2026, 8, 16, 0, 0, 0, 0).getTime();
-    expect(formatCronClock(nextMidnight, lastMs)).toBe(`Tomorrow ${timeText(nextMidnight)}`);
-    expect(formatCronClock(lastMs, new Date(2026, 8, 15, 0, 0, 0, 0).getTime())).toBe(`Today ${timeText(lastMs)}`);
-    expect(formatCronClock(new Date(2026, 8, 15, 0, 0, 0, 0).getTime(), lastMs)).toMatch(/^Today /);
+    expect(formatCronClock(nextMidnight, lastMs)).toBe(`tomorrow ${timeText(nextMidnight)}`);
+    expect(formatCronClock(lastMs, new Date(2026, 8, 15, 0, 0, 0, 0).getTime())).toBe(`today ${timeText(lastMs)}`);
+    expect(formatCronClock(new Date(2026, 8, 15, 0, 0, 0, 0).getTime(), lastMs)).toMatch(/^today /);
 
     const newYearsEve = new Date(2026, 11, 31, 22, 0).getTime();
     const newYearsDay = new Date(2027, 0, 1, 1, 0).getTime();
-    expect(formatCronClock(newYearsDay, newYearsEve)).toBe(`Tomorrow ${timeText(newYearsDay)}`);
-    expect(formatCronClock(newYearsEve, newYearsDay)).toBe(`Yesterday ${timeText(newYearsEve)}`);
+    expect(formatCronClock(newYearsDay, newYearsEve)).toBe(`tomorrow ${timeText(newYearsDay)}`);
+    expect(formatCronClock(newYearsEve, newYearsDay)).toBe(`yesterday ${timeText(newYearsEve)}`);
 
-    // 366 days out falls through to the dated form. The year is NOT shown, as designed:
-    // "Wed, Sep 15" for a run over a year away. Cron jobs expire in days, so this is fine.
+    // 366 days out falls through to the dated form, with its year: "Sep 16, 2027, 9:23 AM".
     const nextYear = new Date(2027, 8, 16, 9, 23).getTime();
     const farOut = formatCronClock(nextYear, new Date(2026, 8, 15, 9, 23).getTime());
-    expect(farOut).toBe(`${new Date(nextYear).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, ${timeText(nextYear)}`);
-    expect(farOut).not.toContain('2027');
+    expect(farOut).toBe(`Sep 16, 2027, ${timeText(nextYear)}`);
   });
 });
 
@@ -378,7 +377,7 @@ describe('cronPillTitle matrix', () => {
     'renders %s with %s exactly, at every job count',
     (_name, _runName, over, label, run) => {
       const { now, nextRunAt, jobs } = fixture();
-      const tail = run === null ? '' : ` Next run Tomorrow 9:23 AM (in 21h 23m).`;
+      const tail = run === null ? '' : ` Next run tomorrow 9:23 AM (in 21h 23m).`;
       for (const count of counts) {
         const rest = count - 1;
         const more = rest === 0 ? '' : ` ${rest} more job${rest === 1 ? '' : 's'}.`;

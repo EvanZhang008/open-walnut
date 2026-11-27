@@ -161,7 +161,7 @@ test('C32 C33: calendar accounts are checklists with live counts, Refresh now ke
   await expect(master).toHaveAttribute('aria-checked', 'true')
   // 3 days ago reads as a weekday, never "ago".
   const refreshed = page.getByTestId('calendar-last-refreshed')
-  await expect(refreshed.locator('.settings-row-help')).toHaveText(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2}:\d{2}\s?(AM|PM), 212 events cached$/)
+  await expect(refreshed.locator('.settings-row-help')).toHaveText(/^(Today |Yesterday |[A-Z][a-z]{2} \d{1,2}, )\d{1,2}:\d{2}\s?(AM|PM), 212 events cached$/)
 
   await expect(page.getByTestId('calendar-account-group')).toHaveCount(3)
   await expect(countOf(page, 'Personal')).toHaveText('10 of 14 shown')
@@ -204,7 +204,7 @@ test('C32 C33: calendar accounts are checklists with live counts, Refresh now ke
     && help.y < during.y + during.height && during.y < help.y + help.height
   expect(overlaps).toBe(false)
   await expect(button).toHaveText('Refresh now', { timeout: 10_000 })
-  await expect(refreshed.locator('.settings-row-help')).toHaveText(/^\d{1,2}:\d{2}\s?(AM|PM), 230 events cached$/)
+  await expect(refreshed.locator('.settings-row-help')).toHaveText(/^Today \d{1,2}:\d{2}\s?(AM|PM), 230 events cached$/)
   await shot(page, 'calendar')
 })
 
@@ -580,9 +580,9 @@ test('C65 C83: every account state has its tag, providers sit under their base, 
   // Each account lives on its plugin's page: state, tag, and the one thing that helps.
   const expected: Array<[string, string, string, () => Promise<void>]> = [
     ['north-sync', 'connected', 'Signed in', async () => {
-      // Connected: absolute time, never "ago" (C83).
+      // Connected: a day and its clock (pointInTime), never "ago" (C83).
       const northHelp = accountRow(page, 'north-sync').locator('.settings-row-help')
-      await expect(northHelp).toHaveText(/^Renews automatically, last synced \d{1,2}:\d{2}\s?(AM|PM)$/)
+      await expect(northHelp).toHaveText(/^Renews automatically, last synced (today|yesterday) \d{1,2}:\d{2}\s(AM|PM)$/)
       await expect(page.getByTestId('plugin-detail')).not.toContainText(' ago')
       // No ON tag on the page: the switch says it.
       await expect(page.getByTestId('plugin-detail').locator('.settings-tag', { hasText: /^(ON|On)$/ })).toHaveCount(0)

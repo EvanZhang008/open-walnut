@@ -11,14 +11,15 @@
  * menu renders (TIER_OPTIONS, PRIORITY_OPTIONS, the app's custom tier labels):
  * never a second copy here, or the chip and the menu stop agreeing.
  *
- * Dates use formatDateTimeDisplay, the "confirm what the AI understood" format
- * (Today, Tomorrow, a weekday within the week, M/D beyond), with ONE exception
- * kept local (formatDraftDate): exactly 7 days ahead reads M/D, since on a
- * Thursday "Due Thu" cannot say whether it means today or next week.
+ * Dates read as every other screen writes them (utils/time.ts): a date alone as a
+ * day ("today", "tomorrow", "Oct 1"), a date with a time as a day and its clock
+ * ("tomorrow 5:00 PM"). No weekday names, so a Thursday never says "Due Thu" for
+ * a day a week out (C64).
  */
 
 import { shownTier } from '@/api/focus';
-import { formatDateTimeDisplay, parseDateLocal } from '@/components/common/DatePicker';
+import { parseDateLocal } from '@/components/common/DatePicker';
+import { clockTime, dayDate, pointInTime } from '@/utils/time';
 import { DEFAULT_META, PRIORITY_OPTIONS, TIER_OPTIONS, tierColor } from './task-meta-constants';
 import type { DraftColumn, DraftOwnedField, DraftTaskField } from './draft-column';
 import { isAiOwned } from './draft-ownership';
@@ -86,17 +87,11 @@ function dayDiff(d: Date, now: Date): number {
   return Math.round((b - a) / 86_400_000);
 }
 
-/**
- * formatDateTimeDisplay, except exactly 7 days ahead reads M/D (C64). `now` only
- * drives that check; the shared formatter reads the clock itself and is not
- * changed, so every other caller keeps its output.
- */
+/** A draft's date: a day alone ("Oct 1"), or a day and its clock when it has a time ("Oct 1, 9:30 AM"). */
 export function formatDraftDate(iso: string, now: Date = new Date()): string {
-  const full = formatDateTimeDisplay(iso);
   const d = parseDateLocal(iso);
-  if (isNaN(d.getTime()) || dayDiff(d, now) !== 7) return full;
-  const space = full.indexOf(' ');
-  return `${d.getMonth() + 1}/${d.getDate()}${space >= 0 ? full.slice(space) : ''}`;
+  const opts = { now: now.getTime() };
+  return iso.includes('T') ? pointInTime(d, opts) : dayDate(d, opts);
 }
 
 /** Same-calendar-day check for a start/end range. */
@@ -110,12 +105,6 @@ function isPast(iso: string, now: Date): boolean {
   if (isNaN(d.getTime())) return false;
   if (iso.includes('T')) return d.getTime() < now.getTime();
   return dayDiff(d, now) < 0;
-}
-
-/** The time half of a formatted datetime ("Fri 15:00" gives "15:00"). */
-function timeOf(formatted: string): string {
-  const space = formatted.indexOf(' ');
-  return space >= 0 ? formatted.slice(space + 1) : '';
 }
 
 /** Tier words: built-in from TIER_OPTIONS, custom from the app's labels. */
@@ -214,7 +203,8 @@ function startChip(draft: DraftColumn, now: Date): DraftDecisionChip | null {
     const s = parseDateLocal(start);
     const e = parseDateLocal(end);
     const endText = formatDraftDate(end, now);
-    const endShort = !isNaN(s.getTime()) && !isNaN(e.getTime()) && sameDay(s, e) ? timeOf(endText) : endText;
+    // A same-day end says only its clock; a same-day end with no time adds nothing.
+    const endShort = !isNaN(s.getTime()) && !isNaN(e.getTime()) && sameDay(s, e) ? (end.includes('T') ? clockTime(e) : '') : endText;
     if (endShort) {
       range = `${startText} to ${endShort}`;
       titleValue = `${startText}, ends ${endShort}`;

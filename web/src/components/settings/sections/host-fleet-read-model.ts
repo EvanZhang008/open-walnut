@@ -7,17 +7,7 @@
  * (tests/web/host-fleet-read-model.test.ts).
  */
 import type { FleetHost } from '@/api/hosts-fleet';
-
-/** "just now", "1 min ago", "12 min ago", "3 h ago", "2 d ago". */
-export function readAgo(at: number, now: number): string {
-  const s = Math.max(0, Math.round((now - at) / 1000));
-  if (s < 60) return 'just now';
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m} min ago`;
-  const h = Math.floor(m / 60);
-  if (h < 48) return `${h} h ago`;
-  return `${Math.floor(h / 24)} d ago`;
-}
+import { timeAgo } from '@/utils/time';
 
 /** A card with readings (a live read, or a server older than the cache, sends no readAt: read). */
 export function isRead(h: FleetHost): boolean {
@@ -86,14 +76,14 @@ export function newestRead(hosts: FleetHost[]): number | null {
 export function readLabel(h: FleetHost, now: number): string | null {
   if (h.readAt === null) return 'Not read yet';
   if (typeof h.readAt !== 'number') return null;
-  return `Read ${readAgo(h.readAt, now)}`;
+  return `Read ${timeAgo(new Date(h.readAt).toISOString(), { long: true, now })}`;
 }
 
 /** Why the last read of a host failed, and how old what the card shows is; null when it did not. */
 export function readFailure(h: FleetHost, now: number): string | null {
   if (!h.readError) return null;
   const why = h.readError.replace(/[.\s]*$/, '');
-  const shown = typeof h.readAt === 'number' ? ` Showing what it read ${readAgo(h.readAt, now)}.` : '';
+  const shown = typeof h.readAt === 'number' ? ` Showing what it read ${timeAgo(new Date(h.readAt).toISOString(), { long: true, now })}.` : '';
   return `Could not read it: ${why}.${shown}`;
 }
 

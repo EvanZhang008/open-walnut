@@ -4,6 +4,7 @@
  * missing; a missing one says why in plain words instead of a dash.
  */
 import type { FleetBucket, FleetHost } from '@/api/hosts-fleet';
+import { clockTime, fullTime, pointInTime, timeAgo } from '@/utils/time';
 
 export interface FleetRow { key: string; label: string; value: string; tone?: 'good' | 'warn' | 'bad' | 'muted'; title?: string }
 
@@ -67,7 +68,7 @@ export function dayTone(b: FleetBucket): 'good' | 'warn' | 'bad' | 'none' {
 /** Buckets end at the time of the reading, so a cell is named by the 24 hours (or the span) it ends. */
 export function dayTitle(b: FleetBucket, bucketMinutes: number): string {
   const end = new Date(b.start + bucketMinutes * 60_000);
-  const day = end.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const day = pointInTime(end);
   const head = `${span(bucketMinutes * 60_000)} to ${day}`;
   if (!b.minutes) return `${head}: no record yet`;
   return `${head}: up ${pct(b.up / b.minutes, 1)}, linked ${pct(b.linked / b.minutes, 1)}`;
@@ -127,8 +128,6 @@ export function canDoRow(h: FleetHost): FleetRow | null {
  */
 type FleetLauncher = NonNullable<NonNullable<FleetHost['daemon']>['launcher']>;
 
-const clock = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
 /**
  * The launcher on the Session helper row: a switch under way in the value, and in the tooltip the version
  * it runs, the one it goes back to, and its last put-back (in the value too while it is a day old).
@@ -138,11 +137,11 @@ export function launcherWords(l: FleetLauncher | null | undefined, now: number):
   const r = l.lastRollback;
   const recent = r && now - r.at < 24 * 3_600_000;
   const phase = l.phase === 'trial' ? `trying ${l.current}`
-    : l.phase === 'probation' ? `watching ${l.current}${l.watchedUntil ? ` until ${clock(l.watchedUntil)}` : ''} (goes back to ${l.good} if it fails)` : null;
-  const value = phase ?? (recent ? `went back from ${r.from} ${span(now - r.at)} ago` : null);
+    : l.phase === 'probation' ? `watching ${l.current}${l.watchedUntil ? ` until ${clockTime(l.watchedUntil)}` : ''} (goes back to ${l.good} if it fails)` : null;
+  const value = phase ?? (recent ? `went back from ${r.from} ${timeAgo(new Date(r.at).toISOString(), { long: true, now })}` : null);
   const title = [
     `\nKept running by its launcher: runs ${l.current}, goes back to ${l.good} if a new version fails`,
-    r ? `\nLast went back from ${r.from} on ${new Date(r.at).toLocaleString()}: ${r.reason}` : '',
+    r ? `\nLast went back from ${r.from} on ${fullTime(r.at)}: ${r.reason}` : '',
   ].join('');
   return { value, title };
 }
@@ -154,7 +153,7 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
   if (h.now) {
     const n = h.now;
     const parts = [span(n.uptimeSec * 1000), n.load ? `load ${n.load[0]}` : null].filter(Boolean);
-    rows.push({ key: 'now', label: 'Up for', value: parts.join(', ') + (n.stale ? ` (last reading, ${span(now - n.at)} ago)` : ''), tone: n.stale ? 'muted' : undefined });
+    rows.push({ key: 'now', label: 'Up for', value: parts.join(', ') + (n.stale ? ` (last reading, ${timeAgo(new Date(n.at).toISOString(), { long: true, now })})` : ''), tone: n.stale ? 'muted' : undefined });
   } else {
     rows.push({ key: 'now', label: 'Up for', tone: 'muted', value: h.daemon && !h.daemon.vitals ? 'Its session helper is older than this view (it updates on the next connect)' : h.connection.connected ? 'No reading yet' : 'Not connected' });
   }

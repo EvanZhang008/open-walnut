@@ -20,6 +20,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import '@/styles/org-rail.css';
 import { MenuCaret } from '@/components/controls';
+import { pointInTime } from '@/utils/time';
 
 /** Tomorrow, the first day a date-only snooze can start (YYYY-MM-DD, local). */
 function tomorrow(): string {
@@ -28,15 +29,9 @@ function tomorrow(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** When a snoozed thread comes back, as a person says it: "today, 3:30 PM", "tomorrow, 9:00 AM", "Tue, Nov 24, 12:00 AM". Pure. */
+/** When a snoozed thread comes back, as every time reads: "today 3:30 PM", "tomorrow 9:00 AM", "Nov 24, 12:00 AM". Pure. */
 export function backAt(until: string, now: number): string {
-  const d = new Date(until);
-  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  const day = new Date(now);
-  if (day.toDateString() === d.toDateString()) return `today, ${time}`;
-  day.setDate(day.getDate() + 1);
-  if (day.toDateString() === d.toDateString()) return `tomorrow, ${time}`;
-  return `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${time}`;
+  return pointInTime(until, { now });
 }
 
 /** The card's line while it is put aside. */

@@ -9,6 +9,7 @@ import { ItemConfirmation } from './ItemConfirmation';
 import { ItemTaskSelector } from './ItemTaskSelector';
 import { clearItemDraft, rememberInboxReturn, useItemDraft } from './item-drafts';
 import { taskPath } from '@/utils/task-path';
+import { lineStart } from '@/utils/time';
 import { AgentText } from '@/components/common/AgentText';
 
 export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false, onNavigate, sender }: {
@@ -63,7 +64,7 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
     <div className="hii-summary"><AgentText compact host={sender?.host} sessionId={sender?.sessionId} unknownSource={sender?.unknownSource ?? (!sender?.sessionId && sender?.host === undefined)} text={item.summary || 'Email summary unavailable'} /></div>
     <div className="hii-source"><span>Mail</span><span>{accountText(item, duplicateLabels)}</span>
       <span>{item.display?.sender?.name || item.display?.sender?.address || 'Sender unavailable'}</span>
-      <span>{mailDateText(item.display?.sentAt)}</span>
+      <span>{lineStart(mailDateText(item.display?.sentAt))}</span>
       {canOpenMail && item.source?.account && item.source?.message && !damaged
         ? <button type="button" className="btn btn-link hib-row-btn" aria-label={`Open email for ${item.subject}`} title="Open this original email"
           onClick={() => onNavigate(`/mail?${new URLSearchParams({ account: item.source.account, message: item.source.message, readOnly: '1' })}`)}>Open email</button>

@@ -87,16 +87,19 @@
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ESC[c]; }); }
 
-  function pad(n) { return n < 10 ? '0' + n : String(n); }
-  function hhmm(d) { return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
-  /** HH:MM today, with the date on any other day. */
+  /**
+   * "9:40 PM" today, "Nov 20, 9:40 PM" on another day ("Nov 20, 2025, 9:40 PM" in another year):
+   * the console's clockTime / pointInTime words (web/src/utils/time.ts), which this frame cannot import.
+   */
   function when(ts) {
     var d = new Date(ts);
     if (isNaN(d.getTime())) return '';
     var now = new Date();
-    if (d.toDateString() === now.toDateString()) return hhmm(d);
-    var day = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-    return day + (d.getFullYear() !== now.getFullYear() ? ' ' + d.getFullYear() : '') + ' ' + hhmm(d);
+    var clock = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/[\u202f\u00a0]/g, ' ');
+    if (d.toDateString() === now.toDateString()) return clock;
+    var day = d.toLocaleDateString('en-US', d.getFullYear() !== now.getFullYear()
+      ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' });
+    return day + ', ' + clock;
   }
 
   /** "key:Label,key:Label" → [{ key, label }]; an empty or broken list falls back. */

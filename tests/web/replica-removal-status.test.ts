@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { replicaRemovalRows, refusedText, type ReplicasStatusResponse } from '../../web/src/components/settings/sections/replica-removal-status.js'
+import { clockTime } from '../../web/src/utils/time.js'
 
 const refusal = { error: 'manifest_removes_most_rows', at: 1, entries: 3, keys: 'abcdef012345', local: 100, removing: 97 }
 
@@ -51,7 +52,7 @@ describe('the rows of removals to confirm', () => {
     const [row] = replicaRemovalRows(s)
     expect(row.state).toBe('armed')
     expect(row.confirm).toBeUndefined()
-    expect(row.text).toBe('Confirmed: the next copy keeps only this Mac\'s 3 tasks there. The confirmation lapses if they change first, and at 09:05 at the latest.')
+    expect(row.text).toBe(`Confirmed: the next copy keeps only this Mac's 3 tasks there. The confirmation lapses if they change first, and at ${clockTime(expiresAt)} at the latest.`)
   })
 
   it('each section shows its own followers: hosts in Remote Hosts, the companion in Cloud', () => {

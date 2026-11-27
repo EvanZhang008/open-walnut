@@ -16,13 +16,13 @@ import type { CompareEngineRow, CompareTake } from '@/api/stt-compare';
 import { ModalOverlayOwner, useModalOverlay } from '@/hooks/useModalOverlay';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { ICON_CLOSE } from '@/components/common/Icons';
-import { usageTime } from './UsageTables';
+import { pointInTime } from '@/utils/time';
 import { showEngineRow } from './VoiceAccuracyEngines';
 import { VoiceAccuracyTakeDetail } from './VoiceAccuracyTakeDetail';
 
 /** When a recording was made, how long it is, and where (the row's first line, the dialog's title). */
 export function whenOf(take: CompareTake): string {
-  const parts = [usageTime(take.at)];
+  const parts = [pointInTime(take.at)];
   if (take.durationSec) parts.push(`${Math.round(take.durationSec)} s`);
   if (take.source === 'phone') parts.push('Phone');
   return parts.join(' · ');

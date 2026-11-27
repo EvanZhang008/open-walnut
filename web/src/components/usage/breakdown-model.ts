@@ -4,6 +4,7 @@
  * as "Other". Long periods go by week so the curve stays readable.
  */
 import type { CostGroup, CostLine } from '@/api/usage';
+import { dayDate, type TimeWordsOptions } from '@/utils/time';
 
 export type BreakdownId = 'agent' | 'model' | 'project' | 'host' | 'account' | 'kind' | 'token';
 export type Granularity = 'day' | 'week' | 'month';
@@ -38,6 +39,13 @@ const FIXED_SLOT: Partial<Record<BreakdownId, Record<string, number>>> = {
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 export function dayLabel(date: string): string {
   return `${MONTHS[Number(date.slice(5, 7)) - 1]} ${Number(date.slice(8, 10))}`;
+}
+
+/** A `YYYY-MM-DD` day as every other day reads ("Sep 16", "yesterday"), read in local time. */
+export function usageDay(day: string, opts?: TimeWordsOptions): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(day);
+  return dayDate(d, opts) || day;
 }
 
 const DAY = 86_400_000;

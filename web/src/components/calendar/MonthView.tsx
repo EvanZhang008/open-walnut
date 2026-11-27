@@ -12,6 +12,7 @@ import { useDragGesture } from '@/hooks/useDragGesture';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { formatDateOnly, monthGridRange, sameDay } from '@/utils/calendar-date';
+import { monthDayShort } from '@/utils/calendar-grid-labels';
 import type { CalendarItem } from './calendar-items';
 import { CalendarChip } from './CalendarChip';
 import type { CreateSeed } from './QuickCreatePopover';
@@ -115,7 +116,7 @@ const MonthDayCell = memo(function MonthDayCell({
           onNavigateDay(dayStr);
         }}
       >
-        {day.getDate() === 1 ? `${day.toLocaleString('en', { month: 'short' })} ${day.getDate()}` : day.getDate()}
+        {day.getDate() === 1 ? monthDayShort(day) : day.getDate()}
       </button>
       <div className="cal-month-chips">
         {visible.map((it) => (

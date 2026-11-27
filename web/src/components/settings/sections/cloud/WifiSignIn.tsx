@@ -29,6 +29,7 @@ import { SignInWays } from './SignInWays';
 import { formatSignInCode } from '@/components/common/sign-in-code';
 import '@/styles/browser-access.css';
 import '@/styles/devices-ways.css';
+import { clockTime } from '@/utils/time';
 
 /** The link that opens Walnut at `origin` and signs that browser in with `code`. */
 export function wifiSignInLink(origin: string, code: string): string {
@@ -96,7 +97,7 @@ export function WifiSignInRow({ origin }: { origin: string }) {
   const address = origin.replace(/^https?:\/\//, '').replace(/\/+$/, '');
   const PLAIN = 'Plain http: anyone on the same Wi-Fi can see that browser\'s traffic, so use it only on a network you trust, and sign it out below when done.';
   const PLAIN_SHORT = 'Plain http, so only on a network you trust.';
-  const until = code ? new Date(code.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  const until = code ? clockTime(code.expiresAt) : '';
   return (
     <>
       <SettingsRow

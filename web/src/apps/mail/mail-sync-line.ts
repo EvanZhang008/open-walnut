@@ -24,7 +24,7 @@
  * sentence that is already on screen.
  */
 import type { MailAccountDto, MailboxDto } from '@/api/mail';
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import { accountsNotSyncing, smartPairs } from './mail-smart';
 import {
   SMART_ROLE,
@@ -234,7 +234,7 @@ export function syncLineFor(input: MailSyncLineInput): MailSyncLine | null {
 function titleFor(input: MailSyncLineInput, scope: SyncScope, at: number | undefined): string {
   const head = at === undefined
     ? 'Nothing has been checked yet'
-    : `Last checked ${new Date(at).toLocaleString()}`;
+    : `Last checked ${fullTime(at)}`;
   const detailAccounts = scope.smart ? scope.accounts : input.accounts;
   if (detailAccounts.length < 2) return head;
   const clauses = detailAccounts.map((account) => {

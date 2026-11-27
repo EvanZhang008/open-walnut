@@ -1,6 +1,7 @@
 import { META_LINE } from '@/utils/meta-line';
 import { useMemo, useState } from 'react';
 import { useMinuteValue } from '@/utils/minute-clock';
+import { formatDateOnly } from '@/utils/calendar-date';
 import { SettingsGroup } from '@/components/settings/SettingsSection';
 import { SegmentedControl } from '@/components/settings/inputs/SegmentedControl';
 import { usePersistentState } from '@/hooks/usePersistentState';
@@ -8,7 +9,7 @@ import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import type { CostLine, CostReport } from '@/api/usage';
 import { UsageBreakdownChart, UsageSparkline } from './UsageBreakdownChart';
 import {
-  autoGranularity, buildBreakdown, coverageOf, dayLabel, STALE_AFTER_MS,
+  autoGranularity, buildBreakdown, coverageOf, STALE_AFTER_MS, usageDay,
   type BreakdownId, type Bucket, type Granularity,
 } from './breakdown-model';
 
@@ -49,8 +50,6 @@ function totalTokens(line: CostLine): number {
 
 function pct(v: number): string { return v > 0 && v < 0.1 ? '<0.1%' : `${v.toFixed(v < 10 ? 1 : 0)}%`; }
 
-const fullDay = (d: string) => `${dayLabel(d)}, ${d.slice(0, 4)}`;
-
 /** One line about how much of the period Walnut holds, host by host when they started on different days. */
 function coverageLine(report: CostReport, days: string[], stillReading: boolean, hostName: (h: string) => string): string {
   const byFrom = (x: { from: string }, y: { from: string }) => x.from.localeCompare(y.from);
@@ -59,11 +58,11 @@ function coverageLine(report: CostReport, days: string[], stillReading: boolean,
   if (!own.length && !imported.length) return 'Nothing stored yet. Update now reads every host.';
   const ownFrom = own[0]?.from ?? '', latest = own[own.length - 1]?.from ?? '';
   const each = own.length && ownFrom !== latest
-    ? own.map((s) => `${hostName(s.host)} from ${fullDay(s.from)}`).join(', ') : `from ${fullDay(ownFrom)}`;
+    ? own.map((s) => `${hostName(s.host)} from ${usageDay(s.from)}`).join(', ') : `from ${usageDay(ownFrom)}`;
   const parts: string[] = [];
   if (imported.length && ownFrom && days[0] && days[0] < ownFrom) {
     // Days before Walnut recorded usage, brought in from a bill: whole-account totals.
-    parts.push(`Before ${fullDay(ownFrom)}: imported from ${hostName(imported[0].host)}, counted for the whole account, with no sessions or projects.`);
+    parts.push(`Before ${usageDay(ownFrom)}: imported from ${hostName(imported[0].host)}, counted for the whole account, with no sessions or projects.`);
     if (days[0] < imported[0].from) parts.push('Nothing earlier in it.');
     parts.push(`Recorded by Walnut${own.length > 1 && ownFrom !== latest ? ':' : ''} ${each}.`);
   } else if (days[0] && days[0] < latest) {
@@ -94,7 +93,7 @@ export function UsageBreakdownCard({ report, days, loading, onPick }: {
   const stillReading = !!report.collection?.running || oldest === undefined || readLongAgo;
   const storedFrom = (report.stored ?? []).map((s) => s.from).sort()[0];
   const ownFrom = (report.stored ?? []).filter((s) => !s.imported).map((s) => s.from).sort()[0];
-  const today = new Date().toLocaleDateString('en-CA');
+  const today = formatDateOnly(new Date());
   const coverage = data.buckets.map((b) => coverageOf(b, storedFrom, stillReading && b.end >= today, ownFrom));
   const noun = BREAKDOWNS.find((b) => b.value === breakdown)!.noun;
   const rows = open ? data.rows : data.rows.slice(0, VISIBLE);

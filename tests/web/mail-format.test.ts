@@ -15,6 +15,7 @@ import {
   senderLabel,
   truncatedNotice,
 } from '../../web/src/apps/mail/mail-format';
+import { dayDate } from '../../web/src/utils/time';
 
 const NOW = Date.parse('2026-09-05T12:00:00Z');
 
@@ -39,12 +40,10 @@ describe('formatMailTime', () => {
   it('reads as a date once the age stops being useful', () => {
     at(NOW);
     const old = NOW - 40 * 86_400_000;
-    // Compared against the same locale call rather than a literal: the branch is what matters,
-    // and the month name depends on the machine's locale data.
-    expect(formatMailTime(old)).toBe(
-      new Date(old).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }),
-    );
-    expect(formatMailTime(old)).not.toContain('ago');
+    // The day as every screen writes it (dayDate): this year's carries no year, an older one does.
+    expect(formatMailTime(old)).toBe(dayDate(old, { now: NOW }));
+    expect(formatMailTime(old)).toMatch(/^[A-Z][a-z]{2} \d{1,2}$/);
+    expect(formatMailTime(Date.parse('2025-03-01T12:00:00Z'))).toMatch(/^[A-Z][a-z]{2} \d{1,2}, 2025$/);
   });
 
   it('answers with nothing for a stamp a provider never sent', () => {

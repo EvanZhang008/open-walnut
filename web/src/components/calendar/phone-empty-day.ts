@@ -5,16 +5,17 @@
  * no calendar problem is up.
  */
 import { timeGridItems, type CalendarItem } from './calendar-items';
+import { dayDate } from '@/utils/time';
 
 /** Whether the day (`YYYY-MM-DD`) has no item at any hour, all-day ones included. */
 export function isDayEmpty(items: CalendarItem[], day: string): boolean {
   return timeGridItems(items, [day], 24 * 60).length === 0;
 }
 
-/** The line: `Nothing scheduled today.`, or the weekday and date for another day. */
+/** The line: `Nothing scheduled today.`, `... tomorrow.`, or `... on Nov 16.` for another day. */
 export function emptyDayLine(day: string, today: string): string {
   if (day === today) return 'Nothing scheduled today.';
-  const [y, m, d] = day.split('-').map(Number);
-  const when = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-  return `Nothing scheduled on ${when}.`;
+  const local = (ymd: string) => { const [y, m, d] = ymd.split('-').map(Number); return new Date(y, m - 1, d); };
+  const when = dayDate(local(day), { now: local(today).getTime() });
+  return `Nothing scheduled ${/\d/.test(when) ? `on ${when}` : when}.`;
 }

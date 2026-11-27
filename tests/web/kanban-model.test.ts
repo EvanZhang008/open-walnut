@@ -205,10 +205,10 @@ describe('summary, plain text, waiting on (C70, C94, C35, C77)', () => {
     // The card renders the words as written; plain text (C94) is the tooltip, the filter and the hash.
     expect(w.summary?.text).toBe('Worker: **root cause** is the `retry` storm');
     expect(w.summary?.plain).toBe('Worker: root cause is the retry storm');
-    expect(w.summary?.tooltip).toMatch(/^Worker: root cause is the retry storm\n\nFrom the worker, \d{2}:\d{2}$/);
+    expect(w.summary?.tooltip).toMatch(/^Worker: root cause is the retry storm\n\nFrom the worker, (.+ )?\d{1,2}:\d{2} [AP]M$/);
     const l = vm(t, null, { card: { ...card, summary_at: '2026-10-03T15:00:00Z' } });
     expect(l.summary?.text).toBe('Leader: mitigated');
-    expect(l.summary?.tooltip).toMatch(/From the leader, \d{2}:\d{2}$/);
+    expect(l.summary?.tooltip).toMatch(/From the leader, (.+ )?\d{1,2}:\d{2} [AP]M$/);
     expect(vm(mkTask()).summary).toBeUndefined();
   });
 
@@ -350,22 +350,20 @@ describe('one time format (C83)', () => {
     expect(back.status.tooltip).not.toContain('moved here');
   });
 
-  it('clock: HH:MM today, weekday within the week, date before', () => {
+  it('clock: the clock alone today, the day and the clock before (the console\'s one 12-hour clock)', () => {
     const today = new Date(NOW); today.setHours(9, 5, 0, 0);
-    expect(clockText(today.toISOString(), NOW)).toBe('09:05');
-    expect(clockText(ago(2 * DAY), NOW)).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) \d{2}:\d{2}$/);
-    expect(clockText(ago(20 * DAY), NOW)).toMatch(/^[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}$/);
+    expect(clockText(today.toISOString(), NOW)).toBe('9:05 AM');
+    expect(clockText(ago(DAY), NOW)).toMatch(/^yesterday \d{1,2}:\d{2} [AP]M$/);
+    expect(clockText(ago(20 * DAY), NOW)).toMatch(/^[A-Z][a-z]{2} \d{1,2}(, \d{4})?, \d{1,2}:\d{2} [AP]M$/);
   });
 
-  it('N12: a wait end and a tooltip use the same 24 hour clock as the change labels', () => {
+  it('N12: a wait end and a tooltip use the same 12-hour clock as the change labels', () => {
     const at = (days: number, h: number, m: number) => { const d = new Date(NOW); d.setDate(d.getDate() + days); d.setHours(h, m, 0, 0); return d.toISOString(); };
     const later = new Date(NOW); later.setHours(23, 59, 0, 0);
-    if (later.getTime() > NOW) expect(waitText(later.toISOString(), NOW)).toBe('Today 23:59');
-    expect(waitText(at(1, 5, 45), NOW)).toBe('Tomorrow 05:45');
-    expect(waitText(at(3, 17, 5), NOW)).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) 17:05$/);
-    expect(waitText(at(20, 9, 0), NOW)).toMatch(/^[A-Z][a-z]{2} \d{1,2} 09:00$/);
-    expect(absoluteText(at(1, 17, 5))).not.toMatch(/AM|PM/);
-    expect(absoluteText(at(1, 17, 5))).toContain('17:05');
+    if (later.getTime() > NOW) expect(waitText(later.toISOString(), NOW)).toBe('today 11:59 PM');
+    expect(waitText(at(1, 5, 45), NOW)).toBe('tomorrow 5:45 AM');
+    expect(waitText(at(20, 9, 0), NOW)).toMatch(/^[A-Z][a-z]{2} \d{1,2}(, \d{4})?, 9:00 AM$/);
+    expect(absoluteText(at(1, 17, 5))).toMatch(/^[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{4}, 5:05 PM$/);
   });
 });
 

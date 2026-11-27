@@ -2,6 +2,8 @@ import type { MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { PriorityBadge } from '../common/PriorityBadge';
+import { parseDateLocal } from '../common/DatePicker';
+import { dayDate, lineStart } from '@/utils/time';
 import { TagChip } from './TagChip';
 import { useShownTags } from './TaskTagPills';
 import { useTagDisplay } from '@/stores/tag-display-store';
@@ -229,9 +231,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
   );
 }
 
+/** A due date as every day reads ("today", "Nov 30"): a bare date is that local day, not UTC midnight. */
 function formatDue(iso: string): string {
-  const d = new Date(iso);
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${m}/${day}`;
+  return lineStart(dayDate(parseDateLocal(iso)));
 }

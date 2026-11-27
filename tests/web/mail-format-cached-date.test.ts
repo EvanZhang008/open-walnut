@@ -1,24 +1,20 @@
 /**
- * `formatMailTime` prints a date older than a week through a cached `Intl.DateTimeFormat`
- * (`cachedDateFormat`) instead of `toLocaleDateString`, which built a new formatter per row. The
- * text must not change by a single character, so every case here is graded against the old
- * expression itself, not against a written string.
+ * `formatMailTime` keeps the words of a day older than a week per local day (the dense grouped
+ * inbox's redraw spent 360 to 460 ms in it when every row built its own date formatter, a CPU
+ * profile of 2026-11-10). The cache must never change the text: every case here is graded against
+ * the shared helpers themselves (`timeAgo` inside the week, `dayDate` beyond it), twice per stamp.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cachedDateFormat, formatMailTime, resetCachedDateFormats } from '../../web/src/apps/mail/mail-format';
-import { timeAgo } from '../../web/src/utils/time';
+import { formatMailTime, resetMailDayCache } from '../../web/src/apps/mail/mail-format';
+import { dayDate, timeAgo } from '../../web/src/utils/time';
 
-const OPTIONS: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' };
 const DAY = 86_400_000;
 
-/** The implementation before the cache, kept verbatim as the oracle. */
-function oldFormatMailTime(sentAt: number): string {
+/** What the stamp must read as, with no cache in between. */
+function expected(sentAt: number, now: number): string {
   if (!Number.isFinite(sentAt) || sentAt <= 0) return '';
-  const age = Date.now() - sentAt;
-  if (age >= 7 * DAY) {
-    return new Date(sentAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-  }
-  return timeAgo(new Date(sentAt).toISOString());
+  if (now - sentAt < 7 * DAY) return timeAgo(new Date(sentAt).toISOString(), { now });
+  return dayDate(sentAt, { now });
 }
 
 /** Stamps around `now`: today, yesterday, this week, the 7-day edge, this year, past years, day and year edges. */
@@ -40,51 +36,33 @@ function stampsAround(now: number): number[] {
 
 afterEach(() => {
   vi.useRealTimers();
-  resetCachedDateFormats();
+  resetMailDayCache();
 });
 
-describe('formatMailTime with a cached formatter', () => {
+describe('formatMailTime with a cached day', () => {
   const nows = [
     Date.parse('2026-09-05T12:00:00Z'), Date.parse('2026-01-01T00:05:00Z'), Date.parse('2026-12-31T23:55:00Z'),
     Date.parse('2024-02-29T08:00:00Z'), Date.parse('2026-11-10T16:00:00Z'),
   ];
   for (const now of nows) {
-    it(`prints what toLocaleDateString printed, every stamp around ${new Date(now).toISOString()}`, () => {
+    it(`prints what the shared helpers print, every stamp around ${new Date(now).toISOString()}`, () => {
       vi.useFakeTimers();
       vi.setSystemTime(now);
       for (const stamp of stampsAround(now)) {
         // Twice: the first call fills the cache, the second reads it.
-        expect(formatMailTime(stamp), String(stamp)).toBe(oldFormatMailTime(stamp));
-        expect(formatMailTime(stamp), String(stamp)).toBe(oldFormatMailTime(stamp));
+        expect(formatMailTime(stamp), String(stamp)).toBe(expected(stamp, now));
+        expect(formatMailTime(stamp), String(stamp)).toBe(expected(stamp, now));
       }
     });
   }
-});
 
-describe('cachedDateFormat', () => {
-  const locales = [undefined, 'en-US', 'en-GB', 'de-DE', 'fr-FR', 'ja-JP', 'zh-CN', 'ar-EG', 'he-IL', 'hi-IN']
-  const zones = ['UTC', 'America/Los_Angeles', 'America/New_York', 'Europe/London', 'Asia/Kolkata', 'Asia/Tokyo',
-    'Australia/Adelaide', 'Pacific/Kiritimati', 'Pacific/Pago_Pago']
-  const now = Date.parse('2026-11-10T16:00:00Z')
-
-  it('formats exactly as toLocaleDateString does, in every locale and across time zone day edges', () => {
-    for (const locale of locales) {
-      for (const timeZone of zones) {
-        const options = { ...OPTIONS, timeZone };
-        for (const stamp of stampsAround(now).filter((one) => Number.isFinite(one) && one > 0)) {
-          expect(cachedDateFormat(locale, options).format(stamp), `${locale} ${timeZone} ${stamp}`)
-            .toBe(new Date(stamp).toLocaleDateString(locale, options));
-        }
-      }
-    }
-  });
-
-  it('makes one formatter per locale and options and reuses it', () => {
-    const first = cachedDateFormat('en-GB', OPTIONS);
-    expect(cachedDateFormat('en-GB', { ...OPTIONS })).toBe(first);
-    expect(cachedDateFormat('en-US', OPTIONS)).not.toBe(first);
-    expect(cachedDateFormat('en-GB', { ...OPTIONS, timeZone: 'UTC' })).not.toBe(first);
-    resetCachedDateFormats();
-    expect(cachedDateFormat('en-GB', OPTIONS)).not.toBe(first);
+  it('a cached day follows the clock into the next year', () => {
+    vi.useFakeTimers();
+    const stamp = Date.parse('2026-06-15T12:00:00Z');
+    vi.setSystemTime(Date.parse('2026-12-31T12:00:00Z'));
+    const thisYear = formatMailTime(stamp);
+    expect(thisYear).not.toContain('2026');
+    vi.setSystemTime(Date.parse('2027-01-02T12:00:00Z'));
+    expect(formatMailTime(stamp)).toBe(`${thisYear}, 2026`);
   });
 });

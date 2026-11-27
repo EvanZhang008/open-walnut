@@ -64,7 +64,7 @@ import { AgentText } from '@/components/common/AgentText';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useAgentFileOpener } from '@/hooks/useAgentFileOpener';
 import { THREAD_LIST_SOURCE, threadAnswerSource, threadOpenerSource, threadStandInSource, threadSummarySource } from './thread-text-source';
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useExperimental } from '@/hooks/useExperimental';
 import type { OrgThread, OrgThreadMessage } from '@/api/org-threads';
@@ -287,8 +287,8 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
           <span className="org-thread-from" data-testid="org-thread-from" data-origin={origin.from} title={origin.hover}>{origin.words}</span>{' \u00b7 '}
           {back && <span className="org-thread-back" data-testid="org-thread-back-from-known" title="You acknowledged it while its work ran; it came back with something new">New since you acknowledged{' \u00b7 '}</span>}
           {known
-            ? <span className="org-thread-time" data-testid="org-thread-time">You acknowledged {'\u00b7'} {timeAgo(t.ackedAt!, { now })}</span>
-            : <span className="org-thread-time" data-testid="org-thread-time">{timeAgo(last?.at ?? t.updatedAt, { now })}</span>}
+            ? <span className="org-thread-time" data-testid="org-thread-time" title={fullTime(t.ackedAt)}>You acknowledged {'\u00b7'} {timeAgo(t.ackedAt!, { now })}</span>
+            : <span className="org-thread-time" data-testid="org-thread-time" title={fullTime(last?.at ?? t.updatedAt)}>{timeAgo(last?.at ?? t.updatedAt, { now })}</span>}
         </span>
         <span className="org-thread-title" data-testid="org-thread-title">{t.title}</span>
       </button>

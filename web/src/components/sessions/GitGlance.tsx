@@ -9,7 +9,7 @@
  * Every number is spelled out in the tooltip (gitGlanceTitle).
  */
 import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { timeAgo } from '@/utils/time';
+import { fullTime, timeAgo } from '@/utils/time';
 import { useSessionGitGlance } from '@/stores/session-git-store';
 import type { SessionGitGlance } from '@/api/session-git-status';
 import { branchLabel, compactCount, gitGlanceTitle, summarizeGitGlance, type GitGlanceSummary } from '@/utils/git-glance-text';
@@ -209,7 +209,7 @@ export function GitCheckedAgo({ at }: { at: string }) {
     return () => clearInterval(t);
   }, []);
   return (
-    <span className="session-diff-gitstrip-when" title={new Date(at).toLocaleString()}>
+    <span className="session-diff-gitstrip-when" title={fullTime(at)}>
       checked {timeAgo(at)}
     </span>
   );

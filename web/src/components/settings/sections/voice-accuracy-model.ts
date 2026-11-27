@@ -10,6 +10,7 @@ import type {
   CompareEngineRow, CompareEngineState, CompareEngineSummary, CompareProgress, CompareResult, CompareRunState, CompareScore, CompareTake,
   CompareTrendDay, CompareTrendPoint,
 } from '@/api/stt-compare';
+import { clockTime } from '@/utils/time';
 
 /** Half a percentage point: a lower value is marked only when it leads the next by this much. */
 export const MARK_MARGIN = 0.005;
@@ -270,11 +271,6 @@ export function judgeWords(judge: string): string {
   return judge && judge !== 'unknown' ? `by ${judge}, not checked by a person` : 'model not recorded, not checked by a person';
 }
 
-const clock = (iso: string | undefined) => {
-  const d = iso ? new Date(iso) : null;
-  return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
-};
-
 /** The send named this recording (the composer it was dictated into remembered it): a fact, not a guess. */
 export function sentExact(take: Pick<CompareTake, 'sentMatch'>): boolean {
   return take.sentMatch === 'recording-id';
@@ -286,7 +282,7 @@ export function sentExact(take: Pick<CompareTake, 'sentMatch'>): boolean {
  */
 export function sentHeading(take: Pick<CompareTake, 'sentAt' | 'sentMatch'>): string {
   if (sentExact(take)) return 'What you sent';
-  const at = clock(take.sentAt);
+  const at = clockTime(take.sentAt);
   return `Probably what you sent (matched by text${at ? `, ${at}` : ''})`;
 }
 

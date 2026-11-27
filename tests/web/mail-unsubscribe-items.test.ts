@@ -33,6 +33,7 @@ import {
   unsubscribeStatusLine,
 } from '../../web/src/apps/mail/mail-unsubscribe-state';
 import { CANNOT_SEND_TITLE } from '../../web/src/apps/mail/compose/send-status';
+import { dayDate } from '../../web/src/utils/time';
 import type { MailMessageDto, MailUnsubscribeDto } from '../../web/src/api/mail';
 
 /** 21 September 2026, the day every fixture below is "today". */
@@ -47,9 +48,9 @@ function state(unsubscribe?: MailUnsubscribeDto, canSend = true) {
   return unsubscribeRowState({ message: message(unsubscribe), canSend, now: NOW });
 }
 
-/** The short date the titles carry, computed the way the module does so the assertion is about wording. */
+/** The day the titles carry, as every screen writes it (dayDate): a stamp at NOW reads `today`. */
 function day(at: number): string {
-  return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return dayDate(at, { now: NOW });
 }
 
 describe('the four states the design names', () => {
@@ -158,7 +159,7 @@ describe('which state wins when two are true', () => {
       attempt: { status: 'failed', reason: 'http-403', at: NOW },
     });
     expect(row.status).toBe('done');
-    expect(row.title).toBe(`You unsubscribed from this list on ${day(NOW)}`);
+    expect(row.title).toBe(`You unsubscribed from this list today`);
   });
 
   it('a done outranks the `none` availability, which is the old-row case', () => {
@@ -167,7 +168,7 @@ describe('which state wins when two are true', () => {
     // to do it again two rows down the list.
     const row = state({ available: 'none', done: { method: 'link', at: NOW, scope: 'list', keyedBy: 'sender' } });
     expect(row.status).toBe('done');
-    expect(row.title).toBe(`You unsubscribed from this sender on ${day(NOW)}`);
+    expect(row.title).toBe(`You unsubscribed from this sender today`);
   });
 
   it('`needs-human` outranks the availability question too', () => {
@@ -179,12 +180,12 @@ describe('which state wins when two are true', () => {
 describe('the list-level memory, and the word it is allowed to use', () => {
   it('says "this list" only when the key came from a List-Id', () => {
     expect(unsubscribeDoneTitle({ method: 'one-click', at: NOW, scope: 'list', keyedBy: 'list-id' }, NOW))
-      .toBe(`You unsubscribed from this list on ${day(NOW)}`);
+      .toBe(`You unsubscribed from this list today`);
   });
 
   it('says "this sender" when the key came from the address, which is coarser', () => {
     expect(unsubscribeDoneTitle({ method: 'one-click', at: NOW, scope: 'list', keyedBy: 'sender' }, NOW))
-      .toBe(`You unsubscribed from this sender on ${day(NOW)}`);
+      .toBe(`You unsubscribed from this sender today`);
   });
 
   it('understates rather than overstates when the server did not say', () => {
@@ -208,6 +209,9 @@ describe('the list-level memory, and the word it is allowed to use', () => {
   it('carries the year when it is not this year, and no year when it is', () => {
     expect(unsubscribeDoneTitle({ method: 'link', at: NOW, scope: 'message' }, NOW)).not.toMatch(/2026/);
     expect(unsubscribeDoneTitle({ method: 'link', at: LAST_YEAR, scope: 'message' }, NOW)).toMatch(/2025/);
+    // A day written as a date takes "on"; "today" does not.
+    expect(unsubscribeDoneTitle({ method: 'link', at: LAST_YEAR, scope: 'list', keyedBy: 'list-id' }, NOW))
+      .toBe(`You unsubscribed from this list on ${dayDate(LAST_YEAR, { now: NOW })}`);
   });
 
   it('drops the date entirely rather than printing an epoch', () => {

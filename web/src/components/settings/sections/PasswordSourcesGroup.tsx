@@ -12,6 +12,7 @@ import { SettingsButton } from '../inputs/SettingsButton'
 import { onVaultSessionChange, vaultApi, VaultApiError, type BitwardenSyncStatus } from '@/api/vault'
 // An unlock or a Lock elsewhere on this computer reaches this group live.
 import '@/api/vault-live'
+import { pointInTime } from '@/utils/time'
 
 interface Props {
   config: Config
@@ -91,7 +92,7 @@ export function PasswordSourcesGroup({ config, onSave, unlocked, needUnlock }: P
       />
       <SettingsRow
         label="Sync now"
-        help={needUnlock ?? (bw?.last ? `Last sync: ${new Date(bw.last.at).toLocaleString()}, ${bw.summary ?? ''}` : 'Last sync: never.')}
+        help={needUnlock ?? (bw?.last ? `Last sync: ${pointInTime(bw.last.at)}, ${bw.summary ?? ''}` : 'Last sync: never.')}
         control={<SettingsButton busy={busy === 'bw-sync'} disabled={!unlocked} data-testid="pw-bw-sync"
           onClick={() => void run('bw-sync', async () => {
             let r

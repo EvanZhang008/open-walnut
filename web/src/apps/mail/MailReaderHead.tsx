@@ -116,7 +116,7 @@ export function MailReaderHead({ open, message, accounts, providers }: Props) {
                 {account.displayName || account.address}
               </span>
             )}
-            <time className="mail-reader-date" title={message.sentAtHeader ?? undefined}>
+            <time className="mail-reader-date">
               {formatMailDate(message.sentAt)}
             </time>
             {extras.length > 0 && (

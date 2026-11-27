@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from 'react'
 import { vaultApi, type AgentLogEntry } from '@/api/vault'
-import { ago } from './passwords-model'
+import { fullTime, timeAgo } from '@/utils/time'
 
 const SHOWN = 4
 const HOW: Record<string, string> = { reveal: 'showed plaintext', env: 'gave it to a command', fill: 'filled it into a page' }
@@ -27,7 +27,7 @@ export function RecentAgentUse({ onSeeAll }: { onSeeAll: () => void }) {
             <span><b>{e.taskTitle ?? 'A script'}</b> used <b>{e.itemTitle ?? 'an item'}</b>: {e.use && HOW[e.use] ? HOW[e.use] : e.kind === 'fill' ? HOW.fill : 'got it'}</span>
             {e.purpose && <span className="pw-agent-why">“{e.purpose}”</span>}
           </span>
-          <span className="pw-agent-when" title={new Date(e.at).toLocaleString()}>{ago(e.at)}</span>
+          <span className="pw-agent-when" title={fullTime(e.at)}>{timeAgo(e.at)}</span>
         </div>
       ))}
       <button type="button" className="btn btn-sm" onClick={onSeeAll}>See all in Agent Activity</button>

@@ -4,7 +4,7 @@
  * every string is exact. `\s` in the time patterns: ICU puts a narrow no-break
  * space before AM/PM.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { HostLimitFrame, LimitWindow } from '@/api/subscription-limits';
 import {
   AGE_SHOWN_AFTER_MS, computeLimitReadout, formatAge, formatResetTime, limitLabel,
@@ -13,7 +13,10 @@ import {
 const NOW = Date.UTC(2026, 9, 2, 12, 0); // Fri Oct 2 2026, 12:00 UTC
 const H = 3_600_000;
 const D = 24 * H;
-const OPTS = { locale: 'en-US', timeZone: 'UTC' };
+// The helpers write in the viewer's zone (web/src/utils/time.ts): pin it.
+const ZONE_WAS = process.env.TZ;
+beforeAll(() => { process.env.TZ = 'UTC'; });
+afterAll(() => { if (ZONE_WAS === undefined) delete process.env.TZ; else process.env.TZ = ZONE_WAS; });
 
 function win(type: string, utilization: number | undefined, resetsIn: number, seenAgo = 60_000): LimitWindow {
   return { type, ...(utilization !== undefined ? { utilization } : {}), resetsAt: NOW + resetsIn, seenAt: NOW - seenAgo, sessionId: 'sid-1' };
@@ -27,7 +30,7 @@ function frame(windows: LimitWindow[], extra: Partial<HostLimitFrame> = {}): Hos
   };
 }
 
-const readout = (f: HostLimitFrame | null) => computeLimitReadout(f, NOW, OPTS);
+const readout = (f: HostLimitFrame | null) => computeLimitReadout(f, NOW);
 const line = (r: { label: string; value?: string; when?: string; age?: string }) => [r.label, r.value, r.when, r.age].filter(Boolean).join(' · ');
 
 describe('computeLimitReadout', () => {
@@ -43,12 +46,12 @@ describe('computeLimitReadout', () => {
       { current: { status: 'allowed_warning', type: 'five_hour', utilization: 0.92, resetsAt: NOW + 3 * H + 40 * 60_000, seenAt: NOW - 60_000 } },
     ))!;
     expect(r.rows.map((x) => x.type)).toEqual(['five_hour', 'seven_day']);
-    expect(line(r.rows[0])).toMatch(/^5-hour limit · 92% · resets 3:40\sPM$/);
+    expect(line(r.rows[0])).toMatch(/^5-hour limit · 92% · resets today 3:40\sPM$/);
     expect(r.rows[0].state).toBe('warning');
-    expect(line(r.rows[1])).toBe('Weekly limit · 31% · resets Tue');
+    expect(line(r.rows[1])).toMatch(/^Weekly limit · 31% · resets Oct 6, 12:00\sPM$/);
     expect(r.rows[1].state).toBe('ok');
     expect(r.hint?.level).toBe('warning');
-    expect(r.hint?.text).toMatch(/^5-hour limit 92% used · resets 3:40\sPM$/);
+    expect(r.hint?.text).toMatch(/^5-hour limit 92% used · resets today 3:40\sPM$/);
     expect(r.overage).toBeUndefined();
     expect(r.rows[0].title).toContain('92% used');
   });
@@ -91,7 +94,7 @@ describe('computeLimitReadout', () => {
     }))!;
     expect(r.rows[0]).toMatchObject({ state: 'rejected', value: 'reached' });
     expect(r.hint?.level).toBe('rejected');
-    expect(r.hint?.text).toMatch(/^5-hour limit reached · resets 1:30\sPM$/);
+    expect(r.hint?.text).toMatch(/^5-hour limit reached · resets today 1:30\sPM$/);
   });
 
   it('past the limit on extra usage: an amber hint and the extra-usage line', () => {
@@ -100,7 +103,8 @@ describe('computeLimitReadout', () => {
       overage: { status: 'allowed', isUsingOverage: true, resetsAt: NOW + 10 * D, seenAt: NOW - 60_000 },
     }))!;
     expect(r.hint).toEqual({ level: 'warning', text: '5-hour limit reached · using extra usage' });
-    expect(r.overage).toEqual({ text: 'Using extra usage · resets Oct 12', state: 'ok' });
+    expect(r.overage?.state).toBe('ok');
+    expect(r.overage?.text).toMatch(/^Using extra usage · resets Oct 12, 12:00\sPM$/);
   });
 
   it('extra usage is mentioned when the limit is hit and it is unavailable, not otherwise', () => {
@@ -120,7 +124,7 @@ describe('computeLimitReadout', () => {
   it('an older CLI\'s headline (no percentage) still shows the window and its reset', () => {
     const r = readout(frame([win('five_hour', undefined, 4 * H)], { current: { status: 'allowed', type: 'five_hour', seenAt: NOW - 60_000 } }))!;
     expect(r.rows[0].value).toBeUndefined();
-    expect(line(r.rows[0])).toMatch(/^5-hour limit · resets 4:00\sPM$/);
+    expect(line(r.rows[0])).toMatch(/^5-hour limit · resets today 4:00\sPM$/);
   });
 
   it('per-model weekly windows get their names; a future window sorts last with a readable name', () => {
@@ -155,18 +159,18 @@ describe('computeLimitReadout', () => {
 });
 
 describe('format helpers', () => {
-  it('reset time: a clock time within 20h, a weekday within the week, a date beyond', () => {
-    expect(formatResetTime(NOW + 3 * H + 40 * 60_000, NOW, OPTS)).toMatch(/^3:40\sPM$/);
-    expect(formatResetTime(NOW + 19 * H, NOW, OPTS)).toMatch(/^7:00\sAM$/);
-    expect(formatResetTime(NOW + 4 * D, NOW, OPTS)).toBe('Tue');
-    expect(formatResetTime(NOW + 10 * D, NOW, OPTS)).toBe('Oct 12');
+  it('reset time: as every screen writes a time (pointInTime)', () => {
+    expect(formatResetTime(NOW + 3 * H + 40 * 60_000, NOW)).toMatch(/^today 3:40\sPM$/);
+    expect(formatResetTime(NOW + 19 * H, NOW)).toMatch(/^tomorrow 7:00\sAM$/);
+    expect(formatResetTime(NOW + 4 * D, NOW)).toMatch(/^Oct 6, 12:00\sPM$/);
+    expect(formatResetTime(NOW + 100 * D, NOW)).toMatch(/^Jan 10, 2027, 12:00\sPM$/);
   });
 
-  it('age: minutes, hours, days', () => {
+  it('age: minutes, hours, days (timeAgo)', () => {
     expect(formatAge(12 * 60_000)).toBe('12m ago');
     expect(formatAge(3 * H)).toBe('3h ago');
     expect(formatAge(50 * H)).toBe('2d ago');
-    expect(formatAge(0)).toBe('1m ago');
+    expect(formatAge(0)).toBe('just now');
   });
 
   it('labels', () => {

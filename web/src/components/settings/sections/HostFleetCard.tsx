@@ -15,6 +15,7 @@ import type { FleetHost } from '@/api/hosts-fleet';
 import { capabilityChips, gauges, offlineLine, problemsOf, problemTitle, roleChips, sessionsTitle, sessionsUnknown, spendUnknown, systemLine } from './host-fleet-dashboard-model';
 import { localMachineName, statusKind, usd } from './host-fleet-model';
 import { readFailure, readLabel } from './host-fleet-read-model';
+import { fullTime } from '@/utils/time';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { FleetNumber } from './FleetNumber';
 import { Chips, FleetFacts, FleetHistory, Ring } from './HostFleetVitals';
@@ -28,7 +29,7 @@ function ReadMark({ host, now }: { host: FleetHost; now: number }) {
   if (!text) return null;
   return (
     <span className="hf-read" data-testid="host-fleet-read-age" data-refreshing={host.refreshing ? 'true' : 'false'}
-      title={typeof host.readAt === 'number' ? `Read ${new Date(host.readAt).toLocaleString()}` : undefined}>
+      title={typeof host.readAt === 'number' ? `Read ${fullTime(host.readAt)}` : undefined}>
       {text}
     </span>
   );

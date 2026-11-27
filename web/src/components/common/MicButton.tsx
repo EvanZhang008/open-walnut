@@ -22,6 +22,7 @@ import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
 import { notifyDictationActivity, type DictationControl } from '@/hooks/useSendAfterDictation';
 import { DisclosureChevron, MenuCaret } from '@/components/controls';
 import { ICON_PLUS } from './Icons';
+import { lineStart, pointInTime } from '@/utils/time';
 
 /** How long the mic may take to send its first sound before the button says so in words. */
 const SLOW_START_HINT_MS = 700;
@@ -662,7 +663,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, onTake, controlRef,
               <div className="mic-retry-divider" />
               <div className="mic-retry-header wn-menu-heading">Recent voice input</div>
               {recordings.map(rec => {
-                const time = rec.timestamp ? new Date(rec.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+                const time = lineStart(pointInTime(rec.timestamp));
                 const text = rec.result?.text ?? '';
                 const failed = !text;
                 // Text AND an error: the final pass failed after the draft was

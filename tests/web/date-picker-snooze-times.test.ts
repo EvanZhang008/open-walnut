@@ -9,7 +9,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tomorrowTimePills } from '../../web/src/components/common/DatePicker';
-import { dateTimeWords, hourPickerMin, localDateTimeIso, parkClockWords, parseClock, snoozeWhenWords, timeTarget, untilWords } from '../../web/src/components/common/date-time-pick';
+import { pointInTime } from '../../web/src/utils/time';
+import { hourPickerMin, localDateTimeIso, parkClockWords, parseClock, snoozeWhenWords, timeTarget, untilWords } from '../../web/src/components/common/date-time-pick';
 
 const ORIGINAL_TZ = process.env.TZ;
 afterEach(() => { process.env.TZ = ORIGINAL_TZ; });
@@ -109,29 +110,30 @@ describe('a picked day at a picked hour', () => {
     expect(timeTarget('2026-11-11', '16:00', hourPickerMin('2026-11-12', now), now)).toEqual({ iso: '2026-11-12T00:00:00.000Z', past: false });
   });
 
-  it('reads as a person says it', () => {
+  it('reads as every screen writes a time (the Set button: pointInTime)', () => {
     process.env.TZ = 'America/Los_Angeles';
     const now = Date.parse('2026-11-11T18:00:00Z');
-    expect(dateTimeWords('2026-11-11T23:00:00.000Z', now)).toBe('Today 3:00 PM');
-    expect(dateTimeWords('2026-11-12T17:00:00.000Z', now)).toBe('Tomorrow 9:00 AM');
-    expect(dateTimeWords('2026-11-13T08:05:00.000Z', now)).toBe('Fri Nov 13, 12:05 AM');
-    expect(dateTimeWords('2027-01-04T20:00:00.000Z', now)).toBe('Mon Jan 4 2027, 12:00 PM');
+    expect(pointInTime('2026-11-11T23:00:00.000Z', { now })).toBe('today 3:00 PM');
+    expect(pointInTime('2026-11-12T17:00:00.000Z', { now })).toBe('tomorrow 9:00 AM');
+    expect(pointInTime('2026-11-13T08:05:00.000Z', { now })).toBe('Nov 13, 12:05 AM');
+    expect(pointInTime('2027-01-04T20:00:00.000Z', { now })).toBe('Jan 4, 2027, 12:00 PM');
+    const picker = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/components/common/DatePicker.tsx'), 'utf8');
+    expect(picker).toMatch(/Set \{pointInTime\(target\.iso\)\}/);
   });
 });
 
 describe('a timed snooze, closed', () => {
-  it('says its hour: today, tomorrow, a weekday within the week, else the date', () => {
+  it('says its hour: today, tomorrow, else the date (pointInTime)', () => {
     process.env.TZ = 'America/Los_Angeles';
     const now = Date.parse('2026-11-11T18:00:00Z'); // Wed Nov 11, 10:00 PST
-    expect(snoozeWhenWords('2026-11-11T23:30:00.000Z', now)).toBe('Today 3:30 PM');
-    expect(snoozeWhenWords('2026-11-12T16:00:00.000Z', now)).toBe('Tomorrow 8:00 AM');
-    expect(snoozeWhenWords('2026-11-15T23:30:00.000Z', now)).toBe('Sun 3:30 PM');
-    expect(snoozeWhenWords('2026-11-17T23:30:00.000Z', now)).toBe('Tue 3:30 PM');
+    expect(snoozeWhenWords('2026-11-11T23:30:00.000Z', now)).toBe('today 3:30 PM');
+    expect(snoozeWhenWords('2026-11-12T16:00:00.000Z', now)).toBe('tomorrow 8:00 AM');
+    expect(snoozeWhenWords('2026-11-15T23:30:00.000Z', now)).toBe('Nov 15, 3:30 PM');
     expect(snoozeWhenWords('2026-11-18T23:30:00.000Z', now)).toBe('Nov 18, 3:30 PM');
     expect(snoozeWhenWords('2027-01-04T20:00:00.000Z', now)).toBe('Jan 4, 2027, 12:00 PM');
     // 23:30 PST on Nov 11 is still today; 00:30 PST is tomorrow.
-    expect(snoozeWhenWords('2026-11-12T07:30:00.000Z', now)).toBe('Today 11:30 PM');
-    expect(snoozeWhenWords('2026-11-12T08:30:00.000Z', now)).toBe('Tomorrow 12:30 AM');
+    expect(snoozeWhenWords('2026-11-12T07:30:00.000Z', now)).toBe('today 11:30 PM');
+    expect(snoozeWhenWords('2026-11-12T08:30:00.000Z', now)).toBe('tomorrow 12:30 AM');
     expect(snoozeWhenWords('2026-11-15', now)).toBeNull();
     expect(snoozeWhenWords('nope T', now)).toBeNull();
   });

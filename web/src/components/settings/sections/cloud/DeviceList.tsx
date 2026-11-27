@@ -23,7 +23,7 @@ import { EmptyState, LoadingState, UnavailableState } from '../../../common/Empt
 import { SettingsButton } from '../../inputs/SettingsButton';
 import { InlineConfirmButton, isRepeatClick } from '../../inputs/InlineConfirmButton';
 import { useSettingsSaved } from '../../settings-pane-context';
-import { formatAbsoluteTime } from '../addons-format';
+import { pointInTime } from '@/utils/time';
 import { apiDelete } from '@/api/client';
 import { ApiError } from '@/api/api-error';
 import { BROWSER_SIGNED_IN_EVENT, devicesListChanged } from './devices-list';
@@ -298,14 +298,14 @@ export function DeviceList({ scope }: { scope: DeviceScope }) {
     const meta = role === 'phone'
       ? [
           hw ?? 'Model unknown until the app opens on this phone',
-          `paired ${formatAbsoluteTime(d.createdAt)}`,
-          ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
+          `paired ${pointInTime(d.createdAt)}`,
+          ...(d.lastUsedAt ? [`last used ${pointInTime(d.lastUsedAt)}`] : []),
         ].join(', ')
       : role === 'mac' ? describeMacRow(d)
       // A signed-in browser says when it signed in and was last used, so two rows can be told apart (N18).
       : role === 'browser' ? [
-          `signed in ${formatAbsoluteTime(d.createdAt)}`,
-          ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
+          `signed in ${pointInTime(d.createdAt)}`,
+          ...(d.lastUsedAt ? [`last used ${pointInTime(d.lastUsedAt)}`] : []),
         ].join(', ')
       : ROLE_NOTE[role];
     const shownName = role === 'browser' ? browserLabels.get(d.name) ?? 'Browser' : d.name;

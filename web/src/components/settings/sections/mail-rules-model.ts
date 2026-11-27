@@ -10,6 +10,7 @@ import { folderNameProblem } from '@open-walnut/mail-folder-name';
 import { compileSubjectPattern, heldPatternLine, ruleOffReason, type PatternHint } from '@open-walnut/mail-subject-pattern';
 import type { MailPreviewResponse, MailRule, MailRuleView, MailRuleWhen, MailRulesError } from '@/api/mail-groups';
 import { movesPhrase } from '@/utils/mail-preview-moves';
+import { clockTime, dayDate } from '@/utils/time';
 
 export const COPY = {
   crossLink: 'Grouping sorts what you see; the mail router still reads every new Inbox mail.',
@@ -26,17 +27,12 @@ export const COPY = {
 
 // ── the file error strip ──
 
-function clock(at: number): string {
-  const date = new Date(at);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
-
 export function isMissingFileError(error: MailRulesError | undefined): boolean {
   return !!error && /^The rules file is missing/.test(error.message);
 }
 
 /**
- * `Line 7: <message> Walnut is still using the rules from 10:42.`, or `Rule 3 (r-7f3a2c): …` when the
+ * `Line 7: <message> Walnut is still using the rules from 10:42 AM.`, or `Rule 3 (r-7f3a2c): …` when the
  * server could not place the problem on a line. A message that already says what is still in use
  * (the missing-file one) is not told twice.
  */
@@ -49,19 +45,16 @@ export function fileErrorSentence(error: MailRulesError): string {
       : '';
   const said = /still using the rules/.test(message);
   const body = /[.?!]$/.test(message) ? message : `${message}.`;
-  return said ? `${where}${body}` : `${where}${body} Walnut is still using the rules from ${clock(error.since)}.`;
+  return said ? `${where}${body}` : `${where}${body} Walnut is still using the rules from ${clockTime(error.since)}.`;
 }
 
 // ── rule rows ──
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-/** `2026-09-28` as `Sep 28` (the day, never shifted by time zones). */
+/** `2026-09-28` as every other day reads (`Sep 28`, `yesterday`): the day, never shifted by time zones. */
 export function shortDay(created: string | undefined): string | null {
   const match = created ? /^(\d{4})-(\d{2})-(\d{2})/.exec(created) : null;
   if (!match) return null;
-  const month = MONTHS[Number(match[2]) - 1];
-  return month ? `${month} ${Number(match[3])}` : null;
+  return dayDate(new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))) || null;
 }
 
 /**

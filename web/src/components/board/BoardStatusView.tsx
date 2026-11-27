@@ -17,7 +17,7 @@ import { USER_STATE_LABELS, shownState, stateCountLabel, checkedLine, dueAtMs, r
 import { CEO_LABEL, VP_LABEL, orgDisplayTitle } from '@open-walnut/org-tree';
 import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { formatWaitUntil } from '@/components/tasks/TaskStatusControl';
-import { timeAgo } from '@/utils/time';
+import { dayDate, fullTime, pointInTime, timeAgo } from '@/utils/time';
 import * as ICONS from '@/components/common/Icons';
 import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 import { usePageViewOf } from '@/utils/view-memory';
@@ -101,15 +101,11 @@ function WhereCell({ row }: { row: StatusRow }) {
   );
 }
 
-/** "today 6 PM", "Oct 30", for a due date (a bare date or a time). */
+/** "today 6:00 PM", "Oct 30", for a due date (a bare date or a time). */
 function formatDue(at: string): string {
   const ms = dueAtMs(at);
   if (!Number.isFinite(ms)) return at;
-  const d = new Date(ms);
-  const sameDay = d.toDateString() === new Date().toDateString();
-  const bare = /^\d{4}-\d{2}-\d{2}$/.test(at.trim());
-  if (sameDay) return bare ? 'today' : `today ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + (bare ? '' : ` ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+  return /^\d{4}-\d{2}-\d{2}$/.test(at.trim()) ? dayDate(ms) : pointInTime(ms);
 }
 
 function compactDays(at: string | undefined): string {
@@ -156,7 +152,8 @@ const Row = memo(function Row({ row, onOpenPage }: { row: StatusRow; onOpenPage?
   const openTask = useOpenTask();
   const t = row.task;
   const title = orgDisplayTitle(t);
-  const when = ago(rowTime(row));
+  const at = rowTime(row);
+  const when = ago(at);
   const shown = shownState(row.status.state);
   return (
     <tr
@@ -178,7 +175,7 @@ const Row = memo(function Row({ row, onOpenPage }: { row: StatusRow; onOpenPage?
       </td>
       <td className="bs-c-where"><WhereCell row={row} /></td>
       <td className="bs-c-next"><NextCell row={row} onOpenPage={onOpenPage} /></td>
-      <td className="bs-c-when" title={when}>{when.replace(/ ago$/, '')}</td>
+      <td className="bs-c-when" title={at ? fullTime(at) : undefined}>{when}</td>
     </tr>
   );
 });

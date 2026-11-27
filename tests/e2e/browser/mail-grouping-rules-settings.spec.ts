@@ -157,7 +157,7 @@ const THREE_RULES = [
   '  - id: r-aaaa01', '    when: { from: "issues@*" }', '    then: Important', '    source: user',
   '  - id: r-aaaa02', '    when: { from: "no-reply@review.example.invalid" }', '    then: Important', '    source: user',
   '  - id: r-aaaa03', '    when: { from: "notifications@code.example.invalid" }', '    then: Group mail', '    source: learned',
-  '    note: "code host mail"', '    created: 2026-09-28', '',
+  '    note: "code host mail"', '    created: 2025-09-28', '',
 ].join('\n')
 
 test('C63: two quick moves never 409, focus follows the moved row, and .bak is the pre-edit file', async ({ page }) => {
@@ -193,7 +193,7 @@ test('C63: two quick moves never 409, focus follows the moved row, and .bak is t
   // A rule of the user's with no note has no second line; a learned one says so, with its note.
   await expect(moved.getByTestId('mail-rule-provenance')).toHaveCount(0)
   await expect(page.locator(PANEL).locator('[data-rule-id="r-aaaa03"]').getByTestId('mail-rule-provenance'))
-    .toHaveText('Learned Sep 28 \u00b7 code host mail')
+    .toHaveText('Learned Sep 28, 2025 \u00b7 code host mail')
 })
 
 test('C33 C65: a hand edit applies; a broken file keeps the last rules and names the line; fixed, the error goes', async ({ page }) => {

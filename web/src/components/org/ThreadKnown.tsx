@@ -11,13 +11,11 @@ import type { OrgThread } from '@/api/org-threads';
 import { placedSinceAck } from '@open-walnut/thread-groups';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
+import { pointInTime } from '@/utils/time';
 import { TaskChip } from './ThreadTaskChips';
 
-/** "Nov 21, 9:00 AM": when a wait ends. */
-const untilWords = (iso: string): string => {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-};
+/** "Nov 21, 9:00 AM", "tomorrow 9:00 AM": when a wait ends (the raw value when it is no time). */
+const untilWords = (iso: string): string => pointInTime(iso) || iso;
 
 export function KnownBlock({ t, tasks, name }: { t: OrgThread; tasks: readonly Task[]; name: string }) {
   const byId = useMemo(() => new Map(tasks.map((x) => [x.id, x] as const)), [tasks]);

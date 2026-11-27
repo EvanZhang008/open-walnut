@@ -29,7 +29,7 @@ import { EmptyState, LoadingState } from '../../common/EmptyState';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SectionCard } from '../inputs/SectionCard';
 import '@/styles/settings-sections-addons.css';
-import { usageTime } from './UsageTables';
+import { lineStart, pointInTime } from '@/utils/time';
 
 /** Recent guesses per page. */
 export const RECENT_PAGE = 10;
@@ -54,14 +54,6 @@ const VERDICT_LABELS: Record<string, string> = {
 
 function pct(stats: SuggestFieldStats): string {
   return stats.accuracy === null ? 'n/a' : `${Math.round(stats.accuracy * 100)}%`;
-}
-
-/** Local day + time, no seconds — enough to place a diff in the session. */
-function when(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  // One date and time format across settings and engines: "Aug 23, 3:31 PM" (F32).
-  return usageTime(new Date(t).toISOString());
 }
 
 /**
@@ -136,7 +128,7 @@ export function SuggestAccuracyPanel({ standalone = false }: { standalone?: bool
       <SettingsGroup
         heading={standalone ? undefined : 'Suggestion accuracy'}
         footer={summary && !error && rows.length > 0
-          ? `${summary.commits} launch${summary.commits === 1 ? '' : 'es'} carried a suggestion${summary.since ? `, since ${when(summary.since)}` : ''}.`
+          ? `${summary.commits} launch${summary.commits === 1 ? '' : 'es'} carried a suggestion${summary.since ? `, since ${pointInTime(summary.since) || summary.since}` : ''}.`
           : undefined}
       >
         <SettingsRow
@@ -198,7 +190,7 @@ export function SuggestAccuracyPanel({ standalone = false }: { standalone?: bool
             <SettingsRow
               key={`${rec.at}-${i}`}
               className="suggest-accuracy-record"
-              label={<span className="suggest-accuracy-when">{when(rec.at)}</span>}
+              label={<span className="suggest-accuracy-when">{lineStart(pointInTime(rec.at)) || rec.at}</span>}
               help={
                 <span className="settings-addons-inline">
                   {rec.entries.map((e, j) => (

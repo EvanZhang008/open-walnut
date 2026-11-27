@@ -915,16 +915,16 @@ export function isoDay(days: number): string {
   d.setDate(d.getDate() + days)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-/** The date words a chip shows for a date-only value `days` ahead (formatDateTimeDisplay,
- *  with the slice's "exactly 7 days = M/D" exception). */
+/** The date words a chip shows for a date-only value `days` ahead (formatDateTimeDisplay, which
+ *  writes a day as every screen does: web/src/utils/time.ts dayDate). */
 export function dayWords(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() + days)
-  if (days === 0) return 'Today'
-  if (days === 1) return 'Tomorrow'
-  if (days > 1 && days < 7) return DOW[d.getDay()]
-  return `${d.getMonth() + 1}/${d.getDate()}`
+  if (days === 0) return 'today'
+  if (days === 1) return 'tomorrow'
+  if (days === -1) return 'yesterday'
+  const sameYear = d.getFullYear() === new Date().getFullYear()
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) })
 }
 
 /**
