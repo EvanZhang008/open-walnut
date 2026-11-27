@@ -281,9 +281,10 @@ describe('ratchet (c): only named callers read the prompt table', () => {
       'src/core/session-db.ts:putSessionRow', 'src/core/session-db.ts:readSessionPrompts', 'src/core/session-db.ts:wholeRecordOf',
     ]);
     expect(callersOf('wholeRecordOf')).toEqual(['src/core/session-db.ts:rowToSession', 'src/core/session-db.ts:rowToSessionIn']);
-    expect(callersOf('readSessionPrompts')).toEqual(['src/core/session-db.ts:promptBatch']);
+    // The host channel's cut check on a stripped row, once per stored text (its hash) per process.
+    expect(callersOf('readSessionPrompts')).toEqual(['src/core/session-db.ts:promptBatch', 'src/core/session-tracker.ts:storedSpawnPromptCut']);
     // The stub decoder reads no table: the cache scan, the patch and the list stay off it.
-    for (const fn of ['decodeSessionRow', 'scanStubsOf', 'sessionCacheRowsSql']) {
+    for (const fn of ['decodeSessionRow', 'scanStubsOf', 'sessionCacheRowsSql', 'sessionCacheRows']) {
       expect(db.get(fn), fn).toBeDefined();
       expect(db.get(fn)!, fn).not.toMatch(/tablePrompts\(|wholeRecordOf\(|readSessionPrompts\(|rowToSession(In)?\(/);
     }

@@ -25,7 +25,7 @@ import { mergeLeaderCopy, rowOwnedHere } from './sessions/session-row-owner.js';
 import { claimStart, isClaimed, releaseClaim } from './sessions/starting-claims.js';
 import { prepared } from '../lib/sqlite-prepared.js';
 import { reopenIfWiped } from '../lib/sqlite-wiped.js';
-import { ensureLateIndexes, type LateIndex } from '../lib/sqlite-late-index.js';
+import { ensureLateIndexes, hasIndex, type LateIndex } from '../lib/sqlite-late-index.js';
 import { lateIndexReport } from './late-index-report.js';
 import type { SessionPromptRef, SessionRecord } from './types.js';
 import {
@@ -273,6 +273,8 @@ function openShared(): DatabaseType {
     // adds missing columns only (task-db.ts does the same).
     const copy = isHostReplica();
     ensureSessionStatusColumns(handle, undefined, { backfill: !copy });
+    // After the column it names (an older file gets it just above).
+    if (!copy) ensureLateIndexes(handle, [TEXT_ROWS_LATE_INDEX], { report: lateIndexReport(SESSION_DB_PATH) });
 
     // Truncate the WAL on open (see task-db.ts:128 — same rationale).
     let checkpoint: unknown = null;
@@ -784,6 +786,8 @@ export function closeDb(): void {
   }
   initAttempted = false;
   initError = null;
+  // A new open starts with the texts in the payload again, until its own gate opens.
+  textsInPayload = true;
 }
 
 /**
@@ -1039,7 +1043,8 @@ function payloadOf(row: Record<string, any>): Record<string, any> {
   if (row.payload == null || row.payload === '') return {};
   try {
     const parsed = JSON.parse(row.payload);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return { ...parsed };
+    // A fresh object of its own (the callers build the record on it): no copy.
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
   } catch (err) {
     log.session.warn('rowToSession: payload JSON parse failed', { claudeSessionId: row.claude_session_id, err: String(err) });
   }
@@ -1105,6 +1110,12 @@ export function decodeSessionRow(row: Record<string, any>, out?: { stored?: Stor
   // A writer that read this whole row in its transaction hands this on to putSessionRow, which
   // then reads nothing again (a status write's second read of both texts, 0.1 to 0.3 ms).
   if (out && row.cache_scan !== 1) out.stored = storedStateOf(prompts, payload);
+  // The common row once stripped, or with no prompt: no text, and each stub it has is the one it
+  // keeps. The payload is the record as it is (the full scan decodes every row this way).
+  if (prompts.appliedAppendSystemPrompt === undefined && prompts.systemPrompt === undefined
+    && refs.appliedAppendSystemPrompt === payload.appliedAppendSystemPromptRef && refs.systemPrompt === payload.profile?.systemPromptRef) {
+    return recordOf(row, payload);
+  }
   // A text still in the payload: its stub (no hash, see promptRefOf). A stub alone: as stored.
   return recordOf(row, withPromptStubs(payload, prompts, refs, false));
 }
@@ -1146,13 +1157,13 @@ function wholeRecordOf(row: Record<string, any>, handle: DatabaseType | null): S
 
 /**
  * The row of a record: its columns and a payload with the stubs of `prompts`, and with their texts
- * too while PROMPTS_IN_PAYLOAD holds (release A: a build before the split reads them there). The
+ * too while promptTextsInPayload() holds (a build before the split reads them there). The
  * record's own texts and stubs are ignored: the caller says what the stored prompts are. `shape`
  * 'texts' is the shape before the split (texts, no stub): the down migration's.
  */
 function encodeSessionRow(
   session: Partial<SessionRecord>, prompts: SessionPrompts, refs: StoredPromptState['refs'] = {},
-  shape: 'stubs' | 'both' | 'texts' = PROMPTS_IN_PAYLOAD ? 'both' : 'stubs',
+  shape: 'stubs' | 'both' | 'texts' = textsInPayload ? 'both' : 'stubs',
 ): Record<string, any> {
   const row: Record<string, any> = {};
   for (const [field, col] of Object.entries(FIELD_TO_COLUMN)) {
@@ -1212,11 +1223,17 @@ export const SESSION_COLUMNS: readonly string[] = EXPLICIT_SESSION_COLUMNS;
 // ── The prompt table ───────────────────────────────────────────────────────
 
 /**
- * Release A writes each prompt into the payload as well as `session_prompts`, so the build before
- * it (a deploy rollback, a downgrade) still reads every prompt. Release B sets this false: the
- * writer leaves only the stubs in the payload.
+ * Whether the writer keeps each prompt in the payload as well as in `session_prompts` (release A's
+ * shape, which every build reads). Each open starts with it on; it goes off only once the strip
+ * gate (session-prompt-gate.ts) found that every build this home can go back to reads the split,
+ * and stays off for the rest of the open: from then on a write leaves only the stubs, and the strip
+ * pass moves the rest. Turning it off before that would strip every live row by its next status
+ * write, the rows whose persona a downgraded build needs first.
  */
-export const PROMPTS_IN_PAYLOAD = true;
+let textsInPayload = true;
+export function promptTextsInPayload(): boolean { return textsInPayload; }
+/** The gate opened: writes from now on leave only the stubs in a payload (until the store closes). */
+export function letPromptTextsLeavePayload(): void { textsInPayload = false; }
 
 /** The column with the stubs of the texts a row's payload holds (session-prompts.ts textRefsColumnOf). */
 export const PROMPT_TEXT_REFS_COLUMN = 'prompt_text_refs';
@@ -1326,6 +1343,7 @@ export function putSessionRow(
   const t0 = performance.now();
   const sid = session.claudeSessionId;
   const source = opts.from ?? sid;
+  const inPayload = textsInPayload;
   // `stored`: the writer's own read of this row in this transaction (decodeSessionRow's `out`).
   const stored = (!opts.from && opts.stored) || storedPromptState(handle, source);
   // Each prompt after this write (`after`: its text; `refs`: a stub whose text this write does not
@@ -1352,18 +1370,18 @@ export function putSessionRow(
       after[k] = text;
       // A text only an old-shape payload holds moves into the table when the payload stops holding
       // it (release B), and goes with the row to its new id.
-      if (!PROMPTS_IN_PAYLOAD || opts.from) sets[k] = text;
+      if (!inPayload || opts.from) sets[k] = text;
       continue;
     }
     if (!stored.refs[k]) continue;
     // A new-shape row: release A carries the table's text into the payload; a move takes it along.
-    const t = PROMPTS_IN_PAYLOAD || opts.from ? fromTable(k) : undefined;
+    const t = inPayload || opts.from ? fromTable(k) : undefined;
     if (t === undefined) { refs[k] = stored.refs[k]; continue; }
-    if (PROMPTS_IN_PAYLOAD) after[k] = t;
+    if (inPayload) after[k] = t;
     else refs[k] = stored.refs[k];
     if (opts.from) sets[k] = t;
   }
-  const row = encodeSessionRow(session, after, refs);
+  const row = encodeSessionRow(session, after, refs, inPayload ? 'both' : 'stubs');
   const cols = [...EXPLICIT_SESSION_COLUMNS, 'payload', ...(hasTextRefsColumn(handle) ? [PROMPT_TEXT_REFS_COLUMN] : [])];
   const bound: Record<string, unknown> = {};
   for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
@@ -1379,7 +1397,7 @@ export function putSessionRow(
     if (text === undefined) continue;
     if (!writePromptRow(handle, sid, k, text)) continue;
     writeStats.promptRowsWritten += 1;
-    if (PROMPTS_IN_PAYLOAD) shadowCheck(handle, sid, k);
+    if (inPayload) shadowCheck(handle, sid, k);
   }
   const ms = performance.now() - t0;
   writeStats.writes += 1;
@@ -1424,9 +1442,6 @@ export function sweepOrphanSessionPrompts(handle: DatabaseType): number {
 /** The marker a finished strip pass leaves (diagnostics and the rollback check; no reader gates on it). */
 export const PROMPT_SPLIT_MARKER = 'prompt-split-v1';
 
-/** Release B's strip job: off in release A (the rehearsal runs it by hand). */
-export const PROMPT_STRIP_ENABLED = false;
-
 /** One batch of a strip pass: what it did and where the next one starts. */
 export interface PromptBatch { ids: string[]; lastRowid: number; done: boolean; rows: number; bytesMoved: number }
 
@@ -1457,15 +1472,22 @@ function promptBatch(handle: DatabaseType, afterRowid: number, maxRows: number, 
     out.lastRowid = Number(raw.rid);
     const sid = String(raw.claude_session_id);
     const before = typeof raw.payload === 'string' ? raw.payload : '';
-    const prompts = kind === 'strip' ? promptsOf(payloadOf(raw)) : readSessionPrompts(handle, sid);
+    // The strip's row as stored: the texts its payload holds, and the stub of each text it does not
+    // (a row a build before the split wrote one text into after a strip keeps the other only in the
+    // table: that stub must stay, or nothing reads the table's text again).
+    const parsed = kind === 'strip' ? payloadOf(raw) : null;
+    const stored = parsed ? storedStateOf(promptsOf(parsed), parsed) : null;
+    const prompts = stored ? stored.texts : readSessionPrompts(handle, sid);
     // Matched on a text-like string that is no prompt: nothing to move, the cursor passes it.
     if (kind === 'strip' && prompts.appliedAppendSystemPrompt === undefined && prompts.systemPrompt === undefined) continue;
     const record = decodeSessionRow(raw);
-    const row = encodeSessionRow(record, prompts, {}, kind === 'unsplit' ? 'texts' : 'stubs');
+    const row = encodeSessionRow(record, prompts, stored?.refs ?? {}, kind === 'unsplit' ? 'texts' : 'stubs');
     if (hasTextRefsColumn(handle)) {
       prepared(handle, `UPDATE sessions SET payload = ?, ${PROMPT_TEXT_REFS_COLUMN} = ? WHERE claude_session_id = ?`).run(row.payload ?? null, row[PROMPT_TEXT_REFS_COLUMN], sid);
     } else prepared(handle, 'UPDATE sessions SET payload = ? WHERE claude_session_id = ?').run(row.payload ?? null, sid);
     if (kind === 'strip') for (const k of PROMPT_KEYS) if (prompts[k] !== undefined) writePromptRow(handle, sid, k, prompts[k]!);
+    // A text a build before the split cleared beside its inline stub: its table row is stale.
+    for (const k of stored?.cleared ?? []) prepared(handle, 'DELETE FROM session_prompts WHERE claude_session_id = ? AND field = ?').run(sid, FIELD_OF[k]);
     out.ids.push(sid);
     out.rows += 1;
     out.bytesMoved += Math.abs(Buffer.byteLength(before, 'utf8') - Buffer.byteLength(String(row.payload ?? ''), 'utf8'));
@@ -1573,9 +1595,11 @@ export function setPromptSplitMarker(handle: DatabaseType, on: boolean): void {
  * payload SQLite already took both prompt texts out of, with their stubs from the row's
  * `prompt_text_refs` column (or, for a row a build before the split wrote, each text's size and a
  * persona's blankness measured here), so no text ever reaches JS through the scan. On the Mac
- * (2026-11-25, 7.7k rows) the payloads came to 75 MB, 59 MB of it these two texts.
+ * (2026-11-25, 7.7k rows) the payloads came to 75 MB, 59 MB of it these two texts. `lead`: extra
+ * columns first; `from`: what follows the table name (an INDEXED BY). sessionCacheRows says when
+ * every row goes through this and when only the few that may hold a text do.
  */
-export function sessionCacheRowsSql(): string {
+export function sessionCacheRowsSql(lead = '', from = ''): string {
   // A row release A or later wrote says in its own column whether its payload holds a text, so it
   // costs no instr, and its stubs come from the column. Only a NULL column (a build before the split
   // wrote the row, and the fill pass has not reached it) is tested and measured: one instr, then the
@@ -1583,11 +1607,72 @@ export function sessionCacheRowsSql(): string {
   const known = `${PROMPT_TEXT_REFS_COLUMN} IS NOT NULL`;
   const remove = `json_remove(payload, '$.appliedAppendSystemPrompt', '$.profile.systemPrompt')`;
   const sizes = TEXT_SIZE_COLUMNS.replaceAll('WHEN g ', () => `WHEN ${PROMPT_TEXT_REFS_COLUMN} IS NULL AND ${HAS_PROMPT_TEXT} AND json_valid(payload) `);
-  return `SELECT ${EXPLICIT_SESSION_COLUMNS.join(', ')},
+  return `SELECT ${lead}${EXPLICIT_SESSION_COLUMNS.join(', ')},
       CASE WHEN ${known} THEN CASE WHEN ${PROMPT_TEXT_REFS_COLUMN} <> '{}' AND json_valid(payload) THEN ${remove} ELSE payload END
         WHEN ${HAS_PROMPT_TEXT} AND json_valid(payload) THEN ${remove} ELSE payload END AS payload,
       1 AS cache_scan, ${PROMPT_TEXT_REFS_COLUMN}, ${sizes}
-    FROM sessions`;
+    FROM sessions ${from}`;
+}
+
+/**
+ * The rows whose payload may hold a prompt text: a NULL `prompt_text_refs` (a build before the split
+ * wrote the row) or one that names a text (release A's shape, or a write before this open's gate
+ * opened). `{}` says the payload holds none. Its partial index lists them without reading a payload.
+ */
+const TEXT_ROW = `coalesce(${PROMPT_TEXT_REFS_COLUMN}, '') <> '{}'`;
+export const TEXT_ROWS_INDEX = 'sessions_prompt_text_rows';
+const TEXT_ROWS_LATE_INDEX: LateIndex = {
+  name: TEXT_ROWS_INDEX,
+  table: 'sessions',
+  sql: `CREATE INDEX IF NOT EXISTS ${TEXT_ROWS_INDEX} ON sessions(claude_session_id) WHERE ${TEXT_ROW}`,
+  warm: `SELECT count(*) FROM sessions WHERE ${TEXT_ROW}`,
+};
+/**
+ * Up to this many such rows, the scan splits in two: every other row's columns and payload as they
+ * are, and these few through the guarded SQL (sessionCacheRowsSql), found by the index. More of
+ * them (before the strip ran) and the guarded SQL reads every row, as one query.
+ */
+export const PLAIN_SCAN_MAX_TEXT_ROWS = 50;
+const scanStats = { plain: 0, guarded: 0 };
+export function sessionScanStats(): Readonly<typeof scanStats> { return { ...scanStats }; }
+
+/**
+ * The rows of the store cache's full scan (session-tracker.ts loadStoreRows), in rowid order, none
+ * with a prompt text: decodeSessionRow makes each a record with only the stubs. Once the strip has
+ * run (release B) almost no row holds a text, so almost every row is read plain, with no CASE, no
+ * measured sizes and no JSON function; the few that may hold one (a NULL column: a build before the
+ * split wrote it since; or a column naming a text) are listed by the partial index without reading
+ * a payload, and SQLite takes their texts out. Before that (or before the index is built), the
+ * guarded SQL reads every row.
+ */
+export function sessionCacheRows(handle: DatabaseType): Record<string, any>[] {
+  // hasIndex remembers an index it once saw: one dropped since (by hand) fails its INDEXED BY, and
+  // the guarded scan below reads every row instead.
+  if (hasIndex(handle, TEXT_ROWS_INDEX)) {
+    try {
+      const n = Number(prepared(handle, `SELECT count(*) FROM sessions INDEXED BY ${TEXT_ROWS_INDEX} WHERE ${TEXT_ROW}`, 'pluck').get() ?? 0);
+      if (n <= PLAIN_SCAN_MAX_TEXT_ROWS) {
+        const plain = prepared(handle, `SELECT rowid AS scan_rowid, ${EXPLICIT_SESSION_COLUMNS.join(', ')}, payload FROM sessions WHERE NOT (${TEXT_ROW}) ORDER BY rowid`).all() as Record<string, any>[];
+        const guarded = n === 0 ? [] : prepared(handle, `${sessionCacheRowsSql('rowid AS scan_rowid, ', `INDEXED BY ${TEXT_ROWS_INDEX}`)} WHERE ${TEXT_ROW} ORDER BY rowid`).all() as Record<string, any>[];
+        scanStats.plain += 1;
+        return guarded.length === 0 ? plain : mergeByRowid(plain, guarded);
+      }
+    } catch (err) {
+      log.session.warn('session store scan: the text-rows index could not be used', { err: String(err) });
+    }
+  }
+  scanStats.guarded += 1;
+  return prepared(handle, sessionCacheRowsSql()).all() as Record<string, any>[];
+}
+
+/** Two lists in rowid order (scan_rowid) as one. */
+function mergeByRowid(a: Record<string, any>[], b: Record<string, any>[]): Record<string, any>[] {
+  const out: Record<string, any>[] = new Array(a.length + b.length);
+  let i = 0, j = 0, k = 0;
+  while (i < a.length && j < b.length) out[k++] = a[i].scan_rowid <= b[j].scan_rowid ? a[i++] : b[j++];
+  while (i < a.length) out[k++] = a[i++];
+  while (j < b.length) out[k++] = b[j++];
+  return out;
 }
 
 /**

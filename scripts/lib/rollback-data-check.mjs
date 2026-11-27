@@ -6,32 +6,21 @@ import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import Database, { sqliteLibrary, sqliteLibraryProblem } from '../../src/lib/sqlite.ts';
 import { SPLIT_PROMPT_ROWS_SQL } from '../../src/core/session-prompts.ts';
+import { STORE_FORMAT_PROBE_TIMEOUT_MS, isolatedBuildEnv, probeStoreFormats } from '../../src/core/store-format-probe.ts';
 
 // Load Walnut's library before any raw bun:sqlite open, including a caller's test fixture.
 if (process.platform === 'darwin') sqliteLibrary();
 
 const execute = promisify(execFile);
-export const ROLLBACK_CHECK_TIMEOUT_MS = 45_000;
-
-/** What the old build runs with: an isolated home of its own, nothing of the user's reachable. */
-function isolatedEnv(root, data) {
-  return {
-    PATH: process.env.PATH ?? '',
-    HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home'), CFFIXED_USER_HOME: path.join(root, 'home'),
-    TMPDIR: root, OPEN_WALNUT_HOME: data, WALNUT_CLI_DIRECT: '1', WALNUT_NO_AUTO_UPDATE: '1',
-    WALNUT_RUNTIME_DIR: path.join(root, 'runtime'), WALNUT_DAEMON_DIR: path.join(root, 'daemon'),
-    WALNUT_STREAMS_DIR: path.join(root, 'streams'), WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
-    WALNUT_SESSION_HOST: '0', WALNUT_DISABLE_BACKGROUND_AI: '1', WALNUT_DISABLE_SEARCH: '1',
-    WALNUT_STT_AUTO_SETUP: '0', WALNUT_ORG_AUTOSTART: '0', WALNUT_LOCAL_CLAUDE_PROBE: '0',
-  };
-}
+export const ROLLBACK_CHECK_TIMEOUT_MS = STORE_FORMAT_PROBE_TIMEOUT_MS;
 
 export const SESSIONS_SPLIT_REFUSAL = 'sessions.sqlite has prompts in session_prompts that this build cannot read; run `walnut sessions-prompts unsplit` from the newer build first.';
 
 /**
  * The session store's prompt split (src/core/session-prompts.ts): a file with rows whose prompts
  * live only in session_prompts needs a build that reads them. Such a build answers the store-format
- * probe; a build before the split has no such command, and is refused. Null: no session store.
+ * probe; a build before the split says it has no such command, and is refused. A build that does
+ * not finish answering (a timeout, a crash) is let through with a warning. Null: no session store.
  */
 async function checkSessionsShape({ file, home, tmpDir, run }) {
   const source = path.join(home, 'sessions.sqlite');
@@ -46,21 +35,15 @@ async function checkSessionsShape({ file, home, tmpDir, run }) {
     split = hasTable ? Number(db.prepare(SPLIT_PROMPT_ROWS_SQL).get().n) : 0;
   } finally { db.close(); }
   if (split === 0) return { splitRows: 0 };
-  const root = await fs.mkdtemp(path.join(tmpDir, 'walnut-rollback-check.'));
-  try {
-    await fs.mkdir(path.join(root, 'home'), { mode: 0o700 });
-    const data = path.join(root, 'data');
-    await fs.mkdir(data);
-    let formats = null;
-    try {
-      const result = await run(file, ['--json', 'store-formats'], {
-        cwd: root, env: isolatedEnv(root, data), timeout: ROLLBACK_CHECK_TIMEOUT_MS, killSignal: 'SIGTERM', maxBuffer: 64 * 1024,
-      });
-      formats = JSON.parse(result.stdout);
-    } catch { formats = null; }
-    if (!(Number(formats?.sessionsPromptSplit) >= 1)) throw new Error(SESSIONS_SPLIT_REFUSAL);
-    return { splitRows: split, sessionsPromptSplit: Number(formats.sessionsPromptSplit) };
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  const answer = await probeStoreFormats(file, { tmpDir, run, timeoutMs: ROLLBACK_CHECK_TIMEOUT_MS });
+  // A build that never finished answering is not refused on it: a rollback goes on, as the launcher
+  // starts a version whose check could not run (a dark Mac is worse). It is said, at warn.
+  if ('noAnswer' in answer) {
+    process.stderr.write(`Rollback data check: warn: the build did not answer the store-format probe (${answer.noAnswer}); not refused on the session store's prompt split.\n`);
+    return { splitRows: split, sessionsPromptSplit: null, probe: `no answer: ${answer.noAnswer}` };
+  }
+  if (!(Number(answer.formats.sessionsPromptSplit) >= 1)) throw new Error(SESSIONS_SPLIT_REFUSAL);
+  return { splitRows: split, sessionsPromptSplit: Number(answer.formats.sessionsPromptSplit) };
 }
 
 export async function checkRollbackData({ file, home, tmpDir = os.tmpdir(), run = execute }) {
@@ -95,7 +78,7 @@ async function checkTaskStore({ file, home, tmpDir, run }) {
       version = snapshot.version;
       await fs.writeFile(path.join(tasks, 'tasks.sqlite'), snapshot.bytes);
     } finally { db.close(); }
-    const env = isolatedEnv(root, data);
+    const env = isolatedBuildEnv(root, data);
     try {
       const result = await run(file, ['--json', 'tasks', '--project', '__rollback_compatibility_probe__'], {
         cwd: root, env, timeout: ROLLBACK_CHECK_TIMEOUT_MS, killSignal: 'SIGTERM', maxBuffer: 64 * 1024,

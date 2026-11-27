@@ -39,19 +39,23 @@ export const PROMPT_KEYS = ['appliedAppendSystemPrompt', 'systemPrompt'] as cons
  */
 export const SESSION_STORE_FORMATS = { sessionsPromptSplit: 1 } as const;
 
-/** Payload tests for a text in SQL (the quote after the colon: a stub's `...Ref` key never matches). */
-export const HAS_AASP_TEXT = `instr(payload, '"appliedAppendSystemPrompt":"') > 0`;
-export const HAS_PERSONA_TEXT = `instr(payload, '"systemPrompt":"') > 0`;
-/** Either text: one `instr` (both keys end in `ystemPrompt":"`; a scan's misses read the whole payload, so one, not two). */
+/**
+ * A payload that may hold either text, as a cheap first filter (the quote after the colon: a stub's
+ * `...Ref` key never matches). One `instr`: both keys end in `ystemPrompt":"`, and a miss reads the
+ * whole payload, so one, not two. A match may be another object's `systemPrompt`: the exact test
+ * is json_type (SPLIT_PROMPT_ROW) or the JS parse (the strip pass).
+ */
 export const HAS_PROMPT_TEXT = `instr(payload, 'ystemPrompt":"') > 0`;
 /**
  * A row of the new shape: a stub whose text its payload does not hold and only the table has (only
  * a build from the split on reads it). A stub written beside its text (`inline`) is not one: its
- * text was cleared by a build before the split.
+ * text was cleared by a build before the split. "Holds its text" is the JSON path's own type, never
+ * a substring: a stripped payload with a `systemPrompt` string in some other object is still split.
  */
-const SPLIT_REF = (ref: string, text: string) =>
-  `(instr(payload, '"${ref.split('.').pop()}"') > 0 AND NOT ${text} AND json_valid(payload) AND json_type(payload, '$.${ref}') = 'object' AND coalesce(json_extract(payload, '$.${ref}.inline'), 0) <> 1)`;
-export const SPLIT_PROMPT_ROW = `(${SPLIT_REF('appliedAppendSystemPromptRef', HAS_AASP_TEXT)} OR ${SPLIT_REF('profile.systemPromptRef', HAS_PERSONA_TEXT)})`;
+const SPLIT_REF = (ref: string, field: string) =>
+  `(instr(payload, '"${ref.split('.').pop()}"') > 0 AND json_valid(payload) AND json_type(payload, '$.${ref}') = 'object'`
+  + ` AND coalesce(json_extract(payload, '$.${ref}.inline'), 0) <> 1 AND coalesce(json_type(payload, '$.${field}'), '') <> 'text')`;
+export const SPLIT_PROMPT_ROW = `(${SPLIT_REF('appliedAppendSystemPromptRef', 'appliedAppendSystemPrompt')} OR ${SPLIT_REF('profile.systemPromptRef', 'profile.systemPrompt')})`;
 /** Does a sessions file hold any row of the new shape? (read only; the rollback check, the leader switch) */
 export const SPLIT_PROMPT_ROWS_SQL = `SELECT count(*) AS n FROM sessions WHERE ${SPLIT_PROMPT_ROW}`;
 export type PromptKey = typeof PROMPT_KEYS[number];

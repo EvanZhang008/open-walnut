@@ -17,6 +17,7 @@ import path from 'node:path'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { serveLauncherScript } from '../../src/providers/serve-launcher-script-cli.js'
 import { guardedPath } from '../setup/exec-guard-core.js'
+import { SESSIONS_SPLIT_REFUSAL } from '../../scripts/lib/rollback-data-check.mjs'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
 const LIB = path.join(REPO, 'scripts', 'lib', 'devprod-launcher.sh')
@@ -145,14 +146,14 @@ describe('a version\'s run script', () => {
     expect(alive(Number(serverPid))).toBe(false)
   })
 
-  it('a put-back start checks the data first: refused (exit 78, no server) only on the check\'s schema refusal; a check that fails otherwise, or passes, starts it', async () => {
+  it('a put-back start checks the data first: refused (exit 78, no server) only on the check\'s own refusals (task schema, session prompts); a check that fails otherwise, or passes, starts it', async () => {
     const f = fixture()
     // The serve root's data check and a stub bun that runs it: check.mode = refuse prints the check's schema
     // refusal and fails, broken fails with some other error, anything else passes.
     fs.mkdirSync(path.join(f.dir, 'scripts', 'lib'), { recursive: true })
     fs.writeFileSync(path.join(f.dir, 'scripts', 'lib', 'rollback-data-check.mjs'), '// stub\n')
     const bun = path.join(f.dir, 'bun')
-    fs.writeFileSync(bun, `#!/bin/sh\necho "check $*" >> '${f.dir}/checks'\nm=$(cat '${f.dir}/check.mode' 2>/dev/null)\n[ "$m" = refuse ] && { echo "Rollback refused: Task database schema 16 is newer than supported schema 15; use a newer Walnut build." >&2; exit 1; }\n[ "$m" = broken ] && { echo "error: Cannot find module better-sqlite3" >&2; exit 1; }\nexit 0\n`, { mode: 0o755 })
+    fs.writeFileSync(bun, `#!/bin/sh\necho "check $*" >> '${f.dir}/checks'\nm=$(cat '${f.dir}/check.mode' 2>/dev/null)\n[ "$m" = refuse ] && { echo "Rollback refused: Task database schema 16 is newer than supported schema 15; use a newer Walnut build." >&2; exit 1; }\n[ "$m" = split ] && { echo "Rollback refused: ${SESSIONS_SPLIT_REFUSAL.replace(/`/g, '\\`')}" >&2; exit 1; }\n[ "$m" = broken ] && { echo "error: Cannot find module better-sqlite3" >&2; exit 1; }\nexit 0\n`, { mode: 0o755 })
     const run = path.join(f.dir, 'run')
     expect(lib(f, `BUN_BIN='${bun}'; HOME='${f.dir}/h'; svc_write_run '${run}'`, { host: false }).status).toBe(0)
     fs.writeFileSync(path.join(f.dir, 'check.mode'), 'refuse\n')
@@ -162,6 +163,12 @@ describe('a version\'s run script', () => {
     expect(read(path.join(f.dir, 'server.runs'))).toBe('')
     expect(read(path.join(f.dir, 'checks')).trim()).toBe(`check scripts/lib/rollback-data-check.mjs ${f.file} ${f.dir}/h/.open-walnut`)
     expect(read(f.log)).toMatch(/cannot read the data a newer one wrote: not started/)
+    // The session store's refusal (prompts this version cannot read: rollback-data-check.mjs) keeps it from starting too.
+    fs.writeFileSync(path.join(f.dir, 'check.mode'), 'split\n')
+    const split = startRun(run, { WALNUT_LAUNCHER_PUTBACK: '1' })
+    await until(() => split.exitCode !== null, 10_000, 'the start refused on split prompts', f.log)
+    expect(split.exitCode).toBe(78)
+    expect(read(path.join(f.dir, 'server.runs'))).toBe('')
     // A check that breaks for another reason never keeps the Mac dark: it says so and starts.
     fs.writeFileSync(path.join(f.dir, 'check.mode'), 'broken\n')
     const broken = startRun(run, { WALNUT_LAUNCHER_PUTBACK: '1' })

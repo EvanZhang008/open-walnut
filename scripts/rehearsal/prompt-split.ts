@@ -5,13 +5,18 @@
  * itself writable, and nothing reaches a live home.
  *
  *   bun scripts/rehearsal/prompt-split.ts --ref <sessions.sqlite copy> --work <empty dir>
- *     --old <a tree of the build before the split (src/ and node_modules)> [--old-build <walnut file>]
+ *     --old <a tree of the build before the split (src/ and node_modules)> [--a <a tree of release A>]
+ *     [--old-build <walnut file>]
  *
- * Take the reference with `sqlite3 <home>/sessions.sqlite ".backup <dir>/sessions.sqlite"`, never
- * a plain copy of a live file. Phases: measure (the build before, release A, and A on the stripped
- * store), strip (release B's job, run here by hand), the round trip of every session against the
- * reference, a strip killed after 3, 10 and 20 batches, unsplit, and what the build before reads of
- * each shape (and whether its rollback check refuses). Prints one JSON report.
+ * This tree is release B. Take the reference with `sqlite3 <home>/sessions.sqlite ".backup
+ * <dir>/sessions.sqlite"`, never a plain copy of a live file. Phases: measure (the build before,
+ * release A, each twice in turn, and B on the stripped store with its writer past the gate), strip
+ * (B's job, run here by hand past its gate), the round trip of every session against the reference,
+ * a strip killed after 3, 10 and 20 batches, a build before the split writing stripped rows again
+ * and B stripping them once more, unsplit, what the build before reads of each shape and
+ * whether the rollback check refuses it (without --old-build: the old tree's own CLI), and B's gate
+ * as it stands on this machine (its deploy's rollback builds asked the probe). Prints one JSON
+ * report, and the three columns HEAD / A / B last.
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -115,12 +120,20 @@ function sizesOf(db: any, file: string): Record<string, number> {
 /** Full scans and WRITES status writes on the 30 largest live rows, with `tree`'s code. */
 // 400 writes left a p50 that moved 0.1 ms between two runs of the same build on the Mac.
 const WRITES = 1200;
-async function phaseMeasure(tree: string): Promise<unknown> {
+async function phaseMeasure(tree: string, stubs: boolean): Promise<unknown> {
   const home = await guardHome(tree);
   const tracker = await import(path.join(tree, 'src/core/session-tracker.ts'));
   const sdb = await import(path.join(tree, 'src/core/session-db.ts'));
   const { writingAsHost } = await import(path.join(tree, 'src/core/sessions/session-row-owner.ts'));
   await tracker.listSessions();
+  // The indexes a server builds 120 s after the open, built now (each build its own).
+  const late = await import(path.join(tree, 'src/lib/sqlite-late-index.ts')).catch(() => null);
+  const lateBuilt: string[] = late?.buildLateIndexesNow ? await late.buildLateIndexesNow() : [];
+  // Release B past its gate: writes leave only the stubs.
+  if (stubs) {
+    if (!sdb.letPromptTextsLeavePayload) throw new Error(`${tree} has no release B writer`);
+    sdb.letPromptTextsLeavePayload();
+  }
   const db = sdb.getDb();
   const file = path.join(home, 'sessions.sqlite');
   const sizes = sizesOf(db, file);
@@ -167,7 +180,11 @@ async function phaseMeasure(tree: string): Promise<unknown> {
   }
   const wal = fs.existsSync(`${file}-wal`) ? fs.statSync(`${file}-wal`).size : 0;
   const landed = Number(db.prepare('SELECT total_changes()').pluck().get()) - changesBefore;
-  return { sizes, fullScanBeforeFillMs: beforeFill, fill, fullScanMs: stats(scans), statusWriteMs: stats(writes), walBytesPerWrite: Math.round(wal / WRITES), rowChanges: landed, writeStats: sdb.sessionRowWriteStats?.() ?? null };
+  return {
+    sizes, lateBuilt, fullScanBeforeFillMs: beforeFill, fill, fullScanMs: stats(scans), scanPaths: sdb.sessionScanStats?.() ?? null,
+    statusWriteMs: stats(writes), walBytesPerWrite: Math.round(wal / WRITES), rowChanges: landed, writeStats: sdb.sessionRowWriteStats?.() ?? null,
+    textsInPayloadAfter: sdb.promptTextsInPayload?.() ?? true,
+  };
 }
 
 /** Release B's strip job, run here by hand; prints `batch <n>` after each batch for a parent that kills it. */
@@ -179,6 +196,8 @@ async function phaseStrip(): Promise<unknown> {
   await tracker.listSessions();
   const db = sdb.getDb();
   const before = sizesOf(db, path.join(home, 'sessions.sqlite'));
+  // The job past its gate (the gate itself: phaseGate).
+  sdb.letPromptTextsLeavePayload();
   const batchMs: number[] = [];
   let n = 0;
   const pass = await runPromptPass('strip', { onBatch: (b: { ms: number }) => { batchMs.push(b.ms); process.stdout.write(`batch ${++n}\n`); } });
@@ -191,6 +210,51 @@ async function phaseStrip(): Promise<unknown> {
     textRowsLeft: db.prepare(`SELECT count(*) FROM sessions WHERE instr(payload, '"appliedAppendSystemPrompt":"') > 0 OR instr(payload, '"systemPrompt":"') > 0`).pluck().get(),
     before, after: sizesOf(db, path.join(home, 'sessions.sqlite')),
   };
+}
+
+/**
+ * A stripped store a build before the split wrote again (design 3.3, review item 1): on rows whose
+ * two texts both live only in the table, it sets a new spawn prompt (the text back in the payload,
+ * the persona's stub kept, the column NULL), in SQL as such a build does it. Then B's fill and strip
+ * run again, and every session is read back whole.
+ */
+async function phaseMixed(): Promise<unknown> {
+  await guardHome(NEW_TREE);
+  const tracker = await import(path.join(NEW_TREE, 'src/core/session-tracker.ts'));
+  const sdb = await import(path.join(NEW_TREE, 'src/core/session-db.ts'));
+  const { runPromptPass } = await import(path.join(NEW_TREE, 'src/core/session-prompt-jobs.ts'));
+  await tracker.listSessions();
+  const db = sdb.getDb();
+  const ids = db.prepare(`SELECT claude_session_id FROM sessions WHERE json_valid(payload)
+    AND json_type(payload, '$.profile.systemPromptRef') = 'object' AND json_type(payload, '$.appliedAppendSystemPromptRef') = 'object'
+    AND json_type(payload, '$.profile.systemPrompt') IS NULL AND json_type(payload, '$.appliedAppendSystemPrompt') IS NULL LIMIT 20`).pluck().all() as string[];
+  const newer: Record<string, string> = {};
+  for (const sid of ids) {
+    newer[sid] = sha(`spawn prompt an older build set on ${sid}`);
+    db.prepare("UPDATE sessions SET payload = json_set(payload, '$.appliedAppendSystemPrompt', ?), prompt_text_refs = NULL WHERE claude_session_id = ?").run(`spawn prompt an older build set on ${sid}`, sid);
+  }
+  tracker._dropSessionStoreCacheForTesting();
+  const fill = await runPromptPass('refs');
+  sdb.letPromptTextsLeavePayload();
+  const strip = await runPromptPass('strip');
+  const digest: Digest = {};
+  for (const sid of db.prepare('SELECT claude_session_id FROM sessions').pluck().all() as string[]) {
+    const rec = tracker.getSessionByClaudeIdSync(sid);
+    digest[sid] = rec ? digestOf(rec) : [null, null, 'missing'];
+  }
+  return { rows: ids.length, newer, fillRows: fill.rows, stripRows: strip.rows, digest,
+    textRowsLeft: db.prepare(`SELECT count(*) FROM sessions WHERE instr(payload, '"appliedAppendSystemPrompt":"') > 0 OR instr(payload, '"systemPrompt":"') > 0`).pluck().get() };
+}
+
+/** B's gate on a copy, as it stands on this machine: its deploy's rollback builds are asked the probe (read only). */
+async function phaseGate(): Promise<unknown> {
+  await guardHome(NEW_TREE);
+  const sdb = await import(path.join(NEW_TREE, 'src/core/session-db.ts'));
+  const gate = await import(path.join(NEW_TREE, 'src/core/session-prompt-gate.ts'));
+  const builds = gate.deployRollbackBuilds(process.env, process.env.REHEARSAL_REAL_HOME);
+  const t = performance.now();
+  const r = await gate.promptStripGate(sdb.getDb(), { rollbackBuilds: builds });
+  return { ...r, ms: r2(performance.now() - t) };
 }
 
 async function phaseUnsplit(): Promise<unknown> {
@@ -215,6 +279,7 @@ async function phaseUnsplit(): Promise<unknown> {
 const WORK = args.get('work') ?? '';
 const REF = args.get('ref') ?? '';
 const OLD = args.get('old') ?? '';
+const A_TREE = args.get('a') ?? '';
 
 function homeFrom(name: string, from: string): string {
   const home = path.join(WORK, name);
@@ -224,36 +289,14 @@ function homeFrom(name: string, from: string): string {
   return home;
 }
 
-/**
- * Release B's code for the writes: this tree with PROMPTS_IN_PAYLOAD false (the writer leaves only
- * the stubs in a payload), built in the work folder; release A ships it true.
- */
-function releaseBTree(): string {
-  const tree = path.join(WORK, 'tree-b');
-  fs.rmSync(tree, { recursive: true, force: true });
-  fs.mkdirSync(tree, { recursive: true });
-  for (const d of ['src', 'packages']) fs.cpSync(path.join(NEW_TREE, d), path.join(tree, d), { recursive: true, dereference: false });
-  for (const f of ['package.json', 'tsconfig.json']) fs.copyFileSync(path.join(NEW_TREE, f), path.join(tree, f));
-  for (const d of ['node_modules', 'vendor']) {
-    let target: string;
-    try { target = fs.realpathSync(path.join(NEW_TREE, d)); } catch { continue; } // vendor/ is the Mac's only
-    fs.symlinkSync(target, path.join(tree, d));
-  }
-  const db = path.join(tree, 'src/core/session-db.ts');
-  const text = fs.readFileSync(db, 'utf8');
-  if (!text.includes('export const PROMPTS_IN_PAYLOAD = true;')) throw new Error('release A constant not found');
-  fs.writeFileSync(db, text.replace('export const PROMPTS_IN_PAYLOAD = true;', 'export const PROMPTS_IN_PAYLOAD = false;'));
-  return tree;
-}
-
 /** Run one phase in a child; `killAfter` SIGKILLs it once it printed that many batches. */
-function child(phase: string, home: string, opts: { tree?: string; killAfter?: number } = {}): Promise<any> {
+function child(phase: string, home: string, opts: { tree?: string; killAfter?: number; stubs?: boolean } = {}): Promise<any> {
   const out = path.join(home, `${phase}.json`);
   fs.rmSync(out, { force: true });
   return new Promise((resolve, reject) => {
-    const kid = spawn(process.execPath, [import.meta.path, '--phase', phase, '--out', out, '--tree', opts.tree ?? NEW_TREE], {
+    const kid = spawn(process.execPath, [import.meta.path, '--phase', phase, '--out', out, '--tree', opts.tree ?? NEW_TREE, '--stubs', opts.stubs ? '1' : '0'], {
       cwd: opts.tree ?? NEW_TREE, stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, OPEN_WALNUT_HOME: home, WALNUT_DAEMON_DIR: path.join(home, 'runtime'), NODE_ENV: 'test', WALNUT_LOG_LEVEL: 'warn' },
+      env: { ...process.env, OPEN_WALNUT_HOME: home, WALNUT_DAEMON_DIR: path.join(home, 'runtime'), NODE_ENV: 'test', WALNUT_LOG_LEVEL: 'warn', REHEARSAL_REAL_HOME: process.env.HOME ?? '' },
     });
     let err = '';
     let killed = false;
@@ -312,11 +355,37 @@ async function rollbackCheck(home: string, build: string): Promise<string> {
   try { return `passes: ${JSON.stringify((await checkRollbackData({ file: build, home: only })).sessions ?? null)}`; } catch (err) { return `refuses: ${(err as Error).message}`; }
 }
 
+/** Section 4.3's numbers in three columns: HEAD (before A), A, B (stripped, past its gate). */
+function columns(r: Record<string, any>): Record<string, unknown> {
+  const pair = (a: any, b: any, f: (m: any) => unknown) => [f(a), f(b)];
+  const scan = (m: any) => m?.fullScanMs?.p50;
+  const write = (m: any) => (m ? `${m.statusWriteMs.p50} / ${m.statusWriteMs.p95} / ${m.statusWriteMs.max}` : null);
+  const wal = (m: any) => m?.walBytesPerWrite;
+  const live = (m: any) => m?.sizes?.livePayloadMean;
+  return {
+    fullScanP50Ms: { HEAD: pair(r.measureOld, r.measureOld2, scan), A: pair(r.measureA, r.measureA2, scan), B: pair(r.measureB, r.measureB2, scan) },
+    statusWriteP50P95MaxMs: { HEAD: pair(r.measureOld, r.measureOld2, write), A: pair(r.measureA, r.measureA2, write), B: pair(r.measureB, r.measureB2, write) },
+    walBytesPerWrite: { HEAD: pair(r.measureOld, r.measureOld2, wal), A: pair(r.measureA, r.measureA2, wal), B: pair(r.measureB, r.measureB2, wal) },
+    livePayloadMeanBytes: { HEAD: live(r.measureOld), A: live(r.measureA2), B: live(r.measureB) },
+    bScanPathsPlainGuarded: r.measureB?.scanPaths,
+    strip: { ms: r.strip?.pass?.ms, rows: r.strip?.pass?.rows, batches: r.strip?.pass?.batches, longestBatchMs: r.strip?.pass?.longestBatchMs, batchP95Ms: r.strip?.batchMs?.p95, secondPassRows: r.strip?.secondPassRows },
+    roundTrip: r.roundTripStripped,
+    crash: r.crash,
+    unsplit: { ms: r.unsplit?.pass?.ms, rows: r.unsplit?.pass?.rows, oldReads: r.oldReadsUnsplit, payloads: r.unsplitPayloads },
+    oldBuildRefusal: r.rollbackCheck,
+    olderBuildWroteThenB: r.mixed,
+    gateHere: r.gate,
+  };
+}
+
 async function main(): Promise<void> {
   const phase = args.get('phase');
   if (phase) {
     const tree = args.get('tree') ?? NEW_TREE;
-    const run = { oldread: () => phaseOldRead(tree), newread: phaseNewRead, measure: () => phaseMeasure(tree), strip: phaseStrip, unsplit: phaseUnsplit }[phase];
+    const run = {
+      oldread: () => phaseOldRead(tree), newread: phaseNewRead, measure: () => phaseMeasure(tree, args.get('stubs') === '1'),
+      strip: phaseStrip, unsplit: phaseUnsplit, gate: phaseGate, mixed: phaseMixed,
+    }[phase];
     if (!run) throw new Error(`unknown phase ${phase}`);
     fs.writeFileSync(args.get('out')!, JSON.stringify(await run()));
     process.exit(0);
@@ -330,24 +399,44 @@ async function main(): Promise<void> {
   const refRead: Digest = await child('oldread', homeFrom('ref', REF), { tree: OLD });
 
   // 1. Status writes and scans: the build before and release A on the same copy, twice in turn
-  // (the machine's load moves between runs); release A's second home is the one checked below.
+  // (the machine's load moves between runs).
+  const aTree = A_TREE || NEW_TREE;
   report.measureOld = await child('measure', homeFrom('m-old', REF), { tree: OLD });
-  report.measureA = await child('measure', homeFrom('m-a1', REF));
+  report.measureA = await child('measure', homeFrom('m-a1', REF), { tree: aTree });
   report.measureOld2 = await child('measure', homeFrom('m-old2', REF), { tree: OLD });
   const aHome = homeFrom('m-a', REF);
-  report.measureA2 = await child('measure', aHome);
+  report.measureA2 = await child('measure', aHome, { tree: aTree });
   // The build before reads release A's rows (its status writes included): same texts.
   report.oldReadsA = compare(refRead, await child('oldread', aHome, { tree: OLD }));
+  // B before its gate opens writes as A does: its scan and writes on the unstripped copy.
+  report.measureBGated = await child('measure', homeFrom('m-b-gated', REF));
 
   // 2. The strip, then the round trip of every session.
   const sHome = homeFrom('strip', REF);
+  report.gate = await child('gate', homeFrom('gate', REF));
   report.strip = await child('strip', sHome);
   const sRead = await child('newread', sHome);
   report.roundTripStripped = { ...compare(refRead, sRead.digest), promptRows: sRead.promptRows, badSha: sRead.badSha };
   report.oldReadsStripped = compare(refRead, await child('oldread', sHome, { tree: OLD }));
-  // Release B's writes on the stripped store (B's code), and release A's there (a rollback from B to A).
-  report.measureB = await child('measure', homeFrom('m-b', path.join(sHome, 'sessions.sqlite')), { tree: releaseBTree() });
-  report.measureAOnStripped = await child('measure', homeFrom('m-a-stripped', path.join(sHome, 'sessions.sqlite')));
+  // A build before the split writes some stripped rows again, then B strips once more (review item 1).
+  const mixed = await child('mixed', homeFrom('mixed', path.join(sHome, 'sessions.sqlite')));
+  const mixedCmp = { rows: mixed.rows, fillRows: mixed.fillRows, stripRows: mixed.stripRows, textRowsLeft: mixed.textRowsLeft, newSpawnPromptEqual: 0, personaEqual: 0, otherRowsRecordEqual: 0, otherRows: 0, diff: [] as string[] };
+  for (const [sid, [a, p, rec]] of Object.entries(refRead)) {
+    const g = mixed.digest[sid];
+    if (sid in mixed.newer) {
+      if (g?.[0] === mixed.newer[sid]) mixedCmp.newSpawnPromptEqual++; else mixedCmp.diff.push(sid);
+      if (g?.[1] === p) mixedCmp.personaEqual++; else mixedCmp.diff.push(sid);
+    } else {
+      mixedCmp.otherRows++;
+      if (g && g[0] === a && g[1] === p && g[2] === rec) mixedCmp.otherRowsRecordEqual++; else mixedCmp.diff.push(sid);
+    }
+  }
+  mixedCmp.diff = mixedCmp.diff.slice(0, 5);
+  report.mixed = mixedCmp;
+  // Release B's scan and writes on the stripped store (past its gate), twice; release A's there (a rollback from B to A).
+  report.measureB = await child('measure', homeFrom('m-b', path.join(sHome, 'sessions.sqlite')), { stubs: true });
+  report.measureB2 = await child('measure', homeFrom('m-b2', path.join(sHome, 'sessions.sqlite')), { stubs: true });
+  report.measureAOnStripped = await child('measure', homeFrom('m-a-stripped', path.join(sHome, 'sessions.sqlite')), { tree: aTree });
 
   // 3. A strip killed after 3, 10 and 20 batches, then finished.
   const cHome = homeFrom('crash', REF);
@@ -368,15 +457,18 @@ async function main(): Promise<void> {
   report.oldReadsUnsplit = compare(refRead, await child('oldread', uHome, { tree: OLD }));
   report.unsplitPayloads = await payloadsAgainstRef(path.join(uHome, 'sessions.sqlite'));
 
-  // 5. The rollback check with a real build before the split: refuses the stripped store only.
-  const oldBuild = args.get('old-build');
+  // 5. The rollback check with a build before the split: refuses the stripped store only. Without
+  // --old-build, the old tree's own CLI is that build.
+  const oldBuild = args.get('old-build') || path.join(WORK, 'old-build.sh');
+  if (!args.get('old-build')) fs.writeFileSync(oldBuild, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(OLD, 'src/cli.ts'))} "$@"\n`, { mode: 0o755 });
   // This tree's CLI as the build the check runs: it reads the split, so it passes the stripped store.
   const newBuild = path.join(WORK, 'new-build.sh');
   fs.writeFileSync(newBuild, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(NEW_TREE, 'src/cli.ts'))} "$@"\n`, { mode: 0o755 });
   report.rollbackCheck = {
-    ...(oldBuild ? { oldBuildReleaseA: await rollbackCheck(aHome, oldBuild), oldBuildStripped: await rollbackCheck(sHome, oldBuild), oldBuildUnsplit: await rollbackCheck(uHome, oldBuild) } : {}),
+    oldBuild, oldBuildReleaseA: await rollbackCheck(aHome, oldBuild), oldBuildStripped: await rollbackCheck(sHome, oldBuild), oldBuildUnsplit: await rollbackCheck(uHome, oldBuild),
     newBuildStripped: await rollbackCheck(sHome, newBuild),
   };
+  report.columns = columns(report);
   report.totalSeconds = r2((performance.now() - t0) / 1000);
   console.log(JSON.stringify(report, null, 2));
 }

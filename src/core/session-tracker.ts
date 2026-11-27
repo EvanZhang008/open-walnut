@@ -18,7 +18,7 @@ import type {
   SessionStatusSnapshot,
 } from './types.js';
 import {
-  PROMPT_TEXT_REFS_COLUMN, type StoredPromptState, dbGeneration, getDb, rowToSession, rowToSessionIn, decodeSessionRow, putSessionRow, deleteSessionPrompts, sessionCacheRowsSql, sessionWriteHandle,
+  PROMPT_TEXT_REFS_COLUMN, type StoredPromptState, dbGeneration, getDb, rowToSession, rowToSessionIn, decodeSessionRow, putSessionRow, readSessionPrompts, deleteSessionPrompts, sessionCacheRows, sessionScanStats, sessionWriteHandle,
   ownRowHostKey, transactionWhenFree, readChannelCursor, writeChannelCursor, takeChangedSessionRows, sessionRowWriteStats,
   PAYLOAD_LANE, PAYLOAD_STOP_REQUEST_STATE, PAYLOAD_TASK_COMPLETE_STOP_STATE,
 } from './session-db.js';
@@ -198,7 +198,8 @@ const sessionStoreStats = {
 // The row writes' own cost (session-db.ts putSessionRow): the prompt split's numbers, its release A day the baseline.
 registerSampleNote('sessionStore', () => {
   const w = sessionRowWriteStats();
-  return  `scans=${sessionStoreStats.fullScans} external=${sessionStoreStats.externalScans} scanMs=${Math.round(sessionStoreStats.scanMs)} clonedRows=${sessionStoreStats.clonedRows} drops=unnamed:${sessionStoreStats.dropUnnamed},openTx:${sessionStoreStats.dropOpenTx},foreign:${sessionStoreStats.dropForeign} unlocked=${sessionStoreStats.unlockedWrites}`
+  const sc = sessionScanStats();
+  return  `scans=${sessionStoreStats.fullScans} plainScans=${sc.plain} external=${sessionStoreStats.externalScans} scanMs=${Math.round(sessionStoreStats.scanMs)} clonedRows=${sessionStoreStats.clonedRows} drops=unnamed:${sessionStoreStats.dropUnnamed},openTx:${sessionStoreStats.dropOpenTx},foreign:${sessionStoreStats.dropForeign} unlocked=${sessionStoreStats.unlockedWrites}`
     + ` writes=${w.writes} writeMs=${Math.round(w.writeMs)} writeMaxMs=${Math.round(w.writeMaxMs)} payloadBytesWritten=${w.payloadBytesWritten} promptRowsWritten=${w.promptRowsWritten} promptShadowMismatches=${w.shadowMismatches}`;
 });
 registerBurstContext('sessionStore', () => ({ ...sessionStoreStats, scanMs: Math.round(sessionStoreStats.scanMs) }));
@@ -629,7 +630,7 @@ async function loadStoreRows(): Promise<SessionRecord[]> {
     let after: string;
     do {
       before = dataVersion();
-      rows = prepared(db, sessionCacheRowsSql()).all() as Record<string, any>[];
+      rows = sessionCacheRows(db);
       after = dataVersion();
     } while (before !== after);
     sessionStoreCache = rows.map((r) => decodeSessionRow(r));
@@ -3819,6 +3820,30 @@ export interface HostChannelBatchResult {
  */
 /** Host rows whose cut spawn prompt was asked for again in this process (applyHostChannelBatch). */
 const cutPromptResynced = new Set<string>();
+/** Stored spawn prompts (session id and hash) found not cut in this process: their text is not read again. */
+const spawnPromptNotCut = new Set<string>();
+
+/**
+ * Is the spawn prompt a row holds now one an older host's log cut (exactly FACT_INLINE_CAP UTF-16
+ * units, fact-log.ts capRecord)? A payload's text says so itself. A stripped row has only its stub,
+ * whose UTF-8 size bounds the text's length: `units <= bytes <= 3 * units`, so a stub outside
+ * [cap, 3 * cap] bytes is no cut text and costs nothing; one inside is read once from the prompt
+ * table, and a text found whole is remembered by its hash.
+ */
+function storedSpawnPromptCut(handle: Parameters<typeof readSessionPrompts>[0], sid: string, stored: StoredPromptState | undefined): boolean {
+  const text = stored?.texts.appliedAppendSystemPrompt;
+  if (text !== undefined) return text.length === FACT_INLINE_CAP;
+  const ref = stored?.refs.appliedAppendSystemPrompt;
+  if (!ref || ref.bytes < FACT_INLINE_CAP || ref.bytes > 3 * FACT_INLINE_CAP) return false;
+  const key = `${sid}\u0000${ref.sha256 ?? ref.bytes}`;
+  if (spawnPromptNotCut.has(key)) return false;
+  const cut = readSessionPrompts(handle, sid).appliedAppendSystemPrompt?.length === FACT_INLINE_CAP;
+  if (!cut) {
+    if (spawnPromptNotCut.size >= 10_000) spawnPromptNotCut.clear();
+    spawnPromptNotCut.add(key);
+  }
+  return cut;
+}
 
 export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<HostChannelBatchResult> {
   await ensureSessionInit();
@@ -3916,8 +3941,9 @@ export async function applyHostChannelBatch(batch: HostChannelBatch): Promise<Ho
         // A field an older host's log cut (session-channel/fact-log.ts), the spawn prompt above all: its whole row is asked for once.
         // The spawn prompt after this change: the patch's, else the row's as stored (`next` is a stub
         // record unless the patch names the text).
-        const spawnPrompt = 'appliedAppendSystemPrompt' in change.patch || change.born ? next.appliedAppendSystemPrompt : readBefore.stored?.texts.appliedAppendSystemPrompt;
-        if ((change.keep?.length || spawnPrompt?.length === FACT_INLINE_CAP) && !cutPromptResynced.has(change.sid)) {
+        const named = 'appliedAppendSystemPrompt' in change.patch || change.born;
+        const cut = named ? next.appliedAppendSystemPrompt?.length === FACT_INLINE_CAP : storedSpawnPromptCut(handle, change.sid, readBefore.stored);
+        if ((change.keep?.length || cut) && !cutPromptResynced.has(change.sid)) {
           cutPromptResynced.add(change.sid);
           resync.add(change.sid);
         }

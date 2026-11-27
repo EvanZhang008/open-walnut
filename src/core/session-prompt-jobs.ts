@@ -1,8 +1,9 @@
 /**
  * The prompt split's maintenance passes over the session store (session-prompts.ts says what the
- * split is): the strip (release B: every old-shape row's texts move into the prompt table, its
- * payload keeps the stubs), the down migration (`walnut sessions-prompts unsplit`: every text back
- * in its payload, the shape every build reads), and the sweep of prompt rows whose session is gone.
+ * split is): the strip (release B, once its gate opened, session-prompt-gate.ts: every old-shape
+ * row's texts move into the prompt table, its payload keeps the stubs), the down migration
+ * (`walnut sessions-prompts unsplit`: every text back in its payload, the shape every build reads),
+ * and the sweep of prompt rows whose session is gone.
  *
  * A pass runs on the server's own connection under the session write lock, one small batch per
  * turn of the event loop (at most 25 rows or 15 ms each): a worker's commits would be foreign
@@ -11,9 +12,10 @@
  */
 import { log } from '../logging/index.js';
 import {
-  PROMPT_STRIP_ENABLED, fillTextRefsBatch, setPromptSplitMarker, stripPromptBatch, sweepOrphanSessionPrompts, unsplitPromptBatch,
+  dbGeneration, fillTextRefsBatch, letPromptTextsLeavePayload, setPromptSplitMarker, stripPromptBatch, sweepOrphanSessionPrompts, unsplitPromptBatch,
   type PromptBatch,
 } from './session-db.js';
+import { forgetServedVersions, noteServedVersion, ownVersion, promptStripGate, type PromptGate } from './session-prompt-gate.js';
 import { isFollower, isHostReplica } from './server-role.js';
 
 export const PROMPT_BATCH_ROWS = 25;
@@ -30,7 +32,11 @@ export interface PromptPassResult { rows: number; batches: number; bytesMoved: n
  */
 export async function runPromptPass(
   kind: 'strip' | 'unsplit' | 'refs',
-  opts: { batchRows?: number; budgetMs?: number; onBatch?: (b: PromptBatch & { ms: number }) => void } = {},
+  opts: {
+    batchRows?: number; budgetMs?: number; onBatch?: (b: PromptBatch & { ms: number }) => void;
+    /** Runs inside each batch's own transaction, after its rows: what must commit with them. */
+    inBatch?: (handle: import('../lib/sqlite.js').Database, b: PromptBatch) => void;
+  } = {},
 ): Promise<PromptPassResult> {
   const { runLockedSessionRowJob } = await import('./session-tracker.js');
   const batch = kind === 'strip' ? stripPromptBatch : kind === 'unsplit' ? unsplitPromptBatch : fillTextRefsBatch;
@@ -41,7 +47,11 @@ export async function runPromptPass(
   let cursor = 0;
   for (;;) {
     const b0 = performance.now();
-    const b = await runLockedSessionRowJob((h) => batch(h, cursor, rows, budget));
+    const b = await runLockedSessionRowJob((h) => {
+      const done = batch(h, cursor, rows, budget);
+      opts.inBatch?.(h, done);
+      return done;
+    });
     const ms = performance.now() - b0;
     out.batches += 1;
     out.rows += b.rows;
@@ -81,16 +91,70 @@ export async function sweepSessionPrompts(): Promise<number> {
 
 let jobTimer: ReturnType<typeof setTimeout> | null = null;
 
+export interface PromptJobResult { gate: PromptGate; strip?: PromptPassResult; swept?: number }
+
 /**
- * Once per store open on the leader, past the boot burst: the column fill (only rows that lack it:
- * all of them once, after that the few a build before the split wrote), then the strip pass when
- * release B turns it on, else the orphan sweep alone. A failure is logged; the next open tries again.
+ * The leader's maintenance once per store open: the column fill (only rows that lack it: all of them
+ * once, after that the few a build before the split wrote), this release's mark in the store's list
+ * of releases that served it, then the strip gate (session-prompt-gate.ts). Open: from now on writes
+ * leave only the stubs, and the strip pass moves the rest. Closed: the orphan sweep alone, and the
+ * writer keeps every text in its payload as release A did.
+ *
+ * Rows the fill found say a build before the split wrote this store since the last open (a person
+ * went back to it): that build is one this home goes back to, whatever was recorded before. The
+ * gate stays closed for this open, and the list of releases starts again with this one, so it opens
+ * only after a later release served the store once more.
  */
+export async function runPromptJob(opts: {
+  gate?: (handle: import('../lib/sqlite.js').Database) => Promise<PromptGate>;
+  version?: string | null;
+  /** The store's generation when the job was armed: a store reopened since is not this job's. */
+  generation?: number;
+} = {}): Promise<PromptJobResult> {
+  const { runLockedSessionRowJob } = await import('./session-tracker.js');
+  const generation = opts.generation ?? dbGeneration();
+  // The first batch that fills a row forgets the list in its own transaction: a kill between
+  // a fill and a separate forget would leave no row to fill and the old list, so the next open
+  // would take the build that wrote those rows for none this home goes back to.
+  let forgot = false;
+  const fill = await runPromptPass('refs', {
+    inBatch: (h, b) => {
+      if (forgot || b.rows === 0) return;
+      forgetServedVersions(h);
+      forgot = true;
+    },
+  });
+  const olderBuildWrote = fill.rows > 0;
+  let handle: import('../lib/sqlite.js').Database | null = null;
+  const version = opts.version === undefined ? ownVersion() : opts.version;
+  await runLockedSessionRowJob((h) => {
+    handle = h;
+    if (version) noteServedVersion(h, version);
+    return { ids: [] as string[] };
+  });
+  if (olderBuildWrote) {
+    const gate: PromptGate = { open: false, reason: `${fill.rows} rows were written by a build before the prompt split since the last open: it is one this home goes back to` };
+    log.session.info('session prompts: the strip gate is closed', { ...gate });
+    return { gate, swept: await sweepSessionPrompts() };
+  }
+  // The gate's probes may take a while (two builds, 45 s each at worst). When it answers, this
+  // process must still be the leader on the store the job was armed for.
+  let gate = await (opts.gate ?? ((h) => promptStripGate(h, { version })))(handle!);
+  if (gate.open && (isFollower() || isHostReplica() || dbGeneration() !== generation)) {
+    gate = { open: false, reason: 'the store was reopened or this server is not the leader any more' };
+  }
+  log.session.info(`session prompts: the strip gate is ${gate.open ? 'open' : 'closed'}`, { ...gate });
+  if (!gate.open) return { gate, swept: await sweepSessionPrompts() };
+  letPromptTextsLeavePayload();
+  return { gate, strip: await runPromptPass('strip') };
+}
+
+/** Once per store open on the leader, past the boot burst: runPromptJob. A failure is logged; the next open tries again. */
 export function armPromptJob(delayMs = PROMPT_JOB_DELAY_MS): void {
   if (jobTimer || isFollower() || isHostReplica()) return;
+  const generation = dbGeneration();
   jobTimer = setTimeout(() => {
-    const run = runPromptPass('refs').then(async (): Promise<unknown> => (PROMPT_STRIP_ENABLED ? runPromptPass('strip') : sweepSessionPrompts()));
-    void run.catch((err) => log.session.warn('session prompts: the maintenance pass failed', { error: err instanceof Error ? err.message : String(err) }));
+    void runPromptJob({ generation }).catch((err) => log.session.warn('session prompts: the maintenance pass failed', { error: err instanceof Error ? err.message : String(err) }));
   }, delayMs);
   jobTimer.unref?.();
 }

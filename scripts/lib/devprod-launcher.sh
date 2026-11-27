@@ -185,7 +185,8 @@ svc_write_run() {
     fi
     # A put-back (the launcher started an older version: WALNUT_LAUNCHER_PUTBACK) first fills in what the temp
     # dir took from the stage, then checks, as rollback_to_lkg does, that this version can read the data the
-    # newer one wrote. Only the check's own refusal (a schema newer than this version knows) keeps it from
+    # newer one wrote. Only the check's own refusals (a schema newer than this version knows, or session
+    # prompts kept where this version cannot read them, rollback-data-check.mjs) keep it from
     # starting (exit 78, the launcher tries again later); a check that cannot run says so and starts it, since
     # a dark Mac is worse. The launcher clears the put-back mark once the version is ready.
     printf '%s\n' 'if [ "${WALNUT_LAUNCHER_PUTBACK:-}" = 1 ]; then'
@@ -199,7 +200,7 @@ svc_write_run() {
       "$(svc_shq "$SERVE_ROOT")" "$(svc_shq "${BUN_BIN:-}")" "$(svc_shq "$file")" "$(svc_shq "${REHEARSAL_HOME:-$HOME/.open-walnut}")"
     printf '%s\n' '    printf "%s\n" "$chk"'
     printf '%s\n' '    if [ "$chk_rc" != 0 ]; then'
-    printf '%s\n' '      case "$chk" in *"is newer than supported schema"*)'
+    printf '%s\n' '      case "$chk" in *"is newer than supported schema"*|*"in session_prompts that this build cannot read"*)'
     printf '%s\n' '        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run: this version cannot read the data a newer one wrote: not started"; exit 78;;'
     printf '%s\n' '      esac'
     printf '%s\n' '      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) run: the data check did not finish (exit $chk_rc): starting this version anyway"'

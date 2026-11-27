@@ -12,7 +12,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-prompt-codec
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import {
-  closeDb, decodeSessionRow, getDb, putSessionRow, readSessionPrompts, rowToSession, stripPromptBatch, PROMPTS_IN_PAYLOAD,
+  closeDb, decodeSessionRow, getDb, letPromptTextsLeavePayload, promptTextsInPayload, putSessionRow, readSessionPrompts, rowToSession, stripPromptBatch,
 } from '../../src/core/session-db.js';
 import { promptChangesOf, promptChangesSetting, promptSha256, promptsOf, withoutPrompts, withPromptStubs, type SessionPrompts } from '../../src/core/session-prompts.js';
 import { _resetSessionTrackerForTesting } from '../../src/core/session-tracker.js';
@@ -85,9 +85,9 @@ describe('the prompt codec: every shape reads back the same texts', () => {
     const want = promptsOf(record);
     const db = getDb()!;
 
-    // Release A's write: the text stays in the payload beside its stub, and goes to the table.
+    // Release A's write (and B's before its gate opened): the text stays in the payload beside its stub, and goes to the table.
+    expect(promptTextsInPayload()).toBe(true);
     db.transaction(() => putSessionRow(db, record, promptChangesSetting(want)))();
-    expect(PROMPTS_IN_PAYLOAD).toBe(true);
     const a = payloadOf(sid);
     expect(a.appliedAppendSystemPrompt).toBe(want.appliedAppendSystemPrompt);
     expect(a.profile?.systemPrompt).toBe(want.systemPrompt);
@@ -104,6 +104,16 @@ describe('the prompt codec: every shape reads back the same texts', () => {
     if (want.appliedAppendSystemPrompt !== undefined) expect(b.appliedAppendSystemPromptRef.sha256).toBe(promptSha256(want.appliedAppendSystemPrompt));
     if (want.systemPrompt !== undefined) expect(b.profile.systemPromptRef.sha256).toBe(promptSha256(want.systemPrompt));
     expectReadsBack(sid, want, extra, true);
+
+    // Release B's write once its gate opened: the record's texts go to the table only.
+    letPromptTextsLeavePayload();
+    db.transaction(() => putSessionRow(db, { ...record, messageCount: 2 }, promptChangesSetting(want)))();
+    expect(JSON.stringify(payloadOf(sid))).not.toMatch(/"appliedAppendSystemPrompt":"|"systemPrompt":"/);
+    expect(raw(sid).prompt_text_refs).toBe('{}');
+    expectReadsBack(sid, want, extra, true);
+    // A new open starts with the texts in the payload again, until its own gate opens.
+    closeDb();
+    expect(promptTextsInPayload()).toBe(true);
   });
 
   it('an older build\'s row (text in the payload, no stub, no table row) reads the same', () => {

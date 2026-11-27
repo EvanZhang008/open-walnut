@@ -179,4 +179,35 @@ describe('rollback checks that the old build reads the session store\'s prompt s
       .toEqual({ checked: true, version: 13, sessions: { splitRows: 0 } });
     expect(run).toHaveBeenCalledTimes(1);
   });
+
+  it('refuses a build that says it has no such command, as 0.6.37 does', async () => {
+    const f = await fixture(13);
+    await sessionsFixture(f.home, 'split');
+    const run = vi.fn(async (_file, args) => {
+      if (args[1] === 'store-formats') throw Object.assign(new Error('Command failed'), { code: 1, killed: false, signal: null, stdout: '', stderr: 'error: too many arguments.\nUnknown command: store-formats\n' });
+      return { stdout: '[]', stderr: '' };
+    });
+    await expect(checkRollbackData({ file: '/fixture/walnut', home: f.home, tmpDir: f.root, run })).rejects.toThrow(SESSIONS_SPLIT_REFUSAL);
+  });
+
+  it('lets a rollback go on, with a warning, when the build never finished answering (a timeout, a file that does not start)', async () => {
+    const warn = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      for (const failure of [
+        Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM', code: null, stdout: '', stderr: '' }),
+        Object.assign(new Error('spawn /fixture/walnut ENOENT'), { code: 'ENOENT' }),
+      ]) {
+        const f = await fixture(13);
+        await sessionsFixture(f.home, 'split');
+        const run = vi.fn(async (_file, args) => {
+          if (args[1] === 'store-formats') throw failure;
+          return { stdout: '[]', stderr: '' };
+        });
+        const result = await checkRollbackData({ file: '/fixture/walnut', home: f.home, tmpDir: f.root, run });
+        expect(result.sessions).toMatchObject({ splitRows: 1, sessionsPromptSplit: null, probe: expect.stringMatching(/^no answer: /) });
+        expect(run.mock.calls.map((c) => c[1][1])).toEqual(['store-formats', 'tasks']);
+      }
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('did not answer the store-format probe'))).toHaveLength(2);
+    } finally { warn.mockRestore(); }
+  });
 });

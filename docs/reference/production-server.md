@@ -207,6 +207,13 @@ failure re-launches that snapshot instead of leaving :3456 dark. Knobs:
 `WALNUT_DEVPROD_SMOKE_SECS` (default 120), `WALNUT_DEVPROD_SKIP_SMOKE=1`,
 `WALNUT_DEVPROD_LKG_DIR`. Ratchets: `tests/scripts/dev-prod-smoke-rollback.test.ts`.
 
+A rollback, or a launcher put-back, first asks the older build whether it reads the data
+(`scripts/lib/rollback-data-check.mjs`): a newer task schema, or session prompts kept in
+`session_prompts` that a build before the prompt split (b7ef669d75) cannot read, refuses it. A
+deploy of an older commit is not checked: once the strip has run (the `prompt-split-v1` marker in
+`session_migrations`), never deploy a build from before the split; run
+`walnut sessions-prompts unsplit` with the server stopped first.
+
 ## Deploys also load the installed plugins before the kill
 
 **Deploys also load the installed plugins before the kill.** The smoke boot's data home is

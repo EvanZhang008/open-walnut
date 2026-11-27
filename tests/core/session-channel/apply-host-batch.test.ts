@@ -207,6 +207,25 @@ describe('applyHostChannelBatch across links and repairs', () => {
     expect(again.resync).toEqual([])
   })
 
+  it('a stripped row (its spawn prompt only in the prompt table) is told cut the same, by length, not by its UTF-8 size', async () => {
+    // Cut at the cap in UTF-16 units: with non-ASCII text the stub's bytes are well past the cap.
+    const cut = 'r\u4e2d'.repeat(FACT_INLINE_CAP / 2)
+    const whole = 'r\u4e2d'.repeat(FACT_INLINE_CAP / 2) + 'r'
+    await createSessionRecord('cut-2', '', 'p', '/w', { host: HOST, judge: 'host', appliedAppendSystemPrompt: cut } as never)
+    await createSessionRecord('whole-2', '', 'p', '/w', { host: HOST, judge: 'host', appliedAppendSystemPrompt: whole } as never)
+    const { runPromptPass } = await import('../../../src/core/session-prompt-jobs.js')
+    expect((await runPromptPass('strip')).rows).toBe(2)
+    const stub = JSON.parse(getDb()!.prepare("SELECT payload FROM sessions WHERE claude_session_id = 'cut-2'").pluck().get() as string)
+    expect(stub.appliedAppendSystemPrompt).toBeUndefined()
+    expect(stub.appliedAppendSystemPromptRef.bytes).toBe(Buffer.byteLength(cut))
+    const r = await applyHanded({
+      hostId: HOST, rows: [{ sid: 'cut-2', patch: { messageCount: 3 }, seq: 1 }, { sid: 'whole-2', patch: { messageCount: 3 }, seq: 2 }],
+      renames: [], cursor: { logId: 'L1', seq: 2 },
+    })
+    expect(r.written.sort()).toEqual(['cut-2', 'whole-2'])
+    expect(r.resync).toEqual(['cut-2'])
+  })
+
   it('names the rows worth the host\'s whole row: a patch with no base row, a rename whose old row is missing', async () => {
     const r = await applyHanded({
       hostId: HOST, rows: [{ sid: 'no-base', patch: { messageCount: 3 }, seq: 1 }],
