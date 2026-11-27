@@ -40,14 +40,18 @@ describe('credential owner is not its login target', () => {
       .toEqual({ host: '__local__', kind: 'ssh-certificate', expiresAt: 1000 });
   })
 
-  it('all senders share one active credential ask, but a known new expiry is a new episode', () => {
+  it('all senders share one active credential ask; after the user archived or answered it, a known new expiry is a new episode', () => {
     const ask = { host: 'cloudbox', kind: 'ssh-certificate', expiresAt: 1000 } as const
     expect(findCredentialLetter(ask, [letter(ask)])?.id).toBe('lt-example-000001')
     expect(findCredentialLetter({ ...ask, host: '__local__' }, [letter(ask)])).toBeUndefined()
     // Another part of the same machine's sign-in is the same ask while the letter is open.
     expect(findCredentialLetter({ ...ask, kind: 'login-cookie', expiresAt: 3000 }, [letter(ask)])?.id).toBe('lt-example-000001')
     expect(findCredentialLetter({ ...ask, kind: 'login-cookie' }, [letter(ask, { archived: true })])).toBeUndefined()
-    expect(findCredentialLetter({ ...ask, expiresAt: 2000 }, [letter(ask)])).toBeUndefined()
+    // A letter still before the user takes a later expiry too (it was never acted on); a core alert's own send does not.
+    expect(findCredentialLetter({ ...ask, expiresAt: 2000 }, [letter(ask)])?.id).toBe('lt-example-000001')
+    expect(findCredentialLetter({ ...ask, expiresAt: 2000 }, [letter(ask)], { crossKind: false })).toBeUndefined()
+    expect(findCredentialLetter({ ...ask, expiresAt: 2000 }, [letter(ask, { archived: true })])).toBeUndefined()
+    expect(findCredentialLetter({ ...ask, expiresAt: 2000 }, [letter(ask, { answered: { actionId: 'renewed', label: 'Renewed', at: 1 } } as Partial<LetterRecord>)])).toBeUndefined()
     expect(findCredentialLetter(ask, [letter(ask, { archived: true })])?.id).toBe('lt-example-000001')
     expect(findCredentialLetter({ host: 'cloudbox', kind: 'ssh-certificate' }, [letter(ask, { archived: true })])).toBeUndefined()
   })

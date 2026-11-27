@@ -90,5 +90,19 @@ describe('credential asks share the inbox write lock across every sender', () =>
     const core = await sendLetterOnce(input('__local__', 'ssh-certificate', 1000), { opKey: 'ssh-cert-expiry:1000' })
     expect(core.letter.id).not.toBe(task.letter.id)
   })
+
+  it('the 2026-11-27 shape: an open letter of an older expiry takes the newer one as a turn, once; no second letter', async () => {
+    const old = await sendLetterOnce(input('cloudbox', 'login-cookie', 1000, 'task-old'))
+    const all = await Promise.all([sendLetterOnce(input('cloudbox', 'login-cookie', 2000, 'task-a')), sendLetterOnce(input('cloudbox', 'ssh-certificate', 1500, 'task-b'))])
+    expect(all.map((o) => o.letter.id)).toEqual([old.letter.id, old.letter.id])
+    expect((await listLetters()).letters).toHaveLength(1)
+    const detail = await getLetter(old.letter.id)
+    expect(detail?.credentialAsk?.expiresAt).toBe(2000)
+    expect(detail?.thread).toHaveLength(2)
+    // The same newer expiry again, or an older one, adds nothing.
+    await sendLetterOnce(input('cloudbox', 'login-cookie', 2000, 'task-c'))
+    await sendLetterOnce(input('cloudbox', 'login-cookie', 1000, 'task-d'))
+    expect((await getLetter(old.letter.id))?.thread).toHaveLength(2)
+  })
 })
 

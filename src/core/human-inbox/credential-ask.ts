@@ -94,15 +94,16 @@ export function sameCredentialAsk(a: CredentialAsk, b: CredentialAsk, opts: { cr
  */
 export function credentialFoldAddsTurn(asked: CredentialAsk, first: CredentialAsk | undefined): boolean {
   if (!first) return false
-  if (asked.kind === first.kind) return asked.expiresAt !== undefined && first.expiresAt === undefined
-  // Of another kind: once per episode of that kind (a known new expiry is told again).
+  const newer = (known: number | undefined) => asked.expiresAt !== undefined && (known === undefined || asked.expiresAt > known)
+  if (asked.kind === first.kind) return newer(first.expiresAt)
+  // Of another kind: once per episode of that kind (a known newer expiry is told again).
   const told = first.folded?.find((f) => f.kind === asked.kind)
-  return !told || (asked.expiresAt !== undefined && told.expiresAt !== asked.expiresAt)
+  return !told || newer(told.expiresAt)
 }
 
 /** The first letter's scope once `asked` folded into it as a turn. */
 export function credentialAfterFold(asked: CredentialAsk, first: CredentialAsk): CredentialAsk {
-  if (asked.kind === first.kind) return { ...asked, ...(first.folded?.length ? { folded: first.folded } : {}) }
+  if (asked.kind === first.kind) return { ...first, ...(asked.expiresAt !== undefined ? { expiresAt: asked.expiresAt } : {}) }
   const entry = { kind: asked.kind, ...(asked.expiresAt !== undefined ? { expiresAt: asked.expiresAt } : {}) }
   return { ...first, folded: [...(first.folded ?? []).filter((f) => f.kind !== asked.kind), entry] }
 }
@@ -140,13 +141,25 @@ export async function storedCredentialAskOf(letter: LetterRecord, body: string, 
 }
 
 /**
- * `crossKind: false` (a core alert's own send, an `ssh-cert-expiry:` op) folds only into its own
- * kind: the alert archives and adds turns to the letter it holds, never to a task's ask.
+ * The letter an ask folds into. One still before the user (not archived, not answered) takes every
+ * ask about its machine, whatever the expiry: the user has not acted on it, so a later expiry is
+ * the same sign-in still to do (2026-11-27: an 11-07 letter, told of the 11-26 expiry in a reply
+ * but still holding an older expiry, let a task's ask of the 11-26 expiry make a second letter).
+ * One the user archived or answered takes only the same known expiry of its kind (no repeat after
+ * a restart); a new expiry after it is a new letter. `crossKind: false` (a core alert's own send,
+ * an `ssh-cert-expiry:` op) folds only into its own kind and a compatible expiry: the alert archives
+ * and adds turns to the letter it holds, never to a task's ask.
  */
 export function findCredentialLetter(ask: CredentialAsk, letters: readonly LetterRecord[], opts: { crossKind?: boolean } = {}): LetterRecord | undefined {
-  // The newest open letter first: an ask lands on the thread the user reads now.
+  // The newest first: an ask lands on the thread the user reads now.
   const ordered = [...letters].sort((x, y) => (Number(y.createdAt) || 0) - (Number(x.createdAt) || 0))
-  return ordered.find(letter => !!letter.credentialAsk && sameCredentialAsk(ask, letter.credentialAsk, opts)
-    && (!letter.archived && !letter.answered
-      || (ask.kind === letter.credentialAsk.kind && ask.expiresAt !== undefined && letter.credentialAsk.expiresAt === ask.expiresAt)))
+  return ordered.find((letter) => {
+    const scope = letter.credentialAsk
+    if (!scope || scope.host !== ask.host) return false
+    if (!letter.archived && !letter.answered) {
+      if (opts.crossKind === false) return sameCredentialAsk(ask, scope, opts)
+      return true
+    }
+    return ask.kind === scope.kind && ask.expiresAt !== undefined && scope.expiresAt === ask.expiresAt
+  })
 }
