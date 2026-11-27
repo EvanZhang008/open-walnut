@@ -139,15 +139,8 @@ export const BASE_CSS = `
 .wt-filter-field { display: inline-flex; align-items: center; gap: 6px; }
 .wt-filter-label { font-size: 12px; color: var(--fg-secondary); }
 
-.wt-filter-field select {
-  padding: 6px 8px;
-  font: inherit;
-  font-size: 13px;
-  color: var(--fg);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 8px);
-}
+/* The Project pick-one is the console's own small field (its fill, grey focus edge and chevron):
+   no look of its own here. */
 
 .wt-degraded {
   margin-bottom: 16px;

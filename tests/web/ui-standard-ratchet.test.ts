@@ -28,6 +28,9 @@
  *     corner, shadow, outline, height or placeholder colour of its own (2026-11-21 UI audit: the
  *     Home, Display menu, Mail, Apps, Memory and Settings searches and the plain fields beside them
  *     each looked different). A rule that takes a field's look away (`border: 0` inside a box) is fine.
+ *   - fieldText: a rule outside web/src/styles/input-box.css that sets a field's words to a size of
+ *     their own, not `--font-size-md` (or the phone's `--input-phone-text`) (2026-11-27 UI audit: the
+ *     Passwords lock screen at 14 px, Calendar's filter at 12 px, beside 13 px everywhere else).
  *   - cardBg: a `*-card` with a corner, in the flow, filled with `--bg` or `--bg-elevated` instead of
  *     the one card fill `--card-bg` (standard.md, "Cards"): one list's cards drifted in dark.
  *   - ownLabel: a `*-badge` / `*-pill` / `*-chip` / `*-tag` class that paints its own fill, words
@@ -119,7 +122,7 @@ describe('UI standard: one look per kind of control', () => {
   const recorded = JSON.parse(fs.readFileSync(BASELINE, 'utf8')) as Partial<Counts>;
   const was = Object.fromEntries(Object.keys(now).map((k) => [k, recorded[k as keyof Counts] ?? {}])) as Counts;
 
-  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', 'restyledField', 'ownLabel', 'cardBg', 'squareKey', ...TOKEN_KINDS] as const) {
+  for (const kind of ['restyledBtn', 'ownControl', 'rawAccent', 'bareButton', 'restyledInput', 'restyledField', 'fieldText', 'ownLabel', 'cardBg', 'squareKey', ...TOKEN_KINDS] as const) {
     it(`${kind}: no new second style`, () => {
       const { grew } = compare(kind, now[kind], was[kind] ?? {});
       expect(grew, `A second style of a shared control. Use the family in ${STANDARD} instead:\n${grew.join('\n')}`).toEqual([]);

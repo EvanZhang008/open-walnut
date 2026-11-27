@@ -81,7 +81,10 @@
 }
 
 /* ── One row: the text, then the keys on its right ── */
-.wn-input.is-line { min-height: var(--input-line); --input-radius: var(--radius-md); }
+/* Its words are the body size wherever it sits (a session's Threads view read 14 px from the chat
+   around it, the Org page's same box 13 px: UI audit, 2026-11-27); a phone's 16 px rule on the
+   text itself still wins. */
+.wn-input.is-line { min-height: var(--input-line); --input-radius: var(--radius-md); font-size: var(--font-size-md); }
 .wn-input.is-line :is(.chat-input-textarea, .answer-box-input, .thread-card-input, .kanban-composer-input, .quick-sort-reply-input) {
   min-height: calc(var(--input-line) - 2px);
   padding-top: var(--input-pad);
@@ -184,6 +187,9 @@
    (and its focus, below). Weightless (`:where`), so any rule of a place wins over it. */
 :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='hidden'], [type='button'], [type='submit'], [type='reset'], [type='image']), textarea, select) {
   font: inherit;
+  /* One size for a field's words, whatever the page around it uses (the Time page's 14 px
+     reached its Project pick-one, 2026-11-27); a class of a place, or a phone's 16 px, still wins. */
+  font-size: var(--font-size-md);
   color: var(--fg);
   background-color: var(--input-fill);
   border: 1px solid transparent;

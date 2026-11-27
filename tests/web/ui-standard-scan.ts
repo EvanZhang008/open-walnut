@@ -28,9 +28,21 @@ export function pluginCss(src: string): string {
   const end = src.lastIndexOf('`');
   return at < 0 || end <= at + 3 ? '' : src.slice(at + 3, end);
 }
+/**
+ * The example plugins this repo ships (examples/plugins/<id>/src): their pages are the console's
+ * too (2026-11-27 UI audit: the Time page's Project pick-one had a white fill and edge of its own,
+ * in `styles-base.ts`, which no count read).
+ */
+export const EXAMPLE_PLUGIN_SRC = path.join(__dirname, '../../examples/plugins');
+/** A plugin's stylesheet module: `styles.ts`, or one part of it (`styles-base.ts`). */
+const STYLES_MODULE = /(^|\/)styles(-[\w-]+)?\.ts$/;
+const stylesOf = (files: string[]): [string, string][] =>
+  files.filter((f) => STYLES_MODULE.test(f)).sort()
+    .map((f) => [f, pluginCss(fs.readFileSync(f, 'utf8'))] as [string, string]).filter(([, css]) => css.length > 0);
 /** The shipped plugins' stylesheets: [file, css text]. */
-export const pluginStyles = (): [string, string][] =>
-  walk(PLUGIN_SRC, ['styles.ts']).map((f) => [f, pluginCss(fs.readFileSync(f, 'utf8'))] as [string, string]).filter(([, css]) => css.length > 0);
+export const pluginStyles = (): [string, string][] => stylesOf(walk(PLUGIN_SRC, ['.ts']));
+/** The example plugins' stylesheets. Only the field and input box counts read them for now. */
+export const examplePluginStyles = (): [string, string][] => stylesOf(walk(EXAMPLE_PLUGIN_SRC, ['.ts']));
 
 /** The one home of the console's label (standard.md, "Status labels"). */
 export const LABEL_HOME = 'styles/badge.css';
@@ -389,6 +401,15 @@ function lastCompound(selector: string): string {
   return selector.slice(at);
 }
 
+/** A field's words at the one body size, or the phone's (a phone zooms into smaller words). */
+const FIELD_TEXT_OK = /^(var\(--font-size-md\)|var\(--input-phone-text\)|inherit|initial|unset)(\s*!important)?$/;
+
+/** A rule outside styles/input-box.css that sets a field's words to a size of their own. */
+export function sizesFieldText(selector: string, decls: { prop: string; value?: string }[], fields: FieldClasses): boolean {
+  if (!decls.some((d) => d.prop === 'font-size' && !FIELD_TEXT_OK.test((d.value ?? '').trim()))) return false;
+  return restylesField(selector, [{ prop: 'height', value: '1px' }], fields);
+}
+
 /** A rule outside styles/input-box.css that gives a field a look of its own. */
 export function restylesField(selector: string, decls: { prop: string; value?: string }[], fields: FieldClasses): boolean {
   const last = lastCompound(selector.trim());
@@ -414,6 +435,7 @@ export type Counts = {
   restyledInput: Record<string, number>;
   cutTitle: Record<string, number>;
   restyledField: Record<string, number>;
+  fieldText: Record<string, number>;
   ownLabel: Record<string, number>;
   cardBg: Record<string, number>;
   squareKey: Record<string, number>;
@@ -487,15 +509,29 @@ export function isBareButton(tag: string): boolean {
 
 /** Rules (one per file and selector list) in each file that break each rule of the standard. */
 export function countAll(): Counts {
-  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {}, restyledField: {}, ownLabel: {}, cardBg: {}, squareKey: {}, roundRow: {} } as Counts;
+  const out =  { restyledBtn: {}, ownControl: {}, rawAccent: {}, ...Object.fromEntries(TOKEN_KINDS.map((k) => [k, {}])), bareButton: {}, restyledInput: {}, cutTitle: {}, restyledField: {}, fieldText: {}, ownLabel: {}, cardBg: {}, squareKey: {}, roundRow: {} } as Counts;
   const bump = (m: Record<string, number>, f: string) => { m[f] = (m[f] ?? 0) + 1; };
   const companions = btnCompanions();
   const parts = inputParts();
   const fields = fieldClasses();
   const pressables = pressableClasses();
   const bareKeys = bareKeyClasses();
-  const sheets: [string, string][] = [...walk(WEB_SRC, ['.css']).sort().map((f) => [f, fs.readFileSync(f, 'utf8')] as [string, string]), ...pluginStyles()];
+  const examples = new Set(examplePluginStyles().map(([f]) => f));
+  const sheets: [string, string][] = [...walk(WEB_SRC, ['.css']).sort().map((f) => [f, fs.readFileSync(f, 'utf8')] as [string, string]), ...pluginStyles(), ...examplePluginStyles()];
   for (const [file, text] of sheets) {
+    if (examples.has(file)) {
+      // An example plugin's sheet: its fields and input boxes only (the Time page's own pick-one).
+      const rel = path.relative(WEB_SRC, file);
+      const rules = new Map<string, Decl[]>();
+      for (const d of scanCss(rel, text)) rules.set(d.selectors.join(', '), [...(rules.get(d.selectors.join(', ')) ?? []), d]);
+      for (const [, decls] of rules) {
+        const sels = decls[0].selectors;
+        if (sels.some((x) => restylesInput(x, decls, parts))) bump(out.restyledInput, rel);
+        if (sels.some((x) => restylesField(x, decls, fields))) bump(out.restyledField, rel);
+        if (sels.some((x) => sizesFieldText(x, decls, fields))) bump(out.fieldText, rel);
+      }
+      continue;
+    }
     const rel = path.relative(WEB_SRC, file);
     const rules = new Map<string, Decl[]>();
     const lines = text.split('\n');
@@ -513,6 +549,7 @@ export function countAll(): Counts {
       if (rel !== INPUT_HOME && sels.some((x) => restylesInput(x, decls, parts))) bump(out.restyledInput, rel);
       if (rel !== 'styles/text-fit.css' && decls.some((d) => CUTS(d.prop, d.value) && !META_MARK.test(lines[d.line - 1] ?? '')) && sels.some(cutsTitle)) bump(out.cutTitle, rel);
       if (rel !== INPUT_HOME && sels.some((x) => restylesField(x, decls, fields))) bump(out.restyledField, rel);
+      if (rel !== INPUT_HOME && sels.some((x) => sizesFieldText(x, decls, fields))) bump(out.fieldText, rel);
       if (sels.some(isCard) && offCardFill(decls)) bump(out.cardBg, rel);
       if (isRoundRow(decls) && !decls.some((d) => d.prop === 'border-radius' && SHAPE_MARK.test(lines[d.line - 1] ?? ''))) bump(out.roundRow, rel);
       if (rel !== LABEL_HOME && ((decls.some((d) => paintsLabel(d.prop, d.value)) && sels.some(isOwnLabel)) || (sels.some(isBoxedLabelName) && drawsBox(decls)))) bump(out.ownLabel, rel);

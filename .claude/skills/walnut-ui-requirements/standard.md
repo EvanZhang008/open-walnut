@@ -173,7 +173,7 @@ placeholder). Its look is in the same file, `web/src/styles/input-box.css` ("Fie
 
 | Part | Look |
 |---|---|
-| Field | the bare `input, textarea, select`: corner `--input-radius` (12 px), fill `--input-fill` (4% of the text colour, 10% in dark), a transparent 1 px edge that turns `--input-focus-edge` (a grey) on focus, and nothing more: no ring, no glow, no accent edge (below) |
+| Field | the bare `input, textarea, select`: corner `--field-radius` (10 px at 34 px tall; `--field-radius-sm`, 8 px, for `is-sm` at 28 px; 12 px at a phone's 46 px), words 13 px (`--font-size-md`, 16 px on a phone), fill `--input-fill` (4% of the text colour, 10% in dark), a transparent 1 px edge that turns `--input-focus-edge` (a grey) on focus, and nothing more: no ring, no glow, no accent edge (below) |
 | Height | as tall as the buttons beside it: 34 px (`.btn`), or 28 px with `is-sm` beside `.btn-sm` (a toolbar, Settings, a plugin's small row, a lane or name rename); every one-line field 46 px on a phone (`.app-shell-navigation` or a portalled `.is-phone-layer`). Give a small field `is-sm`, never a height, and no vertical padding of its own. A text area's `min-height` is how many lines it starts with, not a look |
 | Placeholder | `--input-placeholder` (`--fg-notice`, 4.6:1 on the fill over white), never faded with opacity |
 | Error | one red edge (`aria-invalid="true"`), on every field |
@@ -205,7 +205,11 @@ placeholder). Its look is in the same file, `web/src/styles/input-box.css` ("Fie
   paper's own white and ink); the quick bar's placeholders in its own window palette; and the
   side panel's docked one-line composer.
 - No other file gives a field, its placeholder or its keys a fill, edge, corner, shadow, outline
-  or height: `tests/web/ui-standard-ratchet.test.ts` (`restyledField`) fails on a new one. A
+  or height: `tests/web/ui-standard-ratchet.test.ts` (`restyledField`) fails on a new one, in the
+  console's styles, the shipped plugins' and the example plugins' (`examples/plugins/*/src/**/styles*.ts`:
+  the Time page's Project pick-one had a white fill and edge of its own, 2026-11-27). Nor sets its
+  words to a size of their own (`fieldText`: the Passwords lock screen read 14 px and Calendar's
+  filter 12 px beside 13 px elsewhere); a one-line message box (`is-line`) holds 13 px wherever it sits. A
   rule that takes a field's look away (`border: 0` for the words inside a `wn-field`) is fine.
 - A focused field, `wn-field` box or message box shows only its edge turning `--input-focus-edge`
   (`--border-strong`), on a click and from the keys alike, and its caret: no outline, ring, glow,

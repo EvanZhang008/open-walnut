@@ -103,6 +103,7 @@ export function ReportFilters({
       <label className="wt-filter-field">
         <span className="wt-filter-label">Project</span>
         <select
+          className="is-sm"
           data-testid="time-app-project-filter"
           value={project}
           onChange={(e) => onProject(e.target.value)}

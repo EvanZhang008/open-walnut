@@ -24288,7 +24288,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .cal-rail-search {
   width: 100%;
   padding: 0 8px;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 .cal-rail-scroll {
