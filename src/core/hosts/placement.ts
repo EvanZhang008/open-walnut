@@ -180,7 +180,15 @@ function existingParent(p: string): string {
 /** Test seam: the numbers a host reports. */
 type Prober = (host: string) => Promise<HostLoad>;
 let prober: Prober | null = null;
-export function __setHostLoadProberForTesting(p: Prober | null): void { prober = p; cache.clear(); failed.clear(); }
+/**
+ * Bumped whenever the test seam swaps the prober: a probe asked before the swap writes nothing
+ * after it, and a caller after it never joins one. Without it, a placement a test gave up on
+ * (its budget ran out) kept probing in the background and wrote its stale answer into the next
+ * test's fresh cache (2026-11-27: task-move.test.ts kept a start at home 3 times in a week, after
+ * the budget test's abandoned probe stored cloud as "not connected" for 15 s).
+ */
+let proberGeneration = 0;
+export function __setHostLoadProberForTesting(p: Prober | null): void { prober = p; proberGeneration++; cache.clear(); failed.clear(); inFlight.clear(); }
 
 async function probe(host: string): Promise<HostLoad> {
   if (prober) return prober(host);
@@ -204,7 +212,7 @@ async function loadOf(host: string): Promise<{ load?: HostLoad; error?: string }
   if (going) return going;
   const p = askLoad(host, hit);
   inFlight.set(host, p);
-  try { return await p; } finally { inFlight.delete(host); }
+  try { return await p; } finally { if (inFlight.get(host) === p) inFlight.delete(host); }
 }
 
 /**
@@ -220,17 +228,20 @@ function smoothShare(load: HostLoad, prev: { at: number; load: HostLoad } | unde
 
 async function askLoad(host: string, prev: { at: number; load: HostLoad } | undefined): Promise<{ load?: HostLoad; error?: string }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const generation = proberGeneration;
   try {
     const load = smoothShare(await Promise.race([
       probe(host),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('no answer in 4 s')), ASK_MS); timer.unref?.(); }),
     ]), prev);
-    cache.set(host, { at: Date.now(), load });
-    failed.delete(host);
+    if (generation === proberGeneration) {
+      cache.set(host, { at: Date.now(), load });
+      failed.delete(host);
+    }
     return { load };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
-    failed.set(host, { at: Date.now(), error });
+    if (generation === proberGeneration) failed.set(host, { at: Date.now(), error });
     return { error };
   } finally {
     if (timer) clearTimeout(timer);

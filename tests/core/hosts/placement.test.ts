@@ -683,3 +683,43 @@ describe('each host\'s slots', () => {
     expect((await hostLoads({ hosts: ['__local__'] }))[0].runningLimit, 'faked numbers give their own count').toBe(2);
   });
 });
+
+describe('the load prober seam', () => {
+  // 2026-11-27: a placement a test gave up on kept probing after the test reset the prober, and
+  // its "not connected" answer landed in the next test's fresh cache (task-move.test.ts, 3 flaky
+  // runs in a week). A probe asked before the swap writes nothing after it, and a caller after the
+  // swap never joins it.
+  const fresh = () => __setHostLoadProberForTesting(async (host) => {
+    const v = loads[host];
+    if (!v || v instanceof Error) throw new Error('not connected');
+    return v;
+  });
+
+  it('a probe that answers after the swap leaves nothing in the new cache', async () => {
+    let release: (() => void) | undefined;
+    __setHostLoadProberForTesting(async () => { await new Promise<void>((r) => { release = r; }); throw new Error('not connected'); });
+    const abandoned = hostLoads({ hosts: ['cloud'] });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    loads = { cloud: load({ load1: 3 }) };
+    fresh();
+    release!();
+    await abandoned;
+    const [row] = await hostLoads({ hosts: ['cloud'] });
+    expect(row).toMatchObject({ host: 'cloud', known: true });
+  });
+
+  it('a caller after the swap asks the new prober, not the probe still in flight', async () => {
+    let release: (() => void) | undefined;
+    __setHostLoadProberForTesting(async () => { await new Promise<void>((r) => { release = r; }); throw new Error('not connected'); });
+    const abandoned = hostLoads({ hosts: ['cloud'] });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    loads = { cloud: load({ load1: 3 }) };
+    fresh();
+    const [row] = await hostLoads({ hosts: ['cloud'] });
+    expect(row).toMatchObject({ host: 'cloud', known: true });
+    release!();
+    await abandoned;
+    const [again] = await hostLoads({ hosts: ['cloud'] });
+    expect(again).toMatchObject({ host: 'cloud', known: true });
+  });
+});
