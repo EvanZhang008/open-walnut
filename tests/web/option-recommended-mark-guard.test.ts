@@ -123,6 +123,21 @@ describe('a question option row says Recommended once, at its right end', () => 
     }
     const board = fs.readFileSync(path.join(WEB_SRC, 'components/board/board-runtime.css.ts'), 'utf8')
     expect(board).toMatch(/\.wn-choice-label \{[^}]*flex-wrap: wrap/)
-    expect(fs.readFileSync(path.join(WEB_SRC, 'components/board/board-items.frame.js'), 'utf8')).toMatch(/<span class="wn-choice-label"><span class="wn-choice-words">/)
+    expect(fs.readFileSync(path.join(WEB_SRC, 'components/board/board-items.frame.js'), 'utf8')).toMatch(/<span class="wn-choice-label"><span class="wn-choice-text">/)
+  })
+
+  it("the Board choice's option classes are its own, never another element's", () => {
+    // 2026-11-27: the option's words span took .wn-choice-words, the class of the bubble of the
+    // user's own words on a choice, so the bubble's rules (margin-top: 8px) styled it too and the
+    // Board spec counting the bubble found four.
+    const frames = fs.readdirSync(path.join(WEB_SRC, 'components/board')).filter((f) => f.endsWith('.frame.js'))
+      .map((f) => fs.readFileSync(path.join(WEB_SRC, 'components/board', f), 'utf8'))
+    const option = /<span class="wn-choice-n">[\s\S]*?<\/button>/.exec(frames.join('\n'))?.[0] ?? ''
+    const own = [...option.matchAll(/class="([\w-]+)"/g)].map((m) => m[1]!)
+    expect(own).toEqual(expect.arrayContaining(['wn-choice-n', 'wn-choice-label', 'wn-choice-text', 'wn-choice-rec']))
+    for (const c of own) {
+      const uses = frames.join('\n').split(/\n/).filter((l) => new RegExp(`(class="|className\\s*=\\s*')${c}['"]`).test(l))
+      expect(uses, `${c} is written by one element only`).toHaveLength(1)
+    }
   })
 });

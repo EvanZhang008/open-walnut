@@ -243,7 +243,7 @@ walnut-check[data-read]:hover { opacity: 1; }
 .wn-choice-n { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; }
 /* The words and the mark share the label: too narrow for both, the mark goes under the words at the right. */
 .wn-choice-label { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
-.wn-choice-words { min-width: 0; }
+.wn-choice-text { min-width: 0; }
 .wn-choice-rec {
   flex: none; margin-left: auto; padding: 0 7px; border-radius: 999px; font-size: .75em; font-weight: 600; line-height: 1.6;
   background: rgba(21,128,61,.13); color: var(--wn-done, #15803d);
