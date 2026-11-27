@@ -202,7 +202,8 @@ describe('the phone\'s cards take the button family (2026-11-21, the user: "2 is
     expect(card).toMatch(/else if !known && !waitsOnHim \{/);
     expect(card).toMatch(/if waitsOnHim, canFollowUp, !choices\.isEmpty \{/);
     // The tools on the last line are the family's quiet tool.
-    expect(ask).toMatch(/WalnutMenuLabel\(title: "Snooze"\)\s*\}\s*\.buttonStyle\(\.walnut\(\.tool, size: \.small\)\)/);
+    // A Menu drawn small grows its own frame to a finger (walnutMenuTouch, WalnutTouchTarget.swift).
+    expect(ask).toMatch(/WalnutMenuLabel\(title: "Snooze"\)\s*\}\s*\.walnutMenuTouch\(\)\s*\.buttonStyle\(\.walnut\(\.tool, size: \.small\)\)/);
     expect(card).toMatch(/private var watchButton[\s\S]{0,400}\.buttonStyle\(\.walnut\(\.tool, size: \.small\)\)/);
   });
 
