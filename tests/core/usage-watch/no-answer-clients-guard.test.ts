@@ -51,6 +51,7 @@ const NOT_A_SESSIONS: Record<string, string> = {
   'src/providers/gateway-request.ts': 'builds tools.call lines for the clients',
   // A trigger check's calls: no session made them (core/hosts/trigger-caller.ts).
   'src/commands/tools-daemon-fallback.ts': 'sends a trigger check\'s calls; a session\'s go through wn-cli.ts',
+  'src/providers/check-call-report.ts': 'a trigger check\'s reports to its daemon (a fault, a refused call); no session sends them',
   // The executor and the servers that run a session's call in their own process: no one away to miss.
   'src/ops/executor.ts': 'the executor every client calls; it reports, the client keeps',
   'src/core/peers/capability-router.ts': 'the hub: it runs the call, it does not wait on a Walnut',

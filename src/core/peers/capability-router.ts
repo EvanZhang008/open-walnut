@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import type { GatewayError } from '../../providers/gateway-core.js';
 import { EXTERNAL_CALLER_SID, isBusyAgainOp, isExternalCallerSid } from '../../providers/gateway-core.js';
 import { GATEWAY_WRITE_MAX_PER_WINDOW, PeerThrottle } from './peer-throttle.js';
+import { CHECK_CALL_REFUSED_OP, refusedAsWritten } from '../../providers/check-call-report.js';
 
 export type CapabilityOutcome =
   | { ok: true; result: Record<string, unknown> }
@@ -337,8 +338,44 @@ function gatewayRefusal(op: GatewayOpTags, host: string, owner: string | undefin
   return `${op.name} is local-only because it is destructive. Run it from a session on the Walnut host with \`walnut tools call\`.`;
 }
 
-/** Writes ride a per-sender rate budget so a runaway agent can't hammer the hub. */
+/** Refusals that are no fault of the call as written (a transfer from the host that failed). */
+const notTheCallers = new WeakSet<CapabilityOutcome>();
+const transferFailed = (out: CapabilityOutcome): CapabilityOutcome => { notTheCallers.add(out); return out; };
+
+/**
+ * Every tools.call, and what a trigger check hears of it: a call of a check refused as written
+ * (a malformed call, an unknown op, one this host may not run, arguments the op or its API
+ * refused) can never run as it is, and a script that drops the error reads it as "nothing yet".
+ * The task that wrote the check, or the test's answer, hears it (routines/check-call-refused.ts).
+ * One place for every refusal below, so a new one is told too.
+ */
 async function handleToolsCall(
+  callerSid: string,
+  payload: Record<string, unknown>,
+  host: string,
+  deps: CapabilityRouterDeps,
+  meta: GatewayRelayMeta,
+): Promise<CapabilityOutcome> {
+  const out = await answerToolsCall(callerSid, payload, host, deps, meta);
+  if (payload.triggerCaller && refusedAsWrittenOutcome(out)) {
+    const { noteCheckCallRefused } = await import('../routines/check-call-refused.js');
+    void noteCheckCallRefused(payload.triggerCaller, host, typeof payload.name === 'string' ? payload.name : '', out.error.message);
+  }
+  return out;
+}
+
+/**
+ * A relay's answer that refused the call as written (providers/check-call-report.ts refusedAsWritten:
+ * the relay's own bad_request, or how the op's API answered), never a machine's or a server's fault.
+ */
+export function refusedAsWrittenOutcome(out: CapabilityOutcome): out is Extract<CapabilityOutcome, { ok: false }> {
+  if (out.ok || notTheCallers.has(out)) return false;
+  const api = out.error.api;
+  return refusedAsWritten({ ok: false, invalidArgs: out.error.code === 'bad_request', status: out.opStatus ?? api?.status, code: api?.code });
+}
+
+/** One tools.call answered. Writes ride a per-sender rate budget so a runaway agent can't hammer the hub. */
+async function answerToolsCall(
   callerSid: string,
   payload: Record<string, unknown>,
   host: string,
@@ -356,6 +393,17 @@ async function handleToolsCall(
   if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) {
     return err('bad_request', 'tools.call "args" must be a JSON object');
   }
+  // A check's own `walnut` telling of a call Walnut refused as written that never reached here (one
+  // it refused before sending, or ran itself over HTTP: providers/check-call-report.ts). Answered
+  // here, never an op; only a call the daemon vouched for a check is told (check-call-refused.ts).
+  if (name === CHECK_CALL_REFUSED_OP) {
+    const told = (args ?? {}) as Record<string, unknown>;
+    if (payload.triggerCaller && typeof told.op === 'string' && typeof told.message === 'string') {
+      const { noteCheckCallRefused } = await import('../routines/check-call-refused.js');
+      void noteCheckCallRefused(payload.triggerCaller, host, told.op, told.message);
+    }
+    return { ok: true, result: {} };
+  }
   // A payload too big to inline arrives as a PATH on the caller's host, and the
   // hub pulls it back in bounded chunks (gateway-args-file.ts). This is what lets
   // an agent send a 100MB letter body: the gateway line stays tiny, so no single
@@ -368,7 +416,7 @@ async function handleToolsCall(
       // from an older CLI, so the pulled object wins outright.
       args = await pullArgsFile(host, payload.argsFile);
     } catch (pullErr) {
-      return err('bad_request', pullErr instanceof Error ? pullErr.message : String(pullErr));
+      return transferFailed(err('bad_request', pullErr instanceof Error ? pullErr.message : String(pullErr)));
     }
   }
   const { getOp, getOpOwner, executeOp } = await import('../../ops/index.js');
@@ -486,13 +534,6 @@ callerSid, callerHost: host, origin: hostOrigin(host), ...(proofToken ? { caller
   // Nothing answering at all (a refused connection) ran nothing and stays `internal`.
   if (!r.ok && r.lost) {
     return err('hub_timeout', `the Walnut server's own call to its API got no answer, so ${name} may have run: ${r.message}`, r.result === undefined ? undefined : { detail: r.result });
-  }
-  // A trigger check's call the op refused for its arguments can never run as written, and a script
-  // that drops the error reads it as "nothing yet": its trigger's task, or the test's answer, hears it
-  // (routines/check-call-refused.ts).
-  if (!r.ok && r.invalidArgs && payload.triggerCaller) {
-    const { noteCheckCallRefused } = await import('../routines/check-call-refused.js');
-    void noteCheckCallRefused(payload.triggerCaller, host, name, r.message);
   }
   // Arguments the op does not take are the caller's to fix (bad_request), never an internal fault.
   // The code stays what older CLIs already read; `opStatus` tells the relay's log the API answered.

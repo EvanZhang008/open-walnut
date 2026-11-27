@@ -206,9 +206,9 @@ const senders = walk(SRC)
   .flatMap(sendersIn)
 
 describe('every gateway tools.call names its client', () => {
-  it('finds the senders it guards (wn-cli, the MCP server, plugin jobs, a check\'s fault report)', () => {
+  it('finds the senders it guards (wn-cli, the MCP server, plugin jobs, a check\'s reports to its daemon)', () => {
     const files = new Set(senders.map((s) => s.file))
-    for (const f of ['src/providers/wn-cli.ts', 'src/providers/walnut-mcp-stdio.ts', 'src/providers/plugin-job-harness.ts', 'src/commands/tools-daemon-fallback.ts']) expect([...files]).toContain(f)
+    for (const f of ['src/providers/wn-cli.ts', 'src/providers/walnut-mcp-stdio.ts', 'src/providers/plugin-job-harness.ts', 'src/providers/check-call-report.ts']) expect([...files]).toContain(f)
     expect(senders.length).toBeGreaterThanOrEqual(14)
   })
 

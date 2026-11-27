@@ -57,8 +57,8 @@ const NO_WAIT: Record<string, Record<string, string>> = {
     runTriggerCheckViaGateway: 'a check that meets no server is a quiet run that keeps its cursor',
     recordCardedCall: 'display data only; must not hold the CLI exit',
   },
-  'src/commands/tools-daemon-fallback.ts': {
-    reportCheckOutcome: 'the daemon answers it itself, at once',
+  'src/providers/check-call-report.ts': {
+    tellCheckDaemon: 'a check\'s report: a fault the daemon answers itself, a refused call never queued for a server that is away',
   },
 }
 

@@ -67,6 +67,14 @@ const APPROVAL_RULES: Record<string, { markers: number; rule: string }> = {
   'src/web/routes/hidden-notes-v1.ts': { markers: 2, rule: 'permissions: hiding a note from every agent tool, or unhiding it, is the person\'s own choice of what agents may read (2026-11-25, the user: a hidden note is plain text that no tool may use)' },
 };
 
+/**
+ * Files that name a refusal's code only to read an answer that carries it, and refuse nothing:
+ * how many markers each holds, and what it reads them for.
+ */
+const CODE_READERS: Record<string, { markers: number; why: string }> = {
+  'src/providers/check-call-report.ts': { markers: 2, why: 'a trigger check\'s call refused for what a script is (only a person may do it) never runs at any later run: its task is told to fix the check' },
+};
+
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -88,11 +96,11 @@ describe('no door only a person has', () => {
       if (n) found[path.relative(ROOT, file)] = n;
     }
     const unlisted = Object.entries(found)
-      .filter(([file, n]) => APPROVAL_RULES[file]?.markers !== n)
+      .filter(([file, n]) => APPROVAL_RULES[file]?.markers !== n && CODE_READERS[file]?.markers !== n)
       .map(([file, n]) => `${file}: ${n} refusal marker(s), ${APPROVAL_RULES[file]?.markers ?? 0} listed`);
     expect(unlisted, 'A new human-only refusal. Let the agent do it and record who did, or list a new approval rule here.').toEqual([]);
     // A listed rule that no longer refuses is taken off the list.
-    const stale = Object.keys(APPROVAL_RULES).filter((file) => !found[file]);
+    const stale = [...Object.keys(APPROVAL_RULES), ...Object.keys(CODE_READERS)].filter((file) => !found[file]);
     expect(stale).toEqual([]);
   });
 

@@ -18,12 +18,8 @@
  * process loads core ops only, and a plugin declares its ops inside the server.
  */
 
-import { newCallId } from '../lib/op-call-id.js'
-import { toolsCallLine } from '../providers/gateway-request.js'
-import { PROGRAM_CLIENT } from '../lib/tool-answer-size.js'
 import { walnutApiTarget } from '../lib/self-api-root.js'
 import fs from 'node:fs'
-import net from 'node:net'
 
 /** True when this process runs inside a managed session whose host daemon is listening. */
 function hasHostDaemon(env: NodeJS.ProcessEnv): boolean {
@@ -49,15 +45,36 @@ export async function callThroughCheckDaemon(
   env: NodeJS.ProcessEnv = process.env,
   opts: { json?: boolean } = {},
 ): Promise<number | null> {
-  if ((env.WALNUT_SESSION_ID ?? '').trim() || !(env.WALNUT_CHECK_TOKEN ?? '').trim()) return null
-  const socket = (env.WALNUT_CHECK_SOCKET ?? '').trim()
-  try {
-    if (!socket || !fs.statSync(socket).isSocket()) return null
-  } catch {
-    return null
-  }
+  if (!hasCheckDaemon(env)) return null
   const { runWalnutCli } = await import('../providers/wn-cli.js')
   return runWalnutCli(['tools', 'call', name, JSON.stringify(args ?? {}), ...(opts.json ? ['--json'] : [])])
+}
+
+/** Inside a trigger check whose daemon is listening (never inside a session: its own id always wins). */
+function hasCheckDaemon(env: NodeJS.ProcessEnv): boolean {
+  if ((env.WALNUT_SESSION_ID ?? '').trim() || !(env.WALNUT_CHECK_TOKEN ?? '').trim()) return false
+  const socket = (env.WALNUT_CHECK_SOCKET ?? '').trim()
+  try {
+    return !!socket && fs.statSync(socket).isSocket()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * `walnut tools call <op> ...` from a trigger check for an op this process does not know (a plugin
+ * declared it, so only the server has it): the check's daemon relays it as the check's call, as a
+ * session's host daemon does for a session (callServerOpThroughHostDaemon). A name no op has is
+ * then refused by the server, which tells the check's task (core/routines/check-call-refused.ts);
+ * before 2026-11-27 a check on the Mac could not call a plugin op at all. Null outside a check.
+ */
+export async function callServerOpThroughCheckDaemon(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number | null> {
+  if (!hasCheckDaemon(env)) return null
+  const { runWalnutCli } = await import('../providers/wn-cli.js')
+  return runWalnutCli(['tools', 'call', ...argv])
 }
 
 /**
@@ -108,9 +125,6 @@ export async function callServerOpThroughHostDaemon(
   return runWalnutCli(['tools', 'call', ...argv])
 }
 
-/** How long a check's `walnut` waits for its daemon to take its report. */
-const CHECK_REPORT_WAIT_MS = 2_000
-
 /**
  * Inside a trigger check (WALNUT_CHECK_TOKEN, WALNUT_CHECK_SOCKET), what a call this CLI made over
  * HTTP met is told to the daemon running the check, which saw none of it (trigger-check-core.ts
@@ -118,31 +132,18 @@ const CHECK_REPORT_WAIT_MS = 2_000
  * or a real answer, which clears one an earlier call met. A check that then fails on a fault counts
  * against no one (2026-11-16, a full Mac disk failed nine checks at once). Read from the answer's
  * status and code, never its words. Never throws, never waits long; outside a check it does nothing.
+ * A call refused as written is told apart (providers/check-call-report.ts).
  */
 export async function reportCheckOutcome(
   r: { ok: boolean; status?: number; code?: string; unreachable?: boolean },
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
-  const sid = (env.WALNUT_CHECK_TOKEN ?? '').trim()
-  const socket = (env.WALNUT_CHECK_SOCKET ?? '').trim()
-  if (!sid || !socket || (env.WALNUT_SESSION_ID ?? '').trim()) return
   const { CHECK_FAULT_OP, opOutcomeFault } = await import('../providers/trigger-check-core.js')
   const kind = opOutcomeFault(r)
   // A refusal that is the script's own (a 404, bad arguments) leaves the run's fault as it is: it is
   // neither the machine nor proof the machine is back. Only a real answer clears.
   if (!kind && !r.ok) return
-  await new Promise<void>((resolve) => {
-    let done = false
-    const finish = () => { if (done) return; done = true; clearTimeout(timer); try { conn.destroy() } catch { /* gone */ } resolve() }
-    const timer = setTimeout(finish, CHECK_REPORT_WAIT_MS)
-    timer.unref?.()
-    const conn = net.connect(socket)
-    conn.on('connect', () => {
-      // No wait: the daemon answers this one itself, at once (it is never relayed).
-      conn.write(JSON.stringify(toolsCallLine(sid, { name: CHECK_FAULT_OP, args: { kind }, callId: newCallId(), client: PROGRAM_CLIENT }, 'none').req) + '\n')
-    })
-    conn.on('data', finish)
-    conn.on('error', finish)
-    conn.on('close', finish)
-  })
+  // No wait: the daemon answers this one itself, at once (it is never relayed).
+  const { tellCheckDaemon } = await import('../providers/check-call-report.js')
+  await tellCheckDaemon(CHECK_FAULT_OP, { kind }, env)
 }

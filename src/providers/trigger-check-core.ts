@@ -24,6 +24,7 @@ import {
   clockSpecKey, clockStartKey, validateClockSpec, validateClockStartSpec, type ClockHostState, type ClockStartSpec, type TriggerClockSpec,
 } from './trigger-clock-core.js';
 import type { GatewayErrorCode } from './gateway-core.js';
+import { CHECK_CALL_REFUSED_OP } from './check-call-report.js';
 
 // ── Limits (every number is a cron-storm lesson; keep them in one place) ──
 
@@ -1340,18 +1341,22 @@ export function checkCallerEnv(sid: string, gatewaySocket: string | undefined): 
  * tools.call when the run is live. Anything the caller itself wrote there is dropped.
  * `local`: answered here, never relayed (op_card_record: a chat card for a session, and a
  * check is none; the server refuses it, which only made noise).
+ * `report`: the check's own `walnut` telling of a call Walnut refused as written
+ * (check-call-report.ts CHECK_CALL_REFUSED_OP): relayed as the check's, but its answer is no answer
+ * of the run's calls, so it never clears a machine fault the run met (noteAnswer).
  */
 export function checkGatewayCall(
   op: string, args: Record<string, unknown>, caller: CheckCaller | null,
-): { local: true; fault?: MachineFaultKind | null } | { local: false; args: Record<string, unknown> } {
+): { local: true; fault?: MachineFaultKind | null } | { local: false; args: Record<string, unknown>; report?: true } {
   const { triggerCaller: _forged, ...rest } = args;
   if (op === 'tools.call' && rest.name === 'op_card_record') return { local: true };
   if (op === 'tools.call' && rest.name === CHECK_FAULT_OP) {
     const kind = rest.args && typeof rest.args === 'object' ? (rest.args as { kind?: unknown }).kind : undefined;
     return { local: true, ...(isMachineFaultKind(kind) ? { fault: kind } : kind === null ? { fault: null } : {}) };
   }
-  if (op !== 'tools.call' || !caller) return { local: false, args: rest };
-  return { local: false, args: { ...rest, triggerCaller: { kind: caller.kind, id: caller.id } } };
+  const report = op === 'tools.call' && rest.name === CHECK_CALL_REFUSED_OP ? { report: true as const } : {};
+  if (op !== 'tools.call' || !caller) return { local: false, args: rest, ...report };
+  return { local: false, args: { ...rest, triggerCaller: { kind: caller.kind, id: caller.id } }, ...report };
 }
 
 /** Every gateway call: the caller may never write `triggerCaller` itself. */

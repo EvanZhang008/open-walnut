@@ -277,6 +277,8 @@ export const DAEMON_SOURCE_FILES = [
   // Same lockstep rule as the two above: a rule edit here that leaves the version
   // unchanged means no host self-upgrades and the old dedup rules keep running.
   'src/providers/trigger-check-core.ts',
+  // The report a trigger check sends of a call refused as written, relayed apart (checkGatewayCall).
+  'src/providers/check-call-report.ts',
   // The fire envelope a host builds for a fire no server claimed, and the sidecar
   // entry that ships it to the source twin: same lockstep rule.
   'src/providers/trigger-envelope-core.ts',

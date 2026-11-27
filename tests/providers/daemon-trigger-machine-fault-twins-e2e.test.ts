@@ -13,6 +13,7 @@
  *   call it corrupt);
  * - a hub_timeout answer (one slow op as often as a stuck server) → no fault, a strike;
  * - the check failing on its own (its call answered fine) → no fault, consecutiveErrors 1;
+ * - a check's report of a call refused as written is relayed and never clears the run's fault;
  * - after the faults, a good run fires the item that was waiting (nothing was lost).
  *
  * MACHINE SAFETY: HOME, the daemon dir and the state dir are temp paths under /tmp (a unix socket
@@ -54,11 +55,19 @@ s.on('data', (d) => {
   if (!resp.ok) { process.stderr.write('walnut trigger-check mail:new-mail: ' + resp.error.message + '\\n'); process.exit(1) }
   const want = fs.readFileSync(items, 'utf8').trim()
   if (want === 'BROKEN') { process.stderr.write('jq: parse error\\n'); process.exit(1) }
-  if (want === 'HTTP_507') {
+  if (want === 'HTTP_507' || want === 'HTTP_507_THEN_400') {
     // As the Mac's CLI does after its own HTTP call got a 507 (tools-daemon-fallback.ts reportCheckOutcome).
     const r = net.connect(sock)
     r.on('connect', () => r.write(JSON.stringify({ v: 1, op: 'tools.call', sid, args: { name: 'trigger_check_fault', args: { kind: 'disk_full' } } }) + '\\n'))
-    r.on('data', () => { r.destroy(); process.stderr.write('Walnut API error (507)\\n'); process.exit(1) })
+    const end = () => { process.stderr.write('Walnut API error (507)\\n'); process.exit(1) }
+    r.on('data', () => {
+      r.destroy()
+      if (want === 'HTTP_507') return end()
+      // Then a call of its refused as written, which it tells its daemon of (check-call-report.ts).
+      const t = net.connect(sock)
+      t.on('connect', () => t.write(JSON.stringify({ v: 1, op: 'tools.call', sid, args: { name: 'trigger_check_call_refused', args: { op: 'task_list', message: 'Invalid arguments' } } }) + '\\n'))
+      t.on('data', () => { t.destroy(); end() })
+    })
     return
   }
   console.log(JSON.stringify({ fire: true, items: want.split(',').map((id) => ({ id })) }))
@@ -244,6 +253,13 @@ describe.skipIf(!BUN)('machine faults, standalone daemon (bun)', () => {
     fs.writeFileSync(items, 'HTTP_507')
     expect(await run()).toMatchObject({ ev: 'trigger.checked', outcome: 'error', fault: 'disk_full', consecutiveErrors: 2 })
     expect(d.relayed.slice(relayedBefore).filter((n) => n === 'trigger_check_fault')).toEqual([])
+
+    // 4b. The same run then tells of a call refused as written: relayed (the server tells its task),
+    // and its answer leaves the run's fault as it is (a report is no call of the run's).
+    const reportsBefore = d.relayed.length
+    fs.writeFileSync(items, 'HTTP_507_THEN_400')
+    expect(await run()).toMatchObject({ ev: 'trigger.checked', outcome: 'error', fault: 'disk_full', consecutiveErrors: 2 })
+    expect(d.relayed.slice(reportsBefore)).toContain('trigger_check_call_refused')
 
     // 5. Fixed: the mail that came while the disk was full fires now.
     fs.writeFileSync(items, 'm1,m2')

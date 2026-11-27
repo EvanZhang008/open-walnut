@@ -15,7 +15,9 @@
  * - a triggerCaller the caller wrote itself is dropped, from a check or from anyone else;
  * - op_card_record from a check is answered by the daemon and never relayed;
  * - a token whose run is over vouches for nothing (a child the check left behind);
- * - a test the server names no caller for runs as before (no token, `external`).
+ * - a test the server names no caller for runs as before (no token, `external`);
+ * - a call the check's own `walnut` refused as written (the shim's bad JSON, the full CLI's bad key)
+ *   is told as the check's (providers/check-call-report.ts), and the call itself never leaves.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths under /tmp (a unix socket
  * path is at most 104 bytes on macOS); the only processes signalled are the daemons this file started.
@@ -32,6 +34,7 @@ import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { TRIGGER_CALLER_CAPABILITY } from '../../src/providers/gateway-core.js'
 import { TRIGGER_CALLER_CAPABILITY as CORE_CAPABILITY } from '../../src/providers/trigger-check-core.js'
+import { CHECK_CALL_REFUSED_OP } from '../../src/providers/check-call-report.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const BUN: string | undefined = testBun()
@@ -234,5 +237,32 @@ describe.skipIf(!BUN)('trigger-caller-v1, standalone daemon (bun)', () => {
     expect(armed.payload.triggerCaller).toEqual({ kind: 'armed', id: 'trg-watch-1' })
     expect(JSON.parse(fs.readFileSync(armedOut, 'utf8')).sid).toMatch(/^trigger-check:/)
     expect(byName(d, 'op_card_record', armedFrom)).toHaveLength(0)
+  }, 120_000)
+
+  it('a call the check\'s own walnut refused as written reaches the server as the check\'s, from either client', async () => {
+    const d = await boot()
+    // The real clients as a check runs them: the gateway shim refusing bad JSON before sending, and
+    // the full CLI refusing a key task_list does not take in its own process (2026-11-27: heard by no one).
+    const shim = path.join(root, 'shim.ts')
+    fs.writeFileSync(shim, `import { runWalnutCli } from ${JSON.stringify(path.join(ROOT, 'src/providers/wn-cli.ts'))}\nprocess.exit(await runWalnutCli(process.argv.slice(2)))\n`)
+    const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+    const run = [
+      `${q(BUN!)} ${q(shim)} tools call task_list ${q('{"q": "x"')} >/dev/null 2>&1`,
+      `${q(BUN!)} ${q(path.join(ROOT, 'src/cli.ts'))} tools call task_list ${q('{"bogus_key":1}')} >/dev/null 2>&1`,
+      `echo '{"fire":false}'`,
+    ].join('; ')
+    const tested = await rpc(d, { cmd: 'triggers.test', check: { run, timeoutSeconds: 60 }, checkCaller: 'tt-abcdefgh12345678' }, 90_000)
+    expect(tested.ok, JSON.stringify(tested)).toBe(true)
+    expect(await waitFor(() => byName(d, CHECK_CALL_REFUSED_OP).length === 2, 30_000)).toBe(true)
+    const told = byName(d, CHECK_CALL_REFUSED_OP)
+    for (const r of told) {
+      expect(r.callerSid).toBe('external')
+      expect(r.payload.triggerCaller).toEqual({ kind: 'test', id: 'tt-abcdefgh12345678' })
+      expect(r.payload.args.op).toBe('task_list')
+    }
+    expect(told[0]!.payload.args.message).toMatch(/json/i)
+    expect(told[1]!.payload.args.message).toContain('bogus_key')
+    // Neither call itself went anywhere: both clients refused before sending.
+    expect(byName(d, 'task_list')).toHaveLength(0)
   }, 120_000)
 })

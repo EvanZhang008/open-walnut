@@ -207,6 +207,7 @@ SOURCES=(
   src/providers/vscode-server-core.ts
   src/providers/transcript-rewind-core.ts
   src/providers/trigger-check-core.ts
+  src/providers/check-call-report.ts
   src/providers/trigger-envelope-core.ts
   src/providers/trigger-clock-core.ts
   src/providers/trigger-state-snapshot-core.ts

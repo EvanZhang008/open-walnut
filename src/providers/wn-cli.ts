@@ -41,6 +41,7 @@ import {
 } from './trigger-check-core.js'
 import { SKILL_POINTER, formatOpHelp, formatToolsTable, inGroup, type ToolGroupRow, type ToolRow } from '../ops/op-help.js'
 import { failureOnStdout, gatewayFailureCode, renderToolCallFailure, splitToolsJsonFlag, toolCallFailure } from './tool-call-output.js'
+import { CLIENT_REFUSAL_CODES, reportRefusedCheckCall } from './check-call-report.js'
 import { awayLines, callerRunId, catalogAwayLines, dropRunId, lostRunLines, namedOnSignal, neverSent, refusedRunId } from './host-exec-run-id.js'
 import { NO_ANSWER_CODES, hubAnswered, noAnswerSpoolFile, spoolNoAnswer, tellSpooledNoAnswers } from '../lib/no-answer-report.js'
 import { CALL_ID_ARG, callIdFor, callIdInJsonText, isCallId, lostCallDetail, lostCallLines, newCallId } from '../lib/op-call-id.js'
@@ -905,7 +906,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   noticesOff = call?.json === true
   const failCall = async (
     code: string, message: string, exitCode: number,
-    more: { notes?: readonly string[]; detail?: unknown; partial?: unknown } = {},
+    more: { notes?: readonly string[]; detail?: unknown; partial?: unknown; asWritten?: boolean } = {},
   ): Promise<number> => {
     const streams = renderToolCallFailure(
       toolCallFailure(code, message.replace(/^walnut: /, ''), more.notes, more.detail),
@@ -913,6 +914,12 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     )
     if (streams.stdout) await writeStdout(streams.stdout)
     if (streams.stderr) process.stderr.write(streams.stderr)
+    // Inside a trigger check, a call this client refused as written (nothing was sent) is told to the
+    // check's daemon, which relays it as the check's: the task that wrote it hears (check-call-report.ts).
+    // A call the daemon relayed was judged where it was answered.
+    if (call && (more.asWritten ?? CLIENT_REFUSAL_CODES.has(code))) {
+      await reportRefusedCheckCall(parsed.kind === 'tools.call' ? parsed.name : '', message.replace(/^walnut: /, ''))
+    }
     return exitCode
   }
   if (parsed.kind === 'help') {
@@ -997,7 +1004,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
         try {
           fs.writeFileSync(spilledArgsFile, rawJson, { encoding: 'utf-8', mode: 0o600 })
         } catch (err) {
-          return failCall('args_file', `cannot stage a large payload at ${spilledArgsFile}: ${err instanceof Error ? err.message : String(err)}`, 2)
+          // This host's disk, not the script: no refusal of the call.
+          return failCall('args_file', `cannot stage a large payload at ${spilledArgsFile}: ${err instanceof Error ? err.message : String(err)}`, 2, { asWritten: false })
         }
         argsFile = spilledArgsFile
         const named = fileCallId(rawJson)
@@ -1160,7 +1168,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     // An op's detail keeps its place on stdout (with --json, it rides in the error), a lost call's does not;
     // a stopping daemon's {stopping} is no answer of the op's.
     return failCall(gatewayFailureCode(code, message), message, errorToExitCode(code), {
-      notes, detail: shown, partial: stoppingAnswer(resp) ? undefined : detail,
+      notes, detail: shown, partial: stoppingAnswer(resp) ? undefined : detail, asWritten: false,
     })
   }
   if (!resp.ok) {

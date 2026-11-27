@@ -77,7 +77,18 @@ function inManagedSession(env: NodeJS.ProcessEnv = process.env): boolean {
   return !!env.WALNUT_AGENT_SOCKET?.trim() && !!env.WALNUT_SESSION_ID?.trim()
 }
 
+/** Reports a check's call started for its daemon (providers/check-call-report.ts), awaited before the command ends. */
+const checkReports: Array<Promise<void>> = []
+
 export async function runTools(argv: string[], globals: GlobalOptions): Promise<void> {
+  try {
+    await runToolsCommand(argv, globals)
+  } finally {
+    await Promise.all(checkReports.splice(0))
+  }
+}
+
+async function runToolsCommand(argv: string[], globals: GlobalOptions): Promise<void> {
   const { listOps, getOp, getOpOwner, executeOp } = await import('../ops/index.js')
   // --json before the subcommand, between call and the op, or after the JSON argument.
   const { splitToolsJsonFlag } = await import('../providers/tool-call-output.js')
@@ -203,9 +214,12 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
     // Every failure of a call is ONE JSON object (tool-call-output.ts): on stderr, or on stdout with --json.
     const { failureOnStdout, renderToolCallFailure, toolCallFailure, opFailureCode, gatewayFailureCode } = await import('../providers/tool-call-output.js')
     const output = { json: globals.json === true }
+    // Inside a trigger check, a call refused as written is told to its daemon, which relays it as the
+    // check's: the task that wrote the check hears it (providers/check-call-report.ts).
+    const { CLIENT_REFUSAL_CODES, refusedAsWritten, reportRefusedCheckCall } = await import('../providers/check-call-report.js')
     const fail = (
       code: string, message: string, exitCode: number,
-      more: { notes?: readonly string[]; detail?: unknown; partial?: unknown } = {},
+      more: { notes?: readonly string[]; detail?: unknown; partial?: unknown; asWritten?: boolean } = {},
     ): void => {
       const streams = renderToolCallFailure(toolCallFailure(code, message, more.notes, more.detail), { json: failureOnStdout(output.json), partial: more.partial })
       // Raw stream writes, never console.*: bun's console.error paints its text red under
@@ -213,6 +227,7 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       if (streams.stdout) process.stdout.write(streams.stdout)
       if (streams.stderr) process.stderr.write(streams.stderr)
       process.exitCode = exitCode
+      if (process.env.WALNUT_CHECK_TOKEN && (more.asWritten ?? CLIENT_REFUSAL_CODES.has(code))) checkReports.push(reportRefusedCheckCall(name ?? '', message))
     }
     if (name === '--help' || name === '-h') {
       const { helpText } = await import('../providers/wn-cli.js')
@@ -247,10 +262,13 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
 
     // An op this process does not know may be a plugin's, which only the server
     // holds: inside a session the host daemon runs it there, with the raw
-    // arguments (JSON, @file or stdin). Outside one, the usual unknown-op error.
+    // arguments (JSON, @file or stdin), and inside a trigger check the check's
+    // daemon does, as the check's call (the server tells a name no op has).
+    // Outside both, the usual unknown-op error.
     if (!op && !rest[0]?.startsWith('--')) {
-      const { callServerOpThroughHostDaemon } = await import('./tools-daemon-fallback.js')
-      const code = await callServerOpThroughHostDaemon([name, ...rest, ...(output.json ? ['--json'] : [])])
+      const { callServerOpThroughHostDaemon, callServerOpThroughCheckDaemon } = await import('./tools-daemon-fallback.js')
+      const argv = [name, ...rest, ...(output.json ? ['--json'] : [])]
+      const code = await callServerOpThroughHostDaemon(argv) ?? await callServerOpThroughCheckDaemon(argv)
       if (code !== null) { process.exitCode = code; return }
     }
 
@@ -363,6 +381,8 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
         fail(gatewayFailureCode(resp.error.code, resp.error.message), resp.error.message, errorToExitCode(resp.error.code), {
           notes: [...formatErrorLines(resp.error).slice(1), ...(lost ? lostLines().split('\n') : [])],
           detail: lostDetail ?? resp.error.detail,
+          // The daemon relayed it: the server that answered judged it already.
+          asWritten: false,
         })
         return
       }
@@ -435,7 +455,7 @@ export async function runTools(argv: string[], globals: GlobalOptions): Promise<
       // kept for the real-use monitor, told with the session's next answered call (providers/session-no-answer.ts).
       noteSessionFailure(name, opFailureCode(r.message))
       // An op's partial result keeps its place on stdout (with --json, it is the error's detail).
-      fail(opFailureCode(r.message), r.message, 1, { notes, detail: lostDetail, partial: r.result })
+      fail(opFailureCode(r.message), r.message, 1, { notes, detail: lostDetail, partial: r.result, asWritten: refusedAsWritten(r) })
       return
     }
     // A 200 with an EMPTY body leaves result undefined, and JSON.stringify would

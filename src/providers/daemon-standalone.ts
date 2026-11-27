@@ -4793,8 +4793,9 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
       return respond({ ok: true, result: {} })
     }
     logMsg('info', 'gateway: trigger check caller', { op: req.op, ...(check ? { trigger: check.id, kind: check.kind } : { ended: true }) })
-    // The run hears whether the machine failed this call (trigger-check-core.ts machineFaultOf).
-    const answer = (resp: GatewayResponse) => { checkCallers.noteAnswer(req.sid, resp); respond(resp) }
+    // The run hears whether the machine failed this call (trigger-check-core.ts machineFaultOf); a
+    // check's report of a refused call is no call of the run's, and leaves its fault as it is.
+    const answer = call.report ? respond : (resp: GatewayResponse) => { checkCallers.noteAnswer(req.sid, resp); respond(resp) }
     // The check's caller hanging up ends its waiting call too (waitForPrimary).
     const left = gatewayCallerLeft.get(respond)
     if (left) gatewayCallerLeft.set(answer, left)

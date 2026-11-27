@@ -197,6 +197,10 @@ describe('a fault the check\'s own CLI met over HTTP', () => {
     expect(checkGatewayCall('tools.call', { name: CHECK_FAULT_OP, args: { kind: 'nonsense' } }, caller)).toEqual({ local: true })
     expect(checkGatewayCall('tools.call', { name: CHECK_FAULT_OP, args: { kind: null } }, caller)).toEqual({ local: true, fault: null })
     expect(checkGatewayCall('tools.call', { name: CHECK_FAULT_OP }, null)).toEqual({ local: true })
+    // A check's report of a refused call: relayed as the check's, marked so its answer never clears a fault.
+    const report = { name: 'trigger_check_call_refused', args: { op: 'task_list', message: 'Invalid arguments' } }
+    expect(checkGatewayCall('tools.call', report, caller)).toEqual({ local: false, args: { ...report, triggerCaller: { kind: caller.kind, id: caller.id } }, report: true })
+    expect(checkGatewayCall('tools.call', { name: 'task_list', args: {} }, caller)).not.toHaveProperty('report')
     const callers = createCheckCallers(() => 'x')
     const run = callers.mint(caller)
     callers.noteFault(run.sid, 'host_offline')
