@@ -20,8 +20,9 @@
  *     from before the split. And rows a build before the split wrote since the last open (a person
  *     went back to it) keep the gate closed and start the list again (session-prompt-jobs.ts).
  *
- * Until the gate opens the writer keeps release A's shape (texts and stubs), which every build
- * reads. It is asked once per open of the store, past the boot burst (session-prompt-jobs.ts).
+ * It is asked once per open of the store, past the boot burst (session-prompt-jobs.ts). Until it
+ * answers, a write keeps each prompt where it is (a stripped one stays stripped); closed, the writer
+ * keeps release A's shape (texts and stubs), which every build reads (session-db.ts promptPayloadMode).
  */
 import fs from 'node:fs';
 import os from 'node:os';

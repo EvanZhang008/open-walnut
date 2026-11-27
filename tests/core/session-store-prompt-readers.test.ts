@@ -315,6 +315,31 @@ describe('ratchet (d): one writer of the sessions table', () => {
     }
     expect(found).toEqual(['src/core/session-db.ts:putSessionRow:2']);
   });
+
+  // Where a payload's prompt text goes is decided in putSessionRow alone (session-db.ts
+  // payloadKeepsText; 2026-11-27: every restart's first two minutes put stripped texts back). An
+  // UPDATE that sets `payload` is a second writer of it: each one is named here, and none adds a text
+  // (the strip and unsplit passes, a stub's hash refreshed in place, a pid taken out).
+  it('every UPDATE that sets a session payload is named', () => {
+    const found: string[] = [];
+    // Spread over lines too, and found outside a function as well (a const statement, a class).
+    const sets = /UPDATE\s+sessions\s+SET\s[^'`"]*\bpayload\s*=/g;
+    for (const { rel, text } of sources()) {
+      let inFunctions = 0;
+      for (const [fn, body] of functionsOf(text)) {
+        const n = body.match(sets)?.length ?? 0;
+        inFunctions += n;
+        if (n > 0) found.push(`${rel}:${fn}:${n}`);
+      }
+      const outside = (text.match(sets)?.length ?? 0) - inFunctions;
+      if (outside > 0) found.push(`${rel}:(outside a function):${outside}`);
+    }
+    expect(found.sort()).toEqual([
+      'src/core/session-db.ts:promptBatch:2',
+      'src/core/session-db.ts:refreshPromptStubsIn:1',
+      'src/core/session-tracker.ts:scrubInheritedSessionPids:1',
+    ]);
+  });
 });
 
 /**

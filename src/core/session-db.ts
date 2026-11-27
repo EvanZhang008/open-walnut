@@ -786,8 +786,8 @@ export function closeDb(): void {
   }
   initAttempted = false;
   initError = null;
-  // A new open starts with the texts in the payload again, until its own gate opens.
-  textsInPayload = true;
+  // A new open keeps each prompt where it is again, until its own gate answers.
+  promptPayloadMode = 'keep';
 }
 
 /**
@@ -1156,14 +1156,15 @@ function wholeRecordOf(row: Record<string, any>, handle: DatabaseType | null): S
 }
 
 /**
- * The row of a record: its columns and a payload with the stubs of `prompts`, and with their texts
- * too while promptTextsInPayload() holds (a build before the split reads them there). The
+ * The row of a record: its columns and a payload with the stubs of `prompts`, and beside each stub
+ * of a prompt `shape` names its text too (a build before the split reads it there): 'both' names
+ * every prompt, 'stubs' none, a list the ones it names (putSessionRow: payloadKeepsText). The
  * record's own texts and stubs are ignored: the caller says what the stored prompts are. `shape`
  * 'texts' is the shape before the split (texts, no stub): the down migration's.
  */
 function encodeSessionRow(
   session: Partial<SessionRecord>, prompts: SessionPrompts, refs: StoredPromptState['refs'] = {},
-  shape: 'stubs' | 'both' | 'texts' = textsInPayload ? 'both' : 'stubs',
+  shape: 'stubs' | 'both' | 'texts' | readonly PromptKey[] = promptPayloadMode === 'stubs' ? 'stubs' : 'both',
 ): Record<string, any> {
   const row: Record<string, any> = {};
   for (const [field, col] of Object.entries(FIELD_TO_COLUMN)) {
@@ -1172,17 +1173,28 @@ function encodeSessionRow(
     if (val === undefined) continue;
     row[col] = BOOLEAN_COLUMNS.has(col) ? (val ? 1 : 0) : val;
   }
-  // A stub beside its text needs no hash and says it sits there ('both': `inline`, see standingRef);
-  // a stub alone ('stubs') is what a comparison reads, with its hash.
-  const shaped = shape === 'texts' ? withPromptTexts(session, prompts) : withPromptStubs(session, prompts, refs, shape === 'stubs', shape === 'both');
+  // The texts the payload keeps (beside their stubs) and the ones only their stub stands for.
+  const kept: SessionPrompts = {};
+  const stubbed: SessionPrompts = {};
+  if (shape !== 'texts') {
+    const keeps = shape === 'both' ? PROMPT_KEYS : shape === 'stubs' ? [] : shape;
+    for (const k of PROMPT_KEYS) if (prompts[k] !== undefined) (keeps.includes(k) ? kept : stubbed)[k] = prompts[k];
+  }
+  // A stub alone is what a comparison reads, with its hash. A stub beside its text needs no hash and
+  // says it sits there (`inline`, see standingRef).
+  const shaped = shape === 'texts' ? withPromptTexts(session, prompts) : withPromptStubs(session, stubbed, refs);
   if (shape === 'texts') {
     // A stub whose text the table lacks stays: the row still reads as split, and the checks say so.
     if (prompts.appliedAppendSystemPrompt === undefined && session.appliedAppendSystemPromptRef) shaped.appliedAppendSystemPromptRef = session.appliedAppendSystemPromptRef;
     if (prompts.systemPrompt === undefined && session.profile?.systemPromptRef && shaped.profile) shaped.profile = { ...shaped.profile, systemPromptRef: session.profile.systemPromptRef };
   }
-  if (shape === 'both') {
-    if (prompts.appliedAppendSystemPrompt !== undefined) (shaped as Partial<SessionRecord>).appliedAppendSystemPrompt = prompts.appliedAppendSystemPrompt;
-    if (prompts.systemPrompt !== undefined && shaped.profile) shaped.profile = { ...shaped.profile, systemPrompt: prompts.systemPrompt };
+  const inlineRef = (text: string, persona: boolean): SessionPromptRef => ({ ...promptRefOf(text, persona, false), inline: true });
+  if (kept.appliedAppendSystemPrompt !== undefined) {
+    (shaped as Partial<SessionRecord>).appliedAppendSystemPromptRef = inlineRef(kept.appliedAppendSystemPrompt, false);
+    (shaped as Partial<SessionRecord>).appliedAppendSystemPrompt = kept.appliedAppendSystemPrompt;
+  }
+  if (kept.systemPrompt !== undefined && shaped.profile) {
+    shaped.profile = { ...shaped.profile, systemPromptRef: inlineRef(kept.systemPrompt, true), systemPrompt: kept.systemPrompt };
   }
   const payload: Record<string, any> = {};
   let hasPayload = false;
@@ -1196,7 +1208,7 @@ function encodeSessionRow(
   if (hasPayload) row.payload = JSON.stringify(payload);
   else if ('payload' in session) row.payload = null; // explicit clear request
   // The stubs of the texts this payload holds, for the cache scan (none in release B's shape).
-  row[PROMPT_TEXT_REFS_COLUMN] = shape === 'stubs' ? '{}' : textRefsColumnOf(prompts, !!shaped.profile);
+  row[PROMPT_TEXT_REFS_COLUMN] = textRefsColumnOf(shape === 'texts' ? prompts : kept, !!shaped.profile);
   // Full legacy records may reach the writer without the versioned fields: safe initial values
   // instead of NULL (status_revision is NOT NULL).
   if (typeof session.claudeSessionId === 'string') {
@@ -1223,17 +1235,39 @@ export const SESSION_COLUMNS: readonly string[] = EXPLICIT_SESSION_COLUMNS;
 // ── The prompt table ───────────────────────────────────────────────────────
 
 /**
- * Whether the writer keeps each prompt in the payload as well as in `session_prompts` (release A's
- * shape, which every build reads). Each open starts with it on; it goes off only once the strip
- * gate (session-prompt-gate.ts) found that every build this home can go back to reads the split,
- * and stays off for the rest of the open: from then on a write leaves only the stubs, and the strip
- * pass moves the rest. Turning it off before that would strip every live row by its next status
- * write, the rows whose persona a downgraded build needs first.
+ * Where a write leaves each prompt's text: in the payload too (release A's shape, which every build
+ * reads) or only in `session_prompts`, its stub in the payload. Set by the strip gate
+ * (session-prompt-gate.ts), which the leader asks once per open, past the boot burst:
+ *
+ *   - 'keep': each open starts here, the gate not asked yet. A prompt stays where it is: a text its
+ *     payload holds stays there, a stripped one stays stripped, a new row's texts go in its payload.
+ *     Stripping here would strip every live row by its next status write, the rows whose persona a
+ *     downgraded build needs first; putting a stripped text back would undo an earlier open's strip
+ *     on every row this window writes (before 2026-11-27 it did: a host's rows, written every few
+ *     seconds and replayed at each restart, came back whole after every boot, and that boot's strip
+ *     pass moved them again). Neither shape is less readable after the write than before it.
+ *   - 'texts': the gate is closed (a build this home can go back to may not read the split): every
+ *     text in its payload, a stripped one carried back from the table, as release A did.
+ *   - 'stubs': the gate opened: only the stubs, and the strip pass moves the rest.
+ *
+ * It holds for the rest of the open; closeDb starts the next one at 'keep'.
  */
-let textsInPayload = true;
-export function promptTextsInPayload(): boolean { return textsInPayload; }
+let promptPayloadMode: 'keep' | 'texts' | 'stubs' = 'keep';
+/** May a write of this open leave a prompt text in a payload? (false once the gate opened) */
+export function promptTextsInPayload(): boolean { return promptPayloadMode !== 'stubs'; }
 /** The gate opened: writes from now on leave only the stubs in a payload (until the store closes). */
-export function letPromptTextsLeavePayload(): void { textsInPayload = false; }
+export function letPromptTextsLeavePayload(): void { promptPayloadMode = 'stubs'; }
+/** The gate is closed: writes from now on keep every text in its payload too (until the store closes). */
+export function keepPromptTextsInPayload(): void { promptPayloadMode = 'texts'; }
+
+/**
+ * The one rule of where a write leaves prompt `k`'s text (promptPayloadMode): in the payload too,
+ * or only in the table. `stripped`: the row as stored has `k` only as a stub that stands for the
+ * table's text.
+ */
+function payloadKeepsText(stripped: boolean): boolean {
+  return promptPayloadMode === 'texts' || (promptPayloadMode === 'keep' && !stripped);
+}
 
 /** The column with the stubs of the texts a row's payload holds (session-prompts.ts textRefsColumnOf). */
 export const PROMPT_TEXT_REFS_COLUMN = 'prompt_text_refs';
@@ -1343,13 +1377,13 @@ export function putSessionRow(
   const t0 = performance.now();
   const sid = session.claudeSessionId;
   const source = opts.from ?? sid;
-  const inPayload = textsInPayload;
   // `stored`: the writer's own read of this row in this transaction (decodeSessionRow's `out`).
   const stored = (!opts.from && opts.stored) || storedPromptState(handle, source);
   // Each prompt after this write (`after`: its text; `refs`: a stub whose text this write does not
-  // read), and the table writes it takes.
+  // read), the ones whose text the payload keeps (`kept`), and the table writes it takes.
   const after: SessionPrompts = {};
   const refs: StoredPromptState['refs'] = {};
+  const kept: PromptKey[] = [];
   const sets: SessionPrompts = {};
   const clears: PromptKey[] = [];
   let table: SessionPrompts | null = null;
@@ -1362,6 +1396,8 @@ export function putSessionRow(
       continue;
     }
     if (c === null) { clears.push(k); continue; }
+    const inPayload = payloadKeepsText(stored.texts[k] === undefined && !!stored.refs[k]);
+    if (inPayload) kept.push(k);
     if (typeof c === 'string') { after[k] = c; sets[k] = c; continue; }
     // Cleared by a build before the split: its stale table row goes too.
     if (stored.cleared.includes(k)) { clears.push(k); continue; }
@@ -1374,14 +1410,14 @@ export function putSessionRow(
       continue;
     }
     if (!stored.refs[k]) continue;
-    // A new-shape row: release A carries the table's text into the payload; a move takes it along.
+    // A new-shape row: a closed gate carries the table's text into the payload; a move takes it along.
     const t = inPayload || opts.from ? fromTable(k) : undefined;
     if (t === undefined) { refs[k] = stored.refs[k]; continue; }
     if (inPayload) after[k] = t;
     else refs[k] = stored.refs[k];
     if (opts.from) sets[k] = t;
   }
-  const row = encodeSessionRow(session, after, refs, inPayload ? 'both' : 'stubs');
+  const row = encodeSessionRow(session, after, refs, kept);
   const cols = [...EXPLICIT_SESSION_COLUMNS, 'payload', ...(hasTextRefsColumn(handle) ? [PROMPT_TEXT_REFS_COLUMN] : [])];
   const bound: Record<string, unknown> = {};
   for (const c of cols) bound[c] = row[c] === undefined ? null : row[c];
@@ -1397,7 +1433,7 @@ export function putSessionRow(
     if (text === undefined) continue;
     if (!writePromptRow(handle, sid, k, text)) continue;
     writeStats.promptRowsWritten += 1;
-    if (inPayload) shadowCheck(handle, sid, k);
+    if (kept.includes(k)) shadowCheck(handle, sid, k);
   }
   const ms = performance.now() - t0;
   writeStats.writes += 1;

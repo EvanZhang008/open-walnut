@@ -12,7 +12,7 @@
  */
 import { log } from '../logging/index.js';
 import {
-  dbGeneration, fillTextRefsBatch, letPromptTextsLeavePayload, setPromptSplitMarker, stripPromptBatch, sweepOrphanSessionPrompts, unsplitPromptBatch,
+  dbGeneration, fillTextRefsBatch, keepPromptTextsInPayload, letPromptTextsLeavePayload, setPromptSplitMarker, stripPromptBatch, sweepOrphanSessionPrompts, unsplitPromptBatch,
   type PromptBatch,
 } from './session-db.js';
 import { forgetServedVersions, noteServedVersion, ownVersion, promptStripGate, type PromptGate } from './session-prompt-gate.js';
@@ -98,7 +98,8 @@ export interface PromptJobResult { gate: PromptGate; strip?: PromptPassResult; s
  * once, after that the few a build before the split wrote), this release's mark in the store's list
  * of releases that served it, then the strip gate (session-prompt-gate.ts). Open: from now on writes
  * leave only the stubs, and the strip pass moves the rest. Closed: the orphan sweep alone, and the
- * writer keeps every text in its payload as release A did.
+ * writer keeps every text in its payload as release A did. Until it answers, a write keeps each
+ * prompt where it is (session-db.ts promptPayloadMode).
  *
  * Rows the fill found say a build before the split wrote this store since the last open (a person
  * went back to it): that build is one this home goes back to, whatever was recorded before. The
@@ -135,15 +136,20 @@ export async function runPromptJob(opts: {
   if (olderBuildWrote) {
     const gate: PromptGate = { open: false, reason: `${fill.rows} rows were written by a build before the prompt split since the last open: it is one this home goes back to` };
     log.session.info('session prompts: the strip gate is closed', { ...gate });
+    if (dbGeneration() === generation) keepPromptTextsInPayload();
     return { gate, swept: await sweepSessionPrompts() };
   }
   // The gate's probes may take a while (two builds, 45 s each at worst). When it answers, this
   // process must still be the leader on the store the job was armed for.
   let gate = await (opts.gate ?? ((h) => promptStripGate(h, { version })))(handle!);
+  const answered = gate;
   if (gate.open && (isFollower() || isHostReplica() || dbGeneration() !== generation)) {
     gate = { open: false, reason: 'the store was reopened or this server is not the leader any more' };
   }
   log.session.info(`session prompts: the strip gate is ${gate.open ? 'open' : 'closed'}`, { ...gate });
+  // Closed by its own answer, on the store it was asked for: from now on every text in its payload
+  // (session-db.ts promptPayloadMode). A store reopened since keeps its own open's shape.
+  if (!answered.open && dbGeneration() === generation) keepPromptTextsInPayload();
   if (!gate.open) return { gate, swept: await sweepSessionPrompts() };
   letPromptTextsLeavePayload();
   return { gate, strip: await runPromptPass('strip') };

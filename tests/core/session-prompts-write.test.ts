@@ -11,7 +11,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-prompt-write'));
 
 import { TASKS_DIR, WALNUT_HOME } from '../../src/constants.js';
-import { applySessionCopy, closeDb, getDb, stripPromptBatch, sweepOrphanSessionPrompts } from '../../src/core/session-db.js';
+import { applySessionCopy, closeDb, getDb, keepPromptTextsInPayload, stripPromptBatch, sweepOrphanSessionPrompts } from '../../src/core/session-db.js';
 import { closeDb as closeTaskDb } from '../../src/core/task-db.js';
 import { _resetForTesting, addTask } from '../../src/core/task-manager.js';
 import {
@@ -203,13 +203,20 @@ describe('a writer that starts from a record read without its texts never clears
     expect((await prompts('f1'))[1]).toBe(PERSONA);
   });
 
-  it('a row the strip already moved (a rollback to release A) keeps its prompts through status writes, and A writes the text back beside the stub', async () => {
+  it('a row the strip already moved keeps its prompts through status writes: stripped until the gate answers, its text back beside the stub once it is closed (release A\'s shape)', async () => {
     await seed('moved', 'running');
     const db = getDb()!;
     db.transaction(() => stripPromptBatch(db, 0, 100))();
     expect(payload('moved').appliedAppendSystemPrompt).toBeUndefined();
     const writes = countPromptWrites();
+    // An open whose gate has not answered: the row stays as it is.
     await updateSessionRecord('moved', { process_status: 'idle' });
+    expect(writes()).toBe(0);
+    expect(await prompts('moved')).toEqual([PROMPT, PERSONA]);
+    expect(payload('moved').appliedAppendSystemPrompt).toBeUndefined();
+    // A closed gate: a build this home goes back to may read only the payload.
+    keepPromptTextsInPayload();
+    await updateSessionRecord('moved', { process_status: 'running' });
     expect(writes()).toBe(0);
     expect(await prompts('moved')).toEqual([PROMPT, PERSONA]);
     expect(payload('moved').appliedAppendSystemPrompt).toBe(PROMPT);
