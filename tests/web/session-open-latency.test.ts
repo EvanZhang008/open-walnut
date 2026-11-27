@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-vi.mock('../../web/src/utils/log', () => ({ log: { info: vi.fn() } }));
+vi.mock('../../web/src/utils/log', () => ({ log: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 import { log } from '../../web/src/utils/log';
 import { beginSessionOpen, noteSessionOpenSource, observeSessionOpen, hasVisibleSessionContent, hasReadableOpenRows, sessionOpenStageRecorder, sessionOpenCurrentRecorder, rowsChange } from '../../web/src/utils/session-open-latency';
 

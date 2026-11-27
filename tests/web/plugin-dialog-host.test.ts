@@ -16,7 +16,7 @@ vi.mock('@/hooks/useOverlayLayer', () => ({
   registerModalOrder: () => () => {},
   overlayTabStops: (root: HTMLElement) => Array.from(root.querySelectorAll<HTMLElement>('button,input')).filter(el => !(el as HTMLButtonElement).disabled),
 }))
-vi.mock('@/utils/log', () => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
+vi.mock('@/utils/log', () => ({ log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } }))
 import { PluginDialogHost } from '../../web/src/plugins/PluginDialogHost'
 import { Lightbox } from '../../web/src/components/common/Lightbox'
 import { ConfirmDialog } from '../../web/src/components/common/ConfirmDialog'

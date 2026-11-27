@@ -6,7 +6,7 @@ import { MemoryRouter } from '../../web/node_modules/react-router-dom/dist/index
 
 vi.mock('@/hooks/usePhoneLayout', () => ({ usePhoneLayout: () => false }));
 vi.mock('@/api/stt', () => ({ fetchSttStatus: async () => ({ engine: 'test', configured: true, available: true }) }));
-vi.mock('@/utils/log', () => ({ log: { info: vi.fn() } }));
+vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('../../web/src/components/tasks/PhoneSearchLayer', () => ({ PhoneSearchLayer: () => null }));
 vi.mock('../../web/src/components/tasks/PhonePullToRefresh', () => ({ PhonePullToRefresh: () => null }));
 vi.mock('../../web/src/components/tasks/PhoneQueuedUpdatesPill', () => ({ PhoneQueuedUpdatesPill: () => null }));

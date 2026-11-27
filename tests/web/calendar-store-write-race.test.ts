@@ -31,7 +31,7 @@ vi.mock('@/api/calendar', () => ({
   deleteCalendarEvent: mocks.deleteCalendarEvent,
   setCalendarEventVisibility: mocks.setCalendarEventVisibility,
 }))
-vi.mock('@/utils/log', () => ({ log: { warn: mocks.warn, info: vi.fn() } }))
+vi.mock('@/utils/log', () => ({ log: { warn: mocks.warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } }))
 
 import {
   __resetCalendarEventsStore,

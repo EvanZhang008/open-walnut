@@ -10,7 +10,7 @@ const apiGet = vi.fn()
 const refreshEngineCatalog = vi.fn()
 vi.mock('../../web/src/api/client', () => ({ apiGet: (...a: unknown[]) => apiGet(...a) }))
 vi.mock('../../web/src/hooks/useEngineCatalog', () => ({ refreshEngineCatalog: () => refreshEngineCatalog() }))
-vi.mock('../../web/src/utils/log', () => ({ log: { warn: vi.fn(), info: vi.fn() } }))
+vi.mock('../../web/src/utils/log', () => ({ log: { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() } }))
 
 const mod = await import('../../web/src/hooks/useHostEngineAvailability')
 

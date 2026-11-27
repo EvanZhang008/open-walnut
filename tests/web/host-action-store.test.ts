@@ -20,7 +20,7 @@ vi.mock('@/hooks/useHostStatus', () => ({
 const connect = vi.fn<(alias: string, opts?: { agents?: boolean }) => Promise<HostStatus>>()
 const check = vi.fn<(alias: string) => Promise<HostStatus>>()
 vi.mock('@/api/hosts', () => ({ connectHost: (a: string, o?: { agents?: boolean }) => connect(a, o), checkHostReadiness: (a: string) => check(a) }))
-vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
+vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {}, debug: vi.fn() } }))
 
 const store = await import('../../web/src/utils/host-action-store')
 const { getUserRetryingHosts, __resetUserRetryForTests } = await import('../../web/src/utils/host-user-retrying')

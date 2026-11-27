@@ -28,7 +28,7 @@ vi.mock('@/hooks/useHostStatus', () => ({
 }))
 vi.mock('@/hooks/useServerRole', () => ({ useIsReplicaServer: () => false, useServerCapability: () => false, useSettledServerRole: () => null }))
 vi.mock('@/api/hosts', () => ({ connectHost: async () => state.current, checkHostReadiness: async () => state.current }))
-vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
+vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {}, debug: vi.fn() } }))
 
 const { SessionHostDownBanner, hostDownShowsAt, hostSitsIdle, hostDialsAfterDrop, HOST_DOWN_GRACE_MS } = await import('../../web/src/components/sessions/SessionHostErrorBar')
 const { hostProblemOf } = await import('../../src/core/hosts/host-problem')

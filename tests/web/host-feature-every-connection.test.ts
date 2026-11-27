@@ -40,7 +40,7 @@ vi.mock('@/api/hosts', () => ({
     return { host, ...(state.updateAnswer ?? {}) }
   },
 }))
-vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
+vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {}, debug: vi.fn() } }))
 vi.mock('@/hooks/useSessionServers', () => ({ useSessionServers: () => state.servers }))
 vi.mock('@/hooks/useBackgroundRunning', () => ({ useBackgroundRunning: () => ({ tasks: [], running: { total: 0 } }) }))
 vi.mock('../../web/src/components/sessions/KebabGroup', () => ({ KebabGroup: ({ children }: { children: unknown }) => children }))

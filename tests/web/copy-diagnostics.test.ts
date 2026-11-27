@@ -16,7 +16,7 @@ import { createRoot } from '../../web/node_modules/react-dom/client.js'
 
 const apiGetText = vi.fn<(path: string, params?: Record<string, string>) => Promise<string>>()
 vi.mock('@/api/client', () => ({ apiGetText: (path: string, params?: Record<string, string>) => apiGetText(path, params) }))
-vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
+vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {}, debug: vi.fn() } }))
 
 const { useCopyDiagnostics, CopyDiagnosticsLink, DiagnosticsFallback } = await import('../../web/src/components/settings/CopyDiagnostics')
 const { diagnosticsQuery, hasStatusHosts } = await import('../../web/src/components/settings/diagnostics-copy')

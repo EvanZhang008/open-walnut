@@ -32,7 +32,7 @@ vi.mock('@/api/agents', () => ({
   deleteAgentDef: mocks.deleteAgentDef,
   cloneAgentDef: mocks.cloneAgentDef,
 }))
-vi.mock('@/utils/log', () => ({ log: { warn: mocks.warn, info: vi.fn() } }))
+vi.mock('@/utils/log', () => ({ log: { warn: mocks.warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } }))
 
 import {
   __resetAgentsStore,

@@ -23,7 +23,7 @@ vi.mock('@/api/routines', () => ({
   fetchRoutine: mocks.fetchRoutine,
   toggleRoutine: mocks.toggleRoutine,
 }))
-vi.mock('@/utils/log', () => ({ log: { warn: mocks.warn, info: vi.fn() } }))
+vi.mock('@/utils/log', () => ({ log: { warn: mocks.warn, info: vi.fn(), debug: vi.fn(), error: vi.fn() } }))
 
 import {
   __resetRoutinesStore,

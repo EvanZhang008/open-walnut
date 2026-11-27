@@ -15,7 +15,7 @@ import { createRoot } from '../../web/node_modules/react-dom/client.js'
 type Facts = { replica: boolean; capabilities: readonly string[] }
 const fetchServerRole = vi.hoisted(() => vi.fn<(opts?: { strict?: boolean; fresh?: boolean }) => Promise<Facts>>())
 vi.mock('@/api/config', () => ({ fetchServerRole }))
-vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
+vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {}, debug: vi.fn() } }))
 const ws = vi.hoisted(() => {
   const handlers = new Map<string, Set<() => void>>()
   return {

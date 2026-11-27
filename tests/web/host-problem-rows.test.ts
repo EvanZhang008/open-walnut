@@ -29,7 +29,7 @@ const api = vi.hoisted(() => ({
   checkHostReadiness: vi.fn(),
 }))
 vi.mock('@/api/hosts', () => api)
-vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
+vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {}, debug: vi.fn() } }))
 const ws = vi.hoisted(() => {
   const handlers = new Map<string, Set<(data: unknown) => void>>()
   return {

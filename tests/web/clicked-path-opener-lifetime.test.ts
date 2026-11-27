@@ -5,7 +5,7 @@ import { createRoot, type Root } from '../../web/node_modules/react-dom/client.j
 
 const h = vi.hoisted(() => ({ locate: vi.fn() }));
 vi.mock('@/api/files', () => ({ locatePath: h.locate }));
-vi.mock('@/utils/log', () => ({ log: { info: vi.fn() } }));
+vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 import { useClickedPathOpener, type ClickedPathContext, type ClickedPathTarget } from '../../web/src/hooks/useClickedPathOpener';
 
 let open: ReturnType<typeof useClickedPathOpener>;

@@ -16,7 +16,7 @@ const q = vi.hoisted(() => ({
   listener: null as null | ((s: Record<string, unknown>) => void),
 }))
 
-vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
+vi.mock('@/utils/log', () => ({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
 vi.mock('@/contexts/notifications/quiet', () => ({
   currentQuiet: () => q.state,
   onQuietState: (fn: (s: Record<string, unknown>) => void) => { q.listener = fn; return () => undefined },

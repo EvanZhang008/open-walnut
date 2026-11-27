@@ -30,7 +30,7 @@ vi.mock('@/hooks/useHostStatus', () => ({
 }))
 vi.mock('@/hooks/useServerRole', () => ({ useIsReplicaServer: () => state.replica }))
 vi.mock('@/api/hosts', () => ({ connectHost: async () => state.current, checkHostReadiness: async () => state.current }))
-vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
+vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {}, debug: vi.fn() } }))
 
 const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')
 const { gateProblem, HostGateErrorBar, useRestoreImages } = await import('../../web/src/components/sessions/HostGateErrorBar')

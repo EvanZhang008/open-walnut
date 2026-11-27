@@ -20,7 +20,7 @@ vi.mock('@/api/client', () => ({
   apiPost: async () => ({}),
 }))
 vi.mock('@/utils/session-status', () => ({ resolveTaskSessionId: () => 'sid-1' }))
-vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {} } }))
+vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: () => {}, debug: vi.fn() } }))
 
 const { MoveHostMenuItems } = await import('../../web/src/components/transfer/MoveHostMenuItems')
 
