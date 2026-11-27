@@ -95,10 +95,10 @@ export async function agentsSwitch() {
 export const createApproval: ApprovalCreator = async (input) => {
   const { createApproval: create } = await import('../../core/approvals/store.js')
   // A tap on any device the person is signed in on approves it, like every approval.
-  const { approval, waitToken } = await create({ what: input.what, detail: input.detail, detailRole: 'summary', timeoutMs: input.timeoutMs, requester: input.requester, testRun: input.testRun })
+  const { approval, waitToken } = await create({ what: input.what, detail: input.detail, detailRole: 'summary', timeoutMs: input.timeoutMs, untilBack: input.untilBack, requester: input.requester, testRun: input.testRun })
   const { cancelInternal } = await import('../../core/approvals/store.js')
   return {
-    id: approval.id, waitToken, expiresAt: approval.expiresAt,
+    id: approval.id, waitToken, expiresAt: approval.expiresAt, ...(approval.untilBack ? { untilBack: true } : {}),
     cancel: () => cancelInternal(approval.id, 'agent access changed while asking').then(() => undefined, () => undefined),
   }
 }

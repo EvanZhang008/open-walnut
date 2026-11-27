@@ -5,7 +5,7 @@
  * agent's own `fresh_sign_in: true` only starts that ask (review 2026-11-07: the flag alone was
  * the agent vouching for the person). The ask is like an outward step's (outward-asks.ts): a
  * notification on their Mac and phone, a person's tap on any device they are signed in on, open
- * ASK_MS. A yes is bound to
+ * until they answer (store.ts `untilBack`). A yes is bound to
  * the task, the browser, the tab and the site it was asked for, and lets one fill through within
  * GRANT_MS of the person's answer (an ask read late gets no fresh window: review 2026-11-07); a
  * tab gone to another site, another tab or another task finds no grant. A fill claims the yes
@@ -15,25 +15,26 @@
 import { BrowserError } from './hub.js'
 import { keptMap } from '../kept-asks.js'
 import { ASK_MS } from './outward-asks.js'
-import { WHERE_ASKED } from '../approvals/types.js'
+import { WHERE_ASKED, askEndOf, askExpiredWords, askOpenWords, type AskEnd } from '../approvals/types.js'
 import type { AgentRequester } from '../vault/agent.js'
 
 /** How long a yes waits for its fill (the vault may still ask about the login itself meanwhile). */
 export const GRANT_MS = 10 * 60_000
-const MINUTES = Math.round(ASK_MS / 60_000)
 
 interface Scope { owner: string; device: string; tab: number; site: string }
 // Kept across a restart (core/kept-asks.ts): the agent's call after a deploy finds its ask, and a
 // yes the person gave still lets its one fill through.
-const asks = keptMap<Scope & { at: number }>('browser-fresh-sign-in-asks')
+// `end`: the approval's own end (absent in an ask an older Walnut kept: ASK_MS after `at`).
+const asks = keptMap<Scope & { at: number; end?: AskEnd }>('browser-fresh-sign-in-asks')
+const endOf = (a: { at: number; end?: AskEnd }): AskEnd => a.end ?? { until: a.at + ASK_MS }
 const grants = keptMap<Scope & { at: number }>('browser-fresh-sign-in-grants')
 const same = (a: Scope, b: Scope) => a.owner === b.owner && a.device === b.device && a.tab === b.tab && a.site === b.site
 
 export function _resetFreshSignInForTesting(): void { asks.clear(); grants.clear(); codeSteps.clear() }
 
 function sweep(now = Date.now()): void {
-  // An ask is answered within ASK_MS; its yes may be taken up to GRANT_MS after that answer.
-  for (const [id, a] of asks) if (now - a.at > ASK_MS + GRANT_MS) asks.delete(id)
+  // An ask is answered before its end; its yes may be taken up to GRANT_MS after that answer.
+  for (const [id, a] of asks) if (now > endOf(a).until + GRANT_MS) asks.delete(id)
   for (const [id, g] of grants) if (now - g.at > GRANT_MS) grants.delete(id)
 }
 
@@ -98,10 +99,11 @@ export function restoreCodeStep(c: Claim): void { codeStepAfter(c, codeStepItem(
 
 export const isFreshAsk = (id: unknown): boolean => { sweep(); return typeof id === 'string' && asks.has(id) }
 
-async function waiting(id: string, site: string): Promise<Record<string, unknown>> {
+function waiting(id: string, site: string, end: AskEnd): Record<string, unknown> {
   return {
-    status: 'needs_ok', code: 'fresh_sign_in_needs_ok', request: id, approvalId: id, site, waitsMinutes: MINUTES,
-    error: `Waiting for the person to approve a new sign-in on ${site}, which they already have open in a tab of their own. ${WHERE_ASKED}; the ask stays open ${MINUTES} minutes.`,
+    status: 'needs_ok', code: 'fresh_sign_in_needs_ok', request: id, approvalId: id, site,
+    waitsMinutes: Math.max(1, Math.round((end.until - Date.now()) / 60_000)), expiresAt: new Date(end.until).toISOString(), ...(end.untilBack ? { untilBack: true } : {}),
+    error: `Waiting for the person to approve a new sign-in on ${site}, which they already have open in a tab of their own. ${WHERE_ASKED}. ${askOpenWords(end)}`,
   }
 }
 
@@ -109,7 +111,7 @@ async function waiting(id: string, site: string): Promise<Record<string, unknown
 export async function askFreshSignIn(input: Scope & { theirs: Array<{ id: number; title?: string }>; requester: AgentRequester; testRun?: string; unasked?: boolean }): Promise<Record<string, unknown>> {
   sweep()
   const scope: Scope = { owner: input.owner, device: input.device, tab: input.tab, site: input.site }
-  for (const [id, a] of asks) if (same(a, scope) && Date.now() - a.at < ASK_MS) return waiting(id, input.site)
+  for (const [id, a] of asks) if (same(a, scope) && Date.now() < endOf(a).until) return waiting(id, input.site, endOf(a))
   const store = await import('../approvals/store.js')
   const who = input.requester.taskTitle ? `"${input.requester.taskTitle.slice(0, 60)}"` : 'a Walnut agent'
   const tabs = input.theirs.slice(0, 3).map((t) => `tab ${t.id}${t.title ? ` ("${t.title.slice(0, 60)}")` : ''}`).join(', ')
@@ -122,10 +124,12 @@ export async function askFreshSignIn(input: Scope & { theirs: Array<{ id: number
     detailRole: 'summary',
     // Approvals off (approvals/ask-me.ts): recorded as yes, nobody asked; the caller takes it at once.
     ...(input.unasked ? { unasked: 'browserSignIn' } : {}),
-    timeoutMs: ASK_MS, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),
+    // Open until the person answers, while they are away too; this session is told the answer.
+    timeoutMs: ASK_MS, untilBack: true, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),
   })
-  asks.set(made.approval.id, { ...scope, at: Date.now() })
-  return waiting(made.approval.id, input.site)
+  const end = askEndOf(made.approval)
+  asks.set(made.approval.id, { ...scope, at: Date.now(), end })
+  return waiting(made.approval.id, input.site, end)
 }
 
 /** The agent called again with the ask's request: held up to holdMs; a yes becomes the grant. */
@@ -140,7 +144,7 @@ export async function answerFreshSignIn(input: Scope & { id: string; holdMs: num
     await new Promise((r) => setTimeout(r, 500))
     rec = await store.getApproval(input.id)
   }
-  if (rec?.status === 'pending') return { ok: false, status: 202, body: await waiting(input.id, a.site) }
+  if (rec?.status === 'pending') return { ok: false, status: 202, body: waiting(input.id, a.site, endOf(a)) }
   // One reader turns the answer into its yes: a second call with the same ask that was waiting
   // too finds it taken (checked and taken with no await between, so two cannot both get a yes).
   if (asks.get(input.id) !== a) throw new BrowserError('That ask was already used: call fill_login again without request.', 404, 'no_such_request')
@@ -162,5 +166,5 @@ export async function answerFreshSignIn(input: Scope & { id: string; holdMs: num
   if (rec?.status === 'denied') {
     return { ok: false, status: 403, body: { error: `The person said no to a new sign-in on ${a.site}: ask them to hand you their tab ("Act in tab" in Walnut's side panel) instead.`, code: 'denied' } }
   }
-  return { ok: false, status: 409, body: { error: `Nobody answered within ${MINUTES} minutes: nothing was filled. Ask the person for their tab instead.`, code: 'outward_expired' } }
+  return { ok: false, status: 409, body: { error: `${askExpiredWords(endOf(a))} Nothing was filled. Ask the person for their tab instead.`, code: 'outward_expired' } }
 }

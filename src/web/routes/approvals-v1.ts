@@ -281,6 +281,9 @@ approvalsV1Router.post('/approvals', (req: Request, res: Response, next: NextFun
       ...(singleUse ? { singleUse: true } : {}),
       context,
       ...(body.request_only === true ? { requestOnly: true } : {}),
+      // An ask that is not a script blocking on its own --timeout (request-only, or the op with no
+      // timeout) stays open until the person answers, while they are away too.
+      untilBack: body.request_only === true || timeoutMs === undefined,
       testRun: ambientTestRun(),
     })
     // An asker that said no why gets a summary Walnut writes, in the background (summary.ts).

@@ -343,6 +343,12 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
   const away = waitThroughRestart({ who: 'walnut browser', say: io.say, now, deadline, ...(io.sleep ? { sleep: io.sleep } : {}) })
   let told = false
   let request: string | undefined
+  // The ask waits until the person answers (approvals/store.ts `untilBack`): until when.
+  let openUntil: string | undefined
+  // This command gives up after its 10 minutes; an ask open until they answer stays open (2026-11-26).
+  const noAnswer = () => openUntil
+    ? `walnut browser: no answer in 10 minutes. The ask stays open until they answer (at most until ${openUntil}): end your turn with one plain sentence on what you wait for, never the agent-ack line. Walnut tells this session the answer; then run this same command again to go on. Do not ask again, in chat or anywhere else.`
+    : 'walnut browser: no answer in 10 minutes'
   let upload: Record<string, unknown> = {}
   if (p.upload?.length) {
     const u = readUpload(p.upload, io.cwd)
@@ -354,7 +360,7 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
     if (!r.ok && told && (r.unreachable === true || (pureWait && !definiteRefusal(r)))) {
       await away.lost(r.message)
       // The pause stops at the deadline, so the deadline itself ends the wait.
-      if (now() >= deadline) { io.say('walnut browser: no answer in 10 minutes'); return BROWSER_EXIT.timeout }
+      if (now() >= deadline) { io.say(noAnswer()); return BROWSER_EXIT.timeout }
       continue
     }
     if (!r.ok) {
@@ -376,6 +382,7 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
     if (body.status === 'needs_ok') {
       // Every wait names its ask: the next calls name it too (after a restart as well).
       if (typeof body.request === 'string') request = body.request
+      if (body.untilBack === true && typeof body.expiresAt === 'string') openUntil = body.expiresAt
       // What it waits for, in the server's words, and how long this command waits.
       if (!told) {
         const why = typeof body.error === 'string' ? body.error.replace(/[.\s]+$/, '')
@@ -383,7 +390,7 @@ export async function runBrowser(p: Extract<ParsedBrowser, { ok: true }>, io: Br
         io.say(`${clause(why)}. This command waits up to 10 minutes for their answer...`)
       }
       told = true
-      if (now() > deadline) { io.say('walnut browser: no answer in 10 minutes'); return BROWSER_EXIT.timeout }
+      if (now() > deadline) { io.say(noAnswer()); return BROWSER_EXIT.timeout }
       continue
     }
     if ((p.args.action === 'screenshot' || p.args.action === 'zoom') && typeof body.image === 'string') {

@@ -18,7 +18,7 @@
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isPersonCaller } from './person-caller.js'
-import { WHERE_ASKED } from '../../core/approvals/types.js'
+import { WHERE_ASKED, askEndOf, askOpenWords, type AskEnd } from '../../core/approvals/types.js'
 import { fromThisMachine } from '../middleware/local-trust.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { log } from '../../logging/index.js'
@@ -367,13 +367,17 @@ const lastTab = new Map<string, { device: string; tab: number }>()
 const handed = new Map<string, { owner: string; site: string }>()
 const tabKey = (device: string, tab: number) => `${device}\0${tab}`
 /** A site an owner asked the person for, until it is decided (kept across a restart: core/kept-asks.ts). */
-const siteAsks = keptMap<{ id: string; at: number }>('browser-site-asks')
+const siteAsks = keptMap<{ id: string; at: number; until?: number }>('browser-site-asks')
 /** A site the person refused an owner, until when. */
 const siteDenied = keptMap<number>('browser-site-denied')
-/** A site ask is open 10 minutes (its approval's timeout), and its answer is kept an hour for the agent's next call. */
+/**
+ * A site ask is open until the person answers (its approval's end: `until`; one an older Walnut kept
+ * has none and was open 10 minutes), and its answer is kept 50 minutes more for the agent's next
+ * call, so a pending ask is never asked a second time.
+ */
 const SITE_ASK_MS = 10 * 60_000
 function sweepSites(now = Date.now()): void {
-  for (const [k, a] of siteAsks) if (now - a.at > 6 * SITE_ASK_MS) siteAsks.delete(k)
+  for (const [k, a] of siteAsks) if (now > (a.until ?? a.at + SITE_ASK_MS) + 5 * SITE_ASK_MS) siteAsks.delete(k)
   for (const [k, until] of siteDenied) if (until <= now) siteDenied.delete(k)
 }
 
@@ -402,10 +406,11 @@ async function siteGate(req: Request, owner: string, url: string, holdMs: number
       detail: `${requester.taskTitle ? `"${requester.taskTitle}" wants to open ${url}` : `An agent wants to open ${url}`} in the Walnut agent window of your browser. `
         + `Approve once and agents may use ${site} until you remove it in Settings, Browser extension.`,
       detailRole: 'summary',
-      outsideSwitch: true, timeoutMs: SITE_ASK_MS, requester, testRun: ambientTestRun(),
+      // Open until the person answers, while they are away too; the asking session is told the answer.
+      outsideSwitch: true, timeoutMs: SITE_ASK_MS, untilBack: true, requester, testRun: ambientTestRun(),
     })
     id = made.approval.id
-    siteAsks.set(key, { id, at: Date.now() })
+    siteAsks.set(key, { id, at: Date.now(), until: askEndOf(made.approval).until })
     a = await store.getApproval(id)
   }
   // The asker may hold for the answer (wait_ms), a second at a time.
@@ -426,14 +431,15 @@ async function siteGate(req: Request, owner: string, url: string, holdMs: number
     siteDenied.set(key, Date.now() + 60 * 60_000)
     return denied
   }
-  return { ok: false, status: 202, body: needsOk(site, id!) }
+  return { ok: false, status: 202, body: needsOk(site, id!, a ? askEndOf(a) : undefined) }
 }
 
-function needsOk(site: string, approvalId: string): Record<string, unknown> {
+function needsOk(site: string, approvalId: string, end?: AskEnd): Record<string, unknown> {
   return {
     // `request` as every other wait answers it: the next call names the ask it waits on.
     status: 'needs_ok', site, approvalId, request: approvalId,
-    error: `Waiting for the person to let agents use ${site} (a notification on their Mac and phone).`,
+    ...(end ? { expiresAt: new Date(end.until).toISOString(), ...(end.untilBack ? { untilBack: true } : {}) } : {}),
+    error: `Waiting for the person to let agents use ${site} (a notification on their Mac and phone).${end ? ` ${askOpenWords(end)}` : ''}`,
     code: 'site_needs_ok',
   }
 }
@@ -780,7 +786,7 @@ async function uploadGate(req: Request, res: Response, b: Record<string, unknown
     if (request) {
       const state = await ug.answerUpload({ id: request, taskId, site, paths: need, holdMs: Math.max(0, Math.min(25_000, Number(b.wait_ms) || 0, at.left() - 40_000)) })
       if (state === 'denied') throw new h.BrowserError('The person said no to uploading these files. Do not ask again for them; tell them in one line what you needed instead.', 403, 'denied')
-      if (state === 'pending') { res.status(202).json(await waitBody(request)); return true }
+      if (state === 'pending') { res.status(202).json(waitBody(request, ug.uploadAskEnd(request))); return true }
       if (state === 'approved') { granted.push(...need); need = [] }
     }
     if (need.length && !request) {
@@ -791,7 +797,7 @@ async function uploadGate(req: Request, res: Response, b: Record<string, unknown
     if (need.length) {
       const ask = await ug.askUpload({ taskId, paths: need, site, requester: at.requester, ...(ambientTestRun() ? { testRun: ambientTestRun()! } : {}) })
       log.web.info('browser trusted upload asks the person', { device: at.device, owner: at.owner, files: need.length, site, request: ask.id, reused: ask.reused })
-      res.status(202).json(await waitBody(ask.id))
+      res.status(202).json(waitBody(ask.id, ask.end))
       return true
     }
   }
@@ -800,9 +806,10 @@ async function uploadGate(req: Request, res: Response, b: Record<string, unknown
     log.web.info('browser trusted upload goes with the person\'s yes', { device: at.device, owner: at.owner, files: granted.length, site })
   }
   return false
-  async function waitBody(id: string): Promise<Record<string, unknown>> {
-    return { status: 'needs_ok', code: 'upload_needs_ok', request: id, waitsMinutes: ug.ASK_MS / 60_000,
-      error: `Waiting for the person to let this task upload the file from their computer into ${site || 'this page'}. ${WHERE_ASKED}; the ask stays open ${ug.ASK_MS / 60_000} minutes.` }
+  function waitBody(id: string, end: AskEnd = { until: Date.now() + ug.ASK_MS }): Record<string, unknown> {
+    return { status: 'needs_ok', code: 'upload_needs_ok', request: id,
+      waitsMinutes: Math.max(1, Math.round((end.until - Date.now()) / 60_000)), expiresAt: new Date(end.until).toISOString(), ...(end.untilBack ? { untilBack: true } : {}),
+      error: `Waiting for the person to let this task upload the file from their computer into ${site || 'this page'}. ${WHERE_ASKED}. ${askOpenWords(end)}` }
   }
 }
 

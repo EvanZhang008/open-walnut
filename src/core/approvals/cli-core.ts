@@ -197,6 +197,8 @@ interface ApprovalLite {
   createdAt?: string
   expiresAt?: string
   singleUse?: boolean
+  /** It stays open until the person answers (store.ts untilBack). */
+  untilBack?: boolean
   requester?: { host?: string; taskId?: string; sessionId?: string }
   answer?: { decision: string; mode: string; at: string; device?: { name?: string; kind?: string } }
 }
@@ -263,6 +265,8 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
   let first: ApprovalLite
   let nonce: string | undefined
   let deadline: number
+  /** A resumed ask's own end (epoch ms). */
+  let openUntil: number | undefined
   let saved: SavedApproval | undefined
   if (args.approvalId) {
     if (!isApprovalId(args.approvalId)) { io.say(`walnut approve: ${JSON.stringify(args.approvalId)} is not an approval id.`); return APPROVE_EXIT.error }
@@ -280,7 +284,10 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
     token = saved.waitToken
     first = { id, status: 'pending', what: saved.what, mode: 'tap' }
     const expires = Date.parse(saved.expiresAt)
-    deadline = (Number.isFinite(expires) ? expires : now() + args.timeoutMs) + 15_000
+    // A rerun waits at most its own --timeout: an ask open until the person answers (store.ts
+    // untilBack, up to 72 hours) is left open when this run gives up (exit 4, below).
+    openUntil = saved.untilBack && Number.isFinite(expires) ? expires : undefined
+    deadline = Math.min(Number.isFinite(expires) ? expires : Infinity, now() + args.timeoutMs) + 15_000
     io.say(`Waiting for approval: ${args.what}`)
     io.say(`  Answer it on your Mac or phone (Approve or Deny, on any device you are signed in on). Id ${id}, asked before.`)
   } else {
@@ -341,6 +348,7 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
           createdAt: asked.createdAt ?? new Date(now()).toISOString(),
           expiresAt: asked.expiresAt ?? new Date(now() + args.timeoutMs).toISOString(),
           ...(singleUse && asked.detail ? { envelope: asked.detail } : {}),
+          ...(asked.untilBack ? { untilBack: true as const } : {}),
         }, dir)
       } catch (err) {
         await io.call('approval_cancel', { id, token, reason: 'the asker could not save its request' }).catch(() => undefined)
@@ -348,7 +356,7 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
         return APPROVE_EXIT.error
       }
       io.out(args.json ? JSON.stringify({ id, status: 'pending' }) : id)
-      io.say(`Asked for approval ${id}; to wait for the answer and go on, rerun the same command with --approval ${id}.`)
+      io.say(`Asked for approval ${id}. Now end your turn with one plain sentence on what you wait for, never the agent-ack line: Walnut tells this session the answer; then rerun the same command with --approval ${id} to go on.`)
       return APPROVE_EXIT.pending
     }
     io.say(`Waiting for approval: ${args.what}`)
@@ -417,6 +425,12 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
           if (interrupted) break
         }
         if (now() >= deadline) {
+          // A resumed ask still open (it waits until the person answers): asked, not answered yet.
+          if (saved && openUntil !== undefined && now() < openUntil && last.status === 'pending') {
+            io.say(`walnut approve: not answered yet; the ask stays open until ${new Date(openUntil).toISOString()}. Now end your turn with one plain sentence on what you wait for, never the agent-ack line: Walnut tells this session the answer, then rerun this same command with --approval ${id}.`)
+            if (args.json) io.out(JSON.stringify({ id, status: 'pending' }))
+            return APPROVE_EXIT.pending
+          }
           io.say('No answer in time: not approved.')
           if (args.json) io.out(record({ ...last, status: 'expired' }))
           return APPROVE_EXIT.timeout
@@ -425,13 +439,19 @@ export async function runApprove(args: ApproveArgs, io: ApproveIo): Promise<numb
     } finally {
       stop?.()
     }
+    // A resumed ask was asked by an earlier run and is the person's to answer: stopping this wait
+    // leaves it open (a tool's timeout stops a rerun too), and its saved request stays for the next.
+    if (saved && openUntil !== undefined && now() < openUntil) {
+      io.say(`Stopped waiting; approval ${id} stays open until ${new Date(openUntil).toISOString()}. Walnut tells this session the answer; rerun the same command with --approval ${id} then.`)
+      return APPROVE_EXIT.pending
+    }
     await io.call('approval_cancel', { id, token, reason: 'the script was stopped' }).catch(() => undefined)
     io.say('Stopped: the approval was withdrawn.')
     return APPROVE_EXIT.interrupted
   }
 
   const code = await waitLoop()
-  // A resumed ask has reached its end whichever way this run ended: its token is no use any more.
-  if (saved) removeToken(saved.id, dir)
+  // A resumed ask has reached its end whichever way this run ended (but still open): its token is no use any more.
+  if (saved && code !== APPROVE_EXIT.pending) removeToken(saved.id, dir)
   return code
 }

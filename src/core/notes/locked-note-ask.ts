@@ -38,8 +38,10 @@ export type LockedNoteRequester = ApprovalRequester
 
 interface Ask {
   approvalId: string
-  /** When it was asked: a pending ask past ASK_TIMEOUT_MS is swept. */
+  /** When it was asked. */
   at: number
+  /** When its approval runs out (absent in one an older Walnut kept: ASK_TIMEOUT_MS after `at`): a pending ask past it is swept. */
+  until?: number
   tokenHash: string
   path: string
   access: LockedNoteAccess
@@ -56,7 +58,8 @@ interface Ask {
 }
 
 export interface AskDeps {
-  askPerson(input: { what: string; detail: string; timeoutMs: number; requester: LockedNoteRequester; testRun?: string }): Promise<{ id: string; waitToken: string; expiresAt: string }>
+  /** `untilBack`: the ask stays open until the person answers (approvals/store.ts). */
+  askPerson(input: { what: string; detail: string; timeoutMs: number; untilBack?: boolean; requester: LockedNoteRequester; testRun?: string }): Promise<{ id: string; waitToken: string; expiresAt: string }>
   /** `answeredAt`: when the person answered (the approval's answer.at), where the window starts. */
   waitApproval(id: string, waitToken: string, waitMs: number): Promise<{ status: 'pending' | 'approved' | 'denied' | 'expired' | 'canceled'; answeredBy?: string; answeredAt?: string }>
   cancelApproval(id: string): Promise<void>
@@ -68,6 +71,8 @@ export interface AskDeps {
   lockedNoteId(path: string): Promise<string | null>
   /** Whether a hidden note is at `path` (docs/reference/locked-notes.md, "Hidden notes"): no ask opens one. */
   hiddenNote?(path: string): Promise<boolean>
+  /** The approval's state now (undefined: cannot tell): an ask the person answered no longer counts as waiting. */
+  approvalStatus?(id: string): Promise<string | undefined>
   now?: () => number
 }
 
@@ -122,11 +127,22 @@ export async function askLockedNote(input: { path: unknown; purpose: unknown; ac
   }
   if (noteId === null) refuse(409, 'not_locked', 'This note is not locked: read it with note_read.')
   const now = (deps.now ?? Date.now)()
-  for (const [id, a] of asks) if (a.readUntil ? now > a.readUntil : now - a.at > ASK_TIMEOUT_MS + 60_000) asks.delete(id)
+  for (const [id, a] of asks) if (a.readUntil ? now > a.readUntil : now > (a.until ?? a.at + ASK_TIMEOUT_MS) + 60_000) asks.delete(id)
   const asker = askerOf(input.requester)
+  // Only asks still open on the person's devices count as waiting (an ask stays open until they
+  // answer). A no the agent was told about and never read is taken as the wait takes it: counted
+  // toward the pause, and the ask dropped.
+  const mine = [...asks.values()].filter((a) => a.asker === asker && !a.releasedAt)
+  const states = await Promise.all(mine.map(async (a) => (await deps.approvalStatus?.(a.approvalId).catch(() => undefined)) ?? 'pending'))
+  mine.forEach((a, i) => {
+    if (states[i] !== 'denied') return
+    asks.delete(a.approvalId)
+    denials.set(asker, [...(denials.get(asker) ?? []).filter((t) => now - t < DENY_WINDOW_MS), now])
+  })
   const recent = (denials.get(asker) ?? []).filter((t) => now - t < DENY_WINDOW_MS)
   if (recent.length >= DENY_MAX) refuse(429, 'agent_paused', 'The user said no three times in the last half hour: do not ask again now; ask them in words if it is still needed.')
-  const waiting = [...asks.values()].filter((a) => a.asker === asker && !a.releasedAt).length
+  // Unknown (the record cannot be read) counts as waiting.
+  const waiting = states.filter((st) => st === 'pending').length
   if (waiting >= ASK_MAX) refuse(429, 'too_many_asks', 'This task already waits for the user on locked notes: wait for that answer first.')
   const who = input.requester.taskTitle ? `the task "${input.requester.taskTitle}"` : `an agent on ${input.requester.host}`
   const what = access === 'edit'
@@ -141,8 +157,10 @@ export async function askLockedNote(input: { path: unknown; purpose: unknown; ac
     'Approving asks for your Passwords master password.',
     `The text then goes into that agent's conversation on ${input.requester.host} (a long answer may also be written to a file there), and what it writes about the note can be searched like any of its words.`,
   ].join('\n')
-  const made = await deps.askPerson({ what, detail, timeoutMs: ASK_TIMEOUT_MS, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}) })
-  asks.set(made.id, { approvalId: made.id, at: now, tokenHash: sha(made.waitToken), path: notePath, access, asker, requester: input.requester, noteId: noteId! })
+  // Open until the person answers, while they are away too; the asking session is told the answer.
+  const made = await deps.askPerson({ what, detail, timeoutMs: ASK_TIMEOUT_MS, untilBack: true, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}) })
+  const until = Date.parse(made.expiresAt)
+  asks.set(made.id, { approvalId: made.id, at: now, ...(Number.isFinite(until) ? { until } : {}), tokenHash: sha(made.waitToken), path: notePath, access, asker, requester: input.requester, noteId: noteId! })
   return { status: 'pending' as const, requestId: made.id, waitToken: made.waitToken, expiresAt: made.expiresAt, access, path: notePath }
 }
 

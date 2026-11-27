@@ -101,6 +101,12 @@ export interface ApprovalRecord {
    * A deny needs nothing. An older Walnut ignores it and takes a tap.
    */
   needsPasswords?: true
+  /**
+   * An agent's ask that stays open until the person answers, while they are away too, at most
+   * held-asks.ts HOLD_MS, instead of its own short clock (store.ts createApproval `untilBack`).
+   * An older Walnut and an older app ignore it and read expiresAt as ever.
+   */
+  untilBack?: true
   /** When the asker first read how it ended, whatever it was (an expiry too): it knows. */
   readAt?: string
   /** When Walnut told the asking session the decision (tell-asker.ts), at most once. */
@@ -141,6 +147,35 @@ export const APPROVAL_WAIT_MAX_MS = 12_000
 
 /** For the asking agent: where the person is asked. */
 export const WHERE_ASKED = 'They are asked in Walnut, on any device they are signed in on (a notification wherever it is open)'
+
+/** An ask's end as its asker keeps it: until when (epoch ms), and whether it waits for the person to be back. */
+export interface AskEnd { until: number; untilBack?: boolean }
+
+export function askEndOf(a: Pick<ApprovalView, 'expiresAt' | 'untilBack'>): AskEnd {
+  return { until: Date.parse(a.expiresAt) || Date.now(), ...(a.untilBack ? { untilBack: true } : {}) }
+}
+
+/**
+ * For the asking agent: how long its ask stays open, read from the approval. One that waits until
+ * the person answers (store.ts `untilBack`) lets the agent end its turn and be told the answer, and
+ * it never asks again on a clock (2026-11-26: a payment's ask expired twice in 10 minutes while the
+ * person was away).
+ */
+export function askOpenWords(e: AskEnd, now = Date.now()): string {
+  if (e.untilBack) {
+    return `The ask stays open until they answer, while they are away too (at most until ${new Date(e.until).toISOString()}). `
+      + 'If they do not answer within a few holds, end your turn with one plain sentence on what you wait for, never the agent-ack line: Walnut tells this session the answer; then make the same call again to go on. '
+      + 'Do not ask again meanwhile, and do not ask them about it in chat or anywhere else.'
+  }
+  return `The ask stays open ${Math.max(1, Math.round((e.until - now) / 60_000))} minutes.`
+}
+
+/** For the asking agent: its ask ran out with no answer. */
+export function askExpiredWords(e: AskEnd | undefined): string {
+  return e?.untilBack
+    ? `Nobody answered by ${new Date(e.until).toISOString()}: the person did not come back to it in time. Nothing was done. Do not ask again by yourself; say in your report that the step waits for them.`
+    : 'Nobody answered in time: nothing was done.'
+}
 
 export function isTerminal(status: ApprovalStatus): boolean {
   return status !== 'pending'

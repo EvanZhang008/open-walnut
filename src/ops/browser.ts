@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { ANSWER_CEILING_CHARS } from './answer.js';
 import { withOutcome } from './outcome.js';
+import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js';
 import { noBrowserLine, noBrowserNext, type GoneBrowser } from '../core/browser-control/gone-words.js';
 import { framePageAnswer, framePageFields } from '../core/browser-control/page-frame.js';
 
@@ -33,13 +34,25 @@ function dialogLine(body: Record<string, unknown>): string {
   return d && typeof d === 'object' ? ` It opened a ${d.type ?? 'dialog'}: "${String(d.message ?? '').slice(0, 300)}".` : ''
 }
 
+/**
+ * How to go on while an ask waits: hold for its answer; one open until the person answers
+ * (approvals/store.ts `untilBack`) is held a few times, then the turn ends and Walnut tells the
+ * session the answer (2026-11-26: a payment's ask held a shell command for 10 minutes and expired).
+ */
+function holdOn(call: string, body: Record<string, unknown>, how = `with request "${String(body.request ?? '')}" and wait_ms up to 25000`): string {
+  if (body.untilBack === true) {
+    return `${call} ${how} a few times. If it still waits, ${OWN_WAIT_TURN_END}: the ask stays open until they answer (at most until ${String(body.expiresAt ?? 'three days')}), Walnut tells this session the answer, and then the same call goes on. Do not ask them in chat as well, and do not ask again.`
+  }
+  return `${call} ${how} until it goes through${typeof body.waitsMinutes === 'number' ? ` (the ask stays open ${body.waitsMinutes} minutes)` : ''}. Do not ask them in chat as well.`
+}
+
 function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>): { outcome: string; next: string } {
   if (body.status === 'needs_ok') {
     // browser_reconnecting: Walnut restarted during the wait and the browser has not connected again yet.
     if (body.code === 'outward_needs_ok' || body.code === 'upload_needs_ok' || body.code === 'browser_reconnecting') {
       return {
         outcome: String(body.error ?? 'Waiting for the person to approve this step (a notification on their Mac and phone).'),
-        next: `Call ${String(args.action)} again with the same arguments, request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through (the ask stays open ${String(body.waitsMinutes ?? 10)} minutes). Do not ask them in chat as well.`,
+        next: holdOn(`Call ${String(args.action)} again with the same arguments,`, body),
       }
     }
     if (body.code === 'sign_in_waiting') {
@@ -51,24 +64,24 @@ function outcomeOf(args: Record<string, unknown>, body: Record<string, unknown>)
     if (body.code === 'fresh_sign_in_needs_ok') {
       return {
         outcome: String(body.error ?? 'Waiting for the person to approve a new sign-in.'),
-        next: `Call ${args.action === 'fill_code' ? 'fill_code' : 'fill_login'} again with request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through. Do not ask them in chat as well.`,
+        next: holdOn(`Call ${args.action === 'fill_code' ? 'fill_code' : 'fill_login'} again`, body),
       }
     }
     if (args.action === 'fill_code') {
       return {
         outcome: `Waiting for the person to approve entering the one-time code of "${(body.item as { title?: string } | undefined)?.title ?? 'the login'}" (a notification on their Mac and phone).`,
-        next: `Call fill_code again with request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through. Do not ask them in chat as well.`,
+        next: holdOn('Call fill_code again', body),
       }
     }
     if (args.action === 'fill_login') {
       return {
         outcome: `Waiting for the person to approve signing in with "${(body.item as { title?: string } | undefined)?.title ?? 'the login'}" (a notification on their Mac and phone).`,
-        next: `Call fill_login again with request "${String(body.request ?? '')}" and wait_ms up to 25000 until it goes through. Do not ask them in chat as well.`,
+        next: holdOn('Call fill_login again', body),
       }
     }
     return {
       outcome: `Waiting for the person to let agents use ${body.site} (a notification on their Mac and phone).`,
-      next: 'Call the same action again (with wait_ms up to 25000 to hold for the answer) until it goes through. Do not ask them in chat as well.',
+      next: holdOn('Call the same action again', body, '(with wait_ms up to 25000 to hold for the answer)'),
     }
   }
   const tab = typeof body.tab === 'number' ? ` (tab ${body.tab})` : ''

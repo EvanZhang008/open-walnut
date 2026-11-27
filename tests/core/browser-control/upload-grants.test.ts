@@ -41,7 +41,7 @@ describe('upload grants', () => {
     expect(rec?.outsideSwitch).toBeUndefined()
     expect(rec?.unasked).toBeUndefined()
     // The same task and files again: the same ask.
-    expect(await askUpload({ taskId: 't1', paths: [REC], site: 'example.test', requester })).toEqual({ id, reused: true })
+    expect(await askUpload({ taskId: 't1', paths: [REC], site: 'example.test', requester })).toMatchObject({ id, reused: true })
     // Another site is another ask.
     expect((await askUpload({ taskId: 't1', paths: [REC], site: 'other.test', requester })).id).not.toBe(id)
   })

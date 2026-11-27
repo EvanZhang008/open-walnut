@@ -4,7 +4,7 @@
  * One file per approval, `<id>.json` in `${XDG_STATE_HOME:-~/.local/state}/open-walnut/approvals/`
  * (dir 0700, file 0600, written atomically): it holds the wait token, which only the asker may
  * hold, and what was asked (the what, the raw detail and its sha256, the single-use envelope), so a
- * resumed run can prove it is the same request. Files older than a day are swept on each run.
+ * resumed run can prove it is the same request. Files older than TOKEN_MAX_AGE_MS are swept on each run.
  * Node builtins only: the daemon bundles it (cli-core.ts).
  */
 import crypto from 'node:crypto'
@@ -24,9 +24,12 @@ export interface SavedApproval {
   expiresAt: string
   /** rec.detail as the server stored it, for a single-use ask: the envelope with its nonce. */
   envelope?: string
+  /** It stays open until the person answers (store.ts untilBack): a rerun that stops leaves it open. */
+  untilBack?: true
 }
 
-export const TOKEN_MAX_AGE_MS = 24 * 60 * 60_000
+/** Past the longest an ask stays open (held-asks.ts HOLD_MS, 72 hours, store.ts untilBack), with a day to spare. */
+export const TOKEN_MAX_AGE_MS = 4 * 24 * 60 * 60_000
 
 const ID_RE = /^apr-[A-Za-z0-9_-]+$/
 
@@ -90,7 +93,7 @@ export function removeToken(id: string, dir: string = tokenDir()): void {
   try { fs.unlinkSync(fileOf(id, dir)) } catch { /* already gone */ }
 }
 
-/** Removes saved asks (and stray temp files) last written more than a day ago. */
+/** Removes saved asks (and stray temp files) last written more than TOKEN_MAX_AGE_MS ago. */
 export function sweepTokens(dir: string = tokenDir(), now: number = Date.now()): number {
   let names: string[]
   try { names = fs.readdirSync(dir) } catch { return 0 }

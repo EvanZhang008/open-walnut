@@ -158,7 +158,7 @@ async function askDeps() {
   const deps: import('../../core/notes/locked-note-ask.js').AskDeps = {
     async askPerson(input) {
       // Always asked: the person locked this note so no agent reads it unasked (ask-me-gates-guard).
-      const { approval, waitToken } = await createApproval({ ...input, detailRole: 'summary', outsideSwitch: true, needsPasswords: true })
+      const { approval, waitToken } = await createApproval({ ...input, untilBack: input.untilBack === true, detailRole: 'summary', outsideSwitch: true, needsPasswords: true })
       return { id: approval.id, waitToken, expiresAt: approval.expiresAt }
     },
     async waitApproval(id, token, waitMs) {
@@ -176,6 +176,7 @@ async function askDeps() {
       return parsed ? parsed.id ?? '' : null
     },
     hiddenNote: async (p) => isHiddenNoteText(await noteText(p)),
+    approvalStatus: async (id) => (await import('../../core/approvals/store.js')).getApproval(id).then((a) => a?.status),
   }
   return deps
 }

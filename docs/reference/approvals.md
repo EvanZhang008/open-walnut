@@ -15,7 +15,7 @@ walnut approve "Publish v2.3.0 to npm" --timeout 30m || exit 1
 | 2 | nobody answered before `--timeout` (default 10 minutes), or it was withdrawn |
 | 3 | it could not ask (bad usage, Walnut not reachable) |
 | 4 | `--request-only`: asked, not answered yet (below); or a single-use ask Walnut holds until the person is back ("Walnut holds this ask", on stderr; its session is told when to take the step again, below) |
-| 130 | the script was stopped (Ctrl-C); the request is withdrawn on every device |
+| 130 | the script was stopped (Ctrl-C); the request is withdrawn on every device (a `--approval` rerun of an ask open until answered leaves it open and exits 4) |
 
 Options: `--timeout 90s|10m|2h` (10 seconds to 24 hours), `--detail <file>` (`-` reads stdin; up
 to 32,000 characters), `--from <label>` (a short name for the asking script), `--json` (prints the
@@ -228,6 +228,20 @@ Walnut wrote with `mode: "biometric"` or pinned keys is answered with a tap like
   after you read it is never approved unseen. The
   first answer wins; the asking process (holding the wait token only it got) reads the decision
   once, and a second read is refused.
+- **An agent's ask stays open until you answer.** An ask a task's agent waits on (a browser step
+  that buys, sends or deletes, a new site, a new sign-in, an upload, a password, a locked note, an
+  `approval_request` with no `timeout_ms`, or `walnut approve --request-only`) is not on a 10-minute
+  clock: it stays on your devices until you answer, while you are away too, for at most 72 hours
+  (`untilBack` on the record, `store.ts`). The agent ends its turn and Walnut tells its session your
+  answer; the same browser step asked again (a new ref after a reload, the same page at the same
+  address in another of the task's tabs) is the same ask, so you are asked once, and one yes lets
+  one step through, within an hour of your tap. A task has at most 3 such asks open at a time, and
+  all tasks 10; past that an ask gets its own short clock. `walnut approve --approval <id>` on one
+  still open gives up after its own `--timeout` with exit 4 and keeps the saved request (4 days).
+  A script blocking on its own `--timeout` and a
+  single-use ask (five minutes to use) keep their clocks. One that runs out tells the agent not to
+  ask again by itself (2026-11-26: a $30 payment's ask expired twice in 10 minutes while the person
+  was away). Guard: `tests/core/approvals/until-back.test.ts`.
 - **Expired is not approved.** An answer after the deadline is refused (`409 already_expired`), and a
   single-use approval spent after it is refused too.
 - **Recorded.** Every decision keeps who asked, who answered, when and on which device
@@ -244,7 +258,7 @@ too, and so can a holder of a paired device's token. A Git gate that runs a `wal
 
 | Route | Who | |
 |---|---|---|
-| `POST /api/v1/approvals` | anyone | `{ what, detail?, timeout_ms?, cwd?, command?, why?, single_use?, request_only? }` → `{ approval, waitToken }` (an older asker's `mode` and `signing_key_id(s)` are ignored) |
+| `POST /api/v1/approvals` | anyone | `{ what, detail?, timeout_ms?, cwd?, command?, why?, single_use?, request_only? }` → `{ approval, waitToken }` (an older asker's `mode` and `signing_key_id(s)` are ignored; a task's ask with `request_only` or no `timeout_ms` stays open until answered, `approval.untilBack`) |
 | `GET /api/v1/approvals[?status=all]` | anyone | `{ approvals, keys: [], askMe }`: `keys` is always empty, kept for older iPhone apps that read it |
 | `GET /api/v1/approvals/:id` | anyone | one approval |
 | `POST /api/v1/approvals/:id/wait` | the asker | `{ token, wait_ms? }` → `{ approval, used }`, holds at most 12 s |

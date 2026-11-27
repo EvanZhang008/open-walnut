@@ -3,23 +3,29 @@
  * their yes (the page judges the step, the extension's page-agent-outward.ts; routes/browser-v1.ts
  * asks here). Only the agent's own click, Enter or typed text is judged: `evaluate`, the page's own
  * scripts and a link that acts on a plain GET are not. The ask is a Walnut approval like the
- * vault's (a notification on their Mac and phone), open for ASK_MS, answered with a tap on any device
- * they are signed in on. The act answers 202 `needs_ok` with `request`; the agent calls the same action again
+ * vault's (a notification on their Mac and phone), open until they answer (at most held-asks.ts
+ * HOLD_MS: store.ts `untilBack`), answered with a tap on any device they are signed in on. The act answers 202 `needs_ok` with `request`; the agent calls the same action again
  * with it (and `wait_ms`), and once the person approved, the step goes to the page with the
  * approval's signature of exactly that step (`outward_ok`), which the page checks against the
  * element it would act on. One use.
  */
 import { BrowserError } from './hub.js'
 import { keptMap } from '../kept-asks.js'
-import { WHERE_ASKED } from '../approvals/types.js'
+import { WHERE_ASKED, askEndOf, askExpiredWords, askOpenWords, type AskEnd } from '../approvals/types.js'
 import type { AgentRequester } from '../vault/agent.js'
 
+/** An ask's short clock: what an ask an older Walnut kept is read with, and what one past store.ts UNTIL_BACK_MAX gets. */
 export const ASK_MS = 10 * 60_000
 
 /** What the page held: the step, why it counts, the page, and the step's signature. */
 export interface Hold { kind: 'buy' | 'send' | 'delete'; why: string; what: string; url: string; sig: string; message?: string; total?: string }
 
-interface Ask { owner: string; tab: number; action: string; key: string; hold: Hold; at: number }
+/** How long a yes waits for its step, from the person's tap: a yes nobody took is not spent days later. */
+export const TAKE_MS = 60 * 60_000
+
+/** `end`: the approval's own end (absent in an ask an older Walnut kept: ASK_MS after `at`). */
+interface Ask { owner: string; tab: number; action: string; key: string; hold: Hold; at: number; end?: AskEnd }
+const endOf = (a: Ask): AskEnd => a.end ?? { until: a.at + ASK_MS }
 /** Kept across a restart (core/kept-asks.ts): the agent's call after a deploy finds its ask. */
 const asks = keptMap<Ask>('browser-outward-asks')
 
@@ -42,12 +48,12 @@ export function holdOf(extra: Record<string, unknown>): Hold | null {
 }
 
 const hostOf = (u: string) => { try { return new URL(u).host } catch { return 'the page' } }
-const MINUTES = Math.round(ASK_MS / 60_000)
 
-function waiting(id: string, hold: Hold): Record<string, unknown> {
+function waiting(id: string, hold: Hold, end: AskEnd): Record<string, unknown> {
   return {
-    status: 'needs_ok', code: 'outward_needs_ok', request: id, approvalId: id, kind: hold.kind, what: hold.what, url: hold.url, waitsMinutes: MINUTES,
-    error: `Waiting for the person to approve: ${hold.what} on ${hostOf(hold.url)} (${hold.why}). ${WHERE_ASKED}; the ask stays open ${MINUTES} minutes.`,
+    status: 'needs_ok', code: 'outward_needs_ok', request: id, approvalId: id, kind: hold.kind, what: hold.what, url: hold.url,
+    waitsMinutes: Math.max(1, Math.round((end.until - Date.now()) / 60_000)), expiresAt: new Date(end.until).toISOString(), ...(end.untilBack ? { untilBack: true } : {}),
+    error: `Waiting for the person to approve: ${hold.what} on ${hostOf(hold.url)} (${hold.why}). ${WHERE_ASKED}. ${askOpenWords(end)}`,
   }
 }
 
@@ -91,20 +97,30 @@ export function askWords(hold: Hold, taskTitle?: string): { what: string; detail
 /** The page held a step: the person is asked. */
 export async function askOutward(input: { owner: string; tab: number; action: string; args: Record<string, unknown>; hold: Hold; requester: AgentRequester; testRun?: string }): Promise<Record<string, unknown>> {
   const now = Date.now()
-  for (const [id, a] of asks) if (now - a.at > ASK_MS) asks.delete(id)
+  for (const [id, a] of asks) if (now > endOf(a).until) asks.delete(id)
   const key = stepKey(input.action, input.args)
-  // The same step asked again while its ask is open: the same ask.
-  for (const [id, a] of asks) if (a.owner === input.owner && a.tab === input.tab && a.key === key && a.hold.sig === input.hold.sig) return waiting(id, a.hold)
+  // The same step asked again while its ask is open (or answered and not yet taken): the same ask.
+  // The same step is what the person read (the hold's signature: the button, the page, the message,
+  // the total, and the page's whole address), so a new ref after a reload or the same page in
+  // another of the task's tabs finds it too, and the ask now follows this call (2026-11-26: a
+  // payment asked twice). A waiter on its old tab then finds it moved (answerOutward).
+  for (const [id, a] of asks) {
+    if (a.owner !== input.owner || a.hold.sig !== input.hold.sig || a.hold.url !== input.hold.url) continue
+    if (a.tab !== input.tab || a.key !== key || a.action !== input.action) asks.set(id, { ...a, tab: input.tab, key, action: input.action })
+    return waiting(id, a.hold, endOf(a))
+  }
   const store = await import('../approvals/store.js')
   const words = askWords(input.hold, input.requester.taskTitle)
   const made = await store.createApproval({
     what: words.what,
     detail: words.detail, detailRole: 'summary',
-    timeoutMs: ASK_MS, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),
+    // Open until the person answers, while they are away too; this session is told the answer.
+    timeoutMs: ASK_MS, untilBack: true, requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),
   })
   const id = made.approval.id
-  asks.set(id, { owner: input.owner, tab: input.tab, action: input.action, key, hold: input.hold, at: now })
-  return waiting(id, input.hold)
+  const end = askEndOf(made.approval)
+  asks.set(id, { owner: input.owner, tab: input.tab, action: input.action, key, hold: input.hold, at: now, end })
+  return waiting(id, input.hold, end)
 }
 
 /**
@@ -123,13 +139,23 @@ export async function answerOutward(input: { id: string; owner: string; tab: num
     await new Promise((r) => setTimeout(r, 500))
     rec = await store.getApproval(input.id)
   }
-  if (rec?.status === 'pending') return { ok: false, status: 202, body: await waiting(input.id, a.hold) }
+  if (rec?.status === 'pending') return { ok: false, status: 202, body: waiting(input.id, a.hold, endOf(a)) }
+  // One reader takes the answer: checked and taken with no await between, so two waiters (or one on
+  // a tab the ask moved from) never both get the step's signature.
+  if (asks.get(input.id) !== a) throw new BrowserError('That ask was already used, or moved to another call: call the action again without request.', 404, 'no_such_request')
   asks.delete(input.id)
   // This call hands the agent the answer itself: its session needs no note about it (tell-asker.ts).
   await store.noteAskerRead(input.id)
-  if (rec?.status === 'approved') return { ok: true, sig: a.hold.sig }
+  if (rec?.status === 'approved') {
+    const answered = Date.parse(rec.answer?.at ?? '') || 0
+    if (Date.now() - answered > TAKE_MS) {
+      return { ok: false, status: 409, body: { error: `The person approved this more than ${Math.round(TAKE_MS / 60_000)} minutes ago and the step was not taken then: nothing was done. Call the action again to ask anew.`, code: 'outward_expired' } }
+    }
+    return { ok: true, sig: a.hold.sig }
+  }
   if (rec?.status === 'denied') {
     return { ok: false, status: 403, body: { error: `The person said no to: ${a.hold.what}. Nothing was done; do not try it again unless they ask.`, code: 'denied' } }
   }
-  return { ok: false, status: 409, body: { error: `Nobody answered within ${MINUTES} minutes: nothing was done. Call the action again to ask anew.`, code: 'outward_expired' } }
+  const end = endOf(a)
+  return { ok: false, status: 409, body: { error: `${askExpiredWords(end)}${end.untilBack ? '' : ' Call the action again to ask anew.'}`, code: 'outward_expired' } }
 }

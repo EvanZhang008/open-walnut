@@ -20,7 +20,7 @@ import { bus } from '../event-bus.js'
 import { tellAskerLater } from './tell-asker.js'
 import { FenceRefusal, fenceRefusal, fenceSkipped, fenced, notHeldNow, readActivity, type FenceSubject, type UserActivity } from './single-use-fence.js'
 import {
-  heldWords, holdAsk, kick as kickHeld, markAsked, reservedHeld, startHeldSweep, stepKey, type HeldAsk, type HeldVerdict, type SweepDeps,
+  heldWords, holdAsk, holdMs, kick as kickHeld, markAsked, reservedHeld, startHeldSweep, stepKey, type HeldAsk, type HeldVerdict, type SweepDeps,
 } from './held-asks.js'
 import { log } from '../../logging/index.js'
 import { approvalDigest } from './digest.js'
@@ -211,6 +211,14 @@ export interface CreateInput {
   outsideSwitch?: boolean
   /** Approving it needs Passwords unlocked in the answering window (an agent's ask for a locked note). */
   needsPasswords?: boolean
+  /**
+   * An agent's ask that waits for the person (it may end its turn and is told the answer): it stays
+   * open until they answer, while they are away too, at most held-asks.ts HOLD_MS, not its short
+   * clock (at most UNTIL_BACK_MAX such asks of one task, UNTIL_BACK_ALL_MAX in all). Every creator says yes or no
+   * (the guard in tests/core/approvals/until-back.test.ts); a script that blocks on its own
+   * --timeout keeps its clock, and so does a single-use ask (five minutes to use it).
+   */
+  untilBack?: boolean
 }
 
 const fenceError = (r: FenceRefusal) => new ApprovalError(r.code === 'too_many_pending' ? 429 : 409, r.code, r.message)
@@ -231,6 +239,21 @@ export function wellFormed(s: string): string {
 
 /** Pending approvals one asker class (the person's, or one test run's) may hold at once. */
 export const APPROVAL_PENDING_MAX = 20
+/**
+ * Asks open until the person answers, at a time: per task, and in all (well under
+ * APPROVAL_PENDING_MAX, so long asks never fill the cap a script's ask needs). Past either a new ask
+ * keeps its own short clock.
+ */
+export const UNTIL_BACK_MAX = 3
+export const UNTIL_BACK_ALL_MAX = 10
+
+/** Whether one more ask may stay open until answered: under both caps, in its test-run class. */
+function untilBackRoom(file: ApprovalsFile, rec: ApprovalRecord, now: number): boolean {
+  const who = (a: ApprovalRecord) => a.requester.taskId ? `t:${a.requester.taskId}` : a.requester.sessionId ? `s:${a.requester.sessionId}` : ''
+  const open = file.approvals.filter((a) => a.untilBack && a.status === 'pending' && Date.parse(a.expiresAt) > now
+    && (a.testRun ?? null) === (rec.testRun ?? null))
+  return open.length < UNTIL_BACK_ALL_MAX && open.filter((a) => who(a) === who(rec)).length < UNTIL_BACK_MAX
+}
 
 export function cleanWhat(raw: unknown): string {
   const what = typeof raw === 'string' ? wellFormed(raw).replace(/\s+/g, ' ').trim() : ''
@@ -285,37 +308,49 @@ export async function createApproval(input: CreateInput): Promise<{ approval: Ap
   const fence = fenced(subject) && !fenceSkipped()
   const activity: UserActivity | null = fence ? await readActivity() : null
   const now = Date.now()
+  // An agent's ask that waits for the person stays open until they answer, while they are away too
+  // (at most a held ask's hold), never its short clock: it is on their devices when they come back,
+  // one tap, and the asking session is told the answer (2026-11-26: a $30 payment's ask expired
+  // twice in 10 minutes while the person was away, and the task went back to waiting on them).
+  const long = !!input.untilBack && !input.singleUse && !input.unasked && !!(input.requester.taskId || input.requester.sessionId) && !fenceSkipped()
   const id = 'apr-' + crypto.randomBytes(9).toString('base64url')
   const createdAt = new Date(now).toISOString()
-  const expiresAt = new Date(now + timeout).toISOString()
   const waitToken = crypto.randomBytes(24).toString('base64url')
   const requester = Object.fromEntries(Object.entries({ ...input.requester, host: input.requester.host || 'unknown' })
     .map(([k, v]) => [k, typeof v === 'string' ? wellFormed(v) : v])) as unknown as ApprovalRequester
-  const rec: ApprovalRecord = {
-    id, what, ...(detail ? { detail } : {}),
-    // A single-use envelope's detail is the operation's context: technical, whatever the creator said.
-    ...(detail && input.detailRole === 'summary' && !input.singleUse ? { detailRole: 'summary' as const } : {}),
-    digest: approvalDigest({ id, mode: 'tap', createdAt, expiresAt, host: requester.host, taskId: requester.taskId, what, detail }),
-    mode: 'tap',
-    requester, createdAt, expiresAt, status: 'pending', waitTokenHash: sha(waitToken),
-    ...(input.testRun ? { testRun: input.testRun } : {}),
-    ...(input.singleUse ? { singleUse: true } : {}),
-    ...(input.context && Object.keys(input.context).length ? { context: input.context } : {}),
-    ...(input.requestOnly ? { requestOnly: true } : {}),
-    ...(input.outsideSwitch ? { outsideSwitch: true } : {}),
-    ...(input.needsPasswords ? { needsPasswords: true } : {}),
-    // Approvals off: nobody is asked; the record says the step went ahead and who took it.
-    ...(input.unasked ? {
-      unasked: input.unasked, status: 'approved' as const, readAt: createdAt,
-      answer: { decision: 'approve' as const, at: createdAt, mode: 'tap' as const, device: { name: 'Approvals off', kind: 'setting' as const } },
-    } : {}),
+  // The digest covers expiresAt, so the record is built once its end is known (the brake is read in the locked write).
+  const build = (untilBack: boolean): ApprovalRecord => {
+    const expiresAt = new Date(now + (untilBack ? Math.max(holdMs(), timeout) : timeout)).toISOString()
+    return {
+      id, what, ...(detail ? { detail } : {}),
+      // A single-use envelope's detail is the operation's context: technical, whatever the creator said.
+      ...(detail && input.detailRole === 'summary' && !input.singleUse ? { detailRole: 'summary' as const } : {}),
+      digest: approvalDigest({ id, mode: 'tap', createdAt, expiresAt, host: requester.host, taskId: requester.taskId, what, detail }),
+      mode: 'tap',
+      requester, createdAt, expiresAt, status: 'pending', waitTokenHash: sha(waitToken),
+      ...(input.testRun ? { testRun: input.testRun } : {}),
+      ...(input.singleUse ? { singleUse: true } : {}),
+      ...(input.context && Object.keys(input.context).length ? { context: input.context } : {}),
+      ...(input.requestOnly ? { requestOnly: true } : {}),
+      ...(input.outsideSwitch ? { outsideSwitch: true } : {}),
+      ...(input.needsPasswords ? { needsPasswords: true } : {}),
+      ...(untilBack ? { untilBack: true as const } : {}),
+      // Approvals off: nobody is asked; the record says the step went ahead and who took it.
+      ...(input.unasked ? {
+        unasked: input.unasked, status: 'approved' as const, readAt: createdAt,
+        answer: { decision: 'approve' as const, at: createdAt, mode: 'tap' as const, device: { name: 'Approvals off', kind: 'setting' as const } },
+      } : {}),
+    }
   }
+  let rec = build(long)
   // A held ask of another task released just now keeps the person's devices for its ask (held-asks.ts).
   const reserved = fence ? await reservedHeld(input.testRun, now) : null
   let settled: ApprovalRecord[] = []
   let refused: FenceRefusal | null = null
   await serial(() => updateJsonFile<ApprovalsFile>(approvalsFile(), EMPTY, (file) => {
     settled = settleClock(file, now)
+    // Too many asks already open until the person answers (this task's, or all): this one keeps its own clock.
+    if (rec.untilBack && !untilBackRoom(file, rec, now)) rec = build(false)
     refused = fence ? fenceRefusal(file, subject, now, activity, reserved) : null
     if (refused) throw fenceError(refused)
     // Past the cap a new ask is refused (the held sweep makes this same check before a release).

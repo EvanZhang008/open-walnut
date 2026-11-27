@@ -95,7 +95,7 @@ export interface UseInput {
 export type UseResult =
   | { status: 'released'; item: AgentItemView; values: Record<string, string>; via: 'allow' | 'grant' | 'approval' | 'approvals-off'; grantedUntil?: string | null }
   /** `mode` is always `tap` (a person's tap on any device they are signed in on); older clients read it. */
-  | { status: 'pending'; requestId: string; waitToken: string; item: AgentItemView; mode: 'tap'; expiresAt: string }
+  | { status: 'pending'; requestId: string; waitToken: string; item: AgentItemView; mode: 'tap'; expiresAt: string; untilBack?: true }
 
 // ── the decision, pure ──
 
@@ -447,8 +447,9 @@ function approvalText(item: VaultItem, ask: { fields: string[]; purpose: string;
 }
 
 /** Asks the person (routes/vault-agent-v1.ts): a Walnut approval. */
-export type ApprovalCreator = (input: { what: string; detail: string; timeoutMs: number; requester: AgentRequester; testRun?: string }) =>
-  Promise<{ id: string; waitToken: string; expiresAt: string; cancel?: () => Promise<void> }>
+/** `untilBack`: the ask stays open until the person answers (approvals/store.ts); the answer says whether it does. */
+export type ApprovalCreator = (input: { what: string; detail: string; timeoutMs: number; untilBack?: boolean; requester: AgentRequester; testRun?: string }) =>
+  Promise<{ id: string; waitToken: string; expiresAt: string; untilBack?: boolean; cancel?: () => Promise<void> }>
 
 export async function agentUse(input: UseInput, createApproval: ApprovalCreator): Promise<UseResult> {
   const since = epoch
@@ -487,20 +488,34 @@ export async function agentUse(input: UseInput, createApproval: ApprovalCreator)
     }
   }
 
+  // Only asks still open on the person's devices count as waiting, now that an ask stays open until
+  // they answer (approvals/store.ts untilBack). A no the agent was told about and never read is
+  // taken here as the wait would take it: counted toward the denial pause, and the ask dropped.
+  const { getApproval } = await import('../approvals/store.js')
+  const mine = [...pending.entries()].filter(([, p]) => p.asker === asker && p.releasedAt === undefined)
+  const recs = await Promise.all(mine.map(async ([id]) => ({ id, rec: await getApproval(id).catch(() => undefined) })))
+  for (const { id, rec } of recs) {
+    if (rec?.status !== 'denied') continue
+    const at = Math.min(now, Date.parse(rec.answer?.at ?? '') || now)
+    denials.set(asker, [...recent(denials, asker, DENY_WINDOW_MS, now), at].sort((x, y) => x - y))
+    pending.delete(id)
+  }
   const denied = recent(denials, asker, DENY_WINDOW_MS, now)
   if (denied.length >= DENY_MAX) {
     const until = new Date(denied[0] + DENY_WINDOW_MS)
     await appendAgentLog({ kind: 'refused', reason: 'agent_paused', use, ...logBase(item, fields, purpose, r) })
     refuse(429, 'agent_paused', `The person said no ${DENY_MAX} times in ${DENY_WINDOW_MS / 60_000} minutes, so this task's asks pause until ${until.toISOString()}. Do not ask again before then.`)
   }
-  const waiting = [...pending.values()].filter((p) => p.asker === asker && p.releasedAt === undefined).length
+  // Unknown (the record cannot be read) counts as waiting.
+  const waiting = recs.filter(({ rec }) => (rec?.status ?? 'pending') === 'pending').length
   if (waiting >= ASK_MAX) refuse(429, 'too_many_asks', `${waiting} asks of this task already wait for the person; wait for those first.`)
 
   const grantMs = typeof input.grantMs === 'number' ? input.grantMs : await policyGrantMs()
   // A grant needs a task (a bare script on a host gets one use), and the agent may ask for less.
   const scope: AgentScope = input.scope !== 'once' && r.taskId && grantMs !== 0 ? 'task' : 'once'
   const text = approvalText(item, { fields, purpose, grants: scope === 'task', grantMs, use, requester: r, off: input.agents === 'off' })
-  const a = await createApproval({ ...text, timeoutMs: APPROVAL_TIMEOUT_MS, requester: r, testRun: input.testRun })
+  // Open until the person answers, while they are away too; the asking session is told the answer.
+  const a = await createApproval({ ...text, timeoutMs: APPROVAL_TIMEOUT_MS, untilBack: true, requester: r, testRun: input.testRun })
   // Lock all or the switch moved while the card was being made: no ask is kept, so nothing is released from it.
   if (since !== epoch) {
     await a.cancel?.()
@@ -508,7 +523,7 @@ export async function agentUse(input: UseInput, createApproval: ApprovalCreator)
   }
   pending.set(a.id, { itemId: item.id, fields, purpose, scope, grantMs, use, asker, holder, requester: r, expiresAt: Date.parse(a.expiresAt) || Date.now() + APPROVAL_TIMEOUT_MS })
   await appendAgentLog({ kind: 'asked', approvalId: a.id, use, ...logBase(item, fields, purpose, r) })
-  return { status: 'pending', requestId: a.id, waitToken: a.waitToken, item: view, mode: 'tap', expiresAt: a.expiresAt }
+  return { status: 'pending', requestId: a.id, waitToken: a.waitToken, item: view, mode: 'tap', expiresAt: a.expiresAt, ...(a.untilBack ? { untilBack: true as const } : {}) }
 }
 
 export type ApprovalWaiter = (id: string, token: string, waitMs: number) =>

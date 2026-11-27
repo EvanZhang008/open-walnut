@@ -23,6 +23,7 @@
  */
 import { BrowserError } from './hub.js'
 import { keptMap } from '../kept-asks.js'
+import { askOpenWords, type AskEnd } from '../approvals/types.js'
 import type { AgentItemView, AgentRequester, AgentsSwitch, ApprovalCreator, ApprovalWaiter } from '../vault/agent.js'
 
 export interface FillDeps {
@@ -56,7 +57,8 @@ export interface FillInput {
 
 export type FillOutcome = { status: 200 | 202; body: Record<string, unknown> }
 
-interface PendingFill { owner: string; tab: number; tokenHash: string; url: string; item: { id: string; title: string }; fields: string[]; what: 'login' | 'code'; at: number }
+/** `until`: when its approval runs out (absent in one an older Walnut kept: ASK_MS after `at`); `untilBack`: it waits until the person answers. */
+interface PendingFill { owner: string; tab: number; tokenHash: string; url: string; item: { id: string; title: string }; fields: string[]; what: 'login' | 'code'; at: number; until?: number; untilBack?: true }
 /** Kept across a restart (core/kept-asks.ts): the agent's call after a deploy finds its fill. */
 const pendingFills = keptMap<PendingFill>('browser-pending-fills', {
   unpack: (v) => (v && typeof (v as PendingFill).tokenHash === 'string' ? v as PendingFill : undefined),
@@ -66,20 +68,25 @@ const pendingFills = keptMap<PendingFill>('browser-pending-fills', {
  * waits by the token's hash, which the approval holds anyway (approvals/store.ts).
  */
 const fillTokens = new Map<string, string>()
-const PENDING_MS = 15 * 60_000
+/** A fill is kept this long past its approval's end, for the agent's last call. */
+const PENDING_SLACK_MS = 5 * 60_000
+const ASK_MS = 10 * 60_000
+const endOf = (p: Pick<PendingFill, 'at' | 'until' | 'untilBack'>): AskEnd => ({ until: p.until ?? p.at + ASK_MS, ...(p.untilBack ? { untilBack: true } : {}) })
 
 export function _resetFillLoginForTesting(): void { pendingFills.clear(); fillTokens.clear() }
 /** Tests: what a restart drops here besides the kept maps (core/kept-asks.ts forgetKeptForRestart). */
 export function _forgetFillTokensForRestart(): void { fillTokens.clear() }
 
-function needsOk(id: string, p: Pick<PendingFill, 'item' | 'what'>): FillOutcome {
+function needsOk(id: string, p: Pick<PendingFill, 'item' | 'what' | 'at' | 'until' | 'untilBack'>): FillOutcome {
+  const end = endOf(p)
   return {
     status: 202,
     body: {
       status: 'needs_ok', code: 'login_needs_ok', request: id, approvalId: id, item: p.item,
-      error: p.what === 'code'
+      expiresAt: new Date(end.until).toISOString(), ...(end.untilBack ? { untilBack: true } : {}),
+      error: `${p.what === 'code'
         ? `Waiting for the person to let you enter the one-time code of "${p.item.title}" (a notification on their Mac and phone).`
-        : `Waiting for the person to let you sign in with "${p.item.title}" (a notification on their Mac and phone).`,
+        : `Waiting for the person to let you sign in with "${p.item.title}" (a notification on their Mac and phone).`} ${askOpenWords(end)}`,
     },
   }
 }
@@ -204,7 +211,7 @@ export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillO
     return fillWhileLocked(input, deps, err as Error)
   }
   const now = Date.now()
-  for (const [id, p] of pendingFills) if (now - p.at > PENDING_MS) { pendingFills.delete(id); fillTokens.delete(id) }
+  for (const [id, p] of pendingFills) if (now > endOf(p).until + PENDING_SLACK_MS) { pendingFills.delete(id); fillTokens.delete(id) }
   if (input.request) {
     const p = pendingFills.get(input.request)
     const token = fillTokens.get(input.request)
@@ -244,8 +251,10 @@ export async function fillLogin(input: FillInput, deps: FillDeps): Promise<FillO
   if (u.status === 'pending') {
     const { waitTokenHashOf } = await import('../approvals/store.js')
     fillTokens.set(u.requestId, u.waitToken)
-    pendingFills.set(u.requestId, { owner: input.owner, tab: input.tab, tokenHash: waitTokenHashOf(u.waitToken), url, item, fields, what, at: now })
-    return needsOk(u.requestId, { item, what })
+    const until = Date.parse(u.expiresAt)
+    const p: PendingFill = { owner: input.owner, tab: input.tab, tokenHash: waitTokenHashOf(u.waitToken), url, item, fields, what, at: now, ...(Number.isFinite(until) ? { until } : {}), ...(u.untilBack ? { untilBack: true as const } : {}) }
+    pendingFills.set(u.requestId, p)
+    return needsOk(u.requestId, p)
   }
   const result = await fill(deps, input.tab, url, item, u.values, what)
   await recordFill(input, url, what, u.values.username)

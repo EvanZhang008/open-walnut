@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { withOutcome } from './outcome.js';
+import { OWN_WAIT_TURN_END } from '../lib/turn-end-marker.js';
 
 /**
  * Passwords for agents (core/vault/agent.ts, routes/vault-agent-v1.ts). An agent names an
@@ -21,7 +22,7 @@ const LEAST_SEEN = 'Prefer a way that uses the secret without showing it to you:
 const USE_RULE = 'Use the values only for the purpose you gave. Never repeat them in a reply, a file, a commit, a log or another message.'
 
 function useOutcome(body: unknown) {
-  const b = (body ?? {}) as { status?: string; item?: ItemView; values?: Record<string, string>; via?: string; grantedUntil?: string; requestId?: string }
+  const b = (body ?? {}) as { status?: string; item?: ItemView; values?: Record<string, string>; via?: string; grantedUntil?: string; requestId?: string; untilBack?: boolean; expiresAt?: string }
   if (b.status === 'released') {
     const how = b.via === 'allow' ? 'the item allows agents' : b.via === 'grant' ? `this task holds a grant until ${b.grantedUntil}` : `the person approved${b.grantedUntil ? `, for this task until ${b.grantedUntil}` : ''}`
     return withOutcome(b as Record<string, unknown>, `Released ${Object.keys(b.values ?? {}).join(', ')} of ${b.item?.title} (${how}).`, USE_RULE)
@@ -29,7 +30,9 @@ function useOutcome(body: unknown) {
   if (b.status === 'pending') {
     return withOutcome(b as Record<string, unknown>,
       `Waiting for the person to approve ${b.item?.title} on their Mac or phone.`,
-      'Call password_wait with id (requestId) and token (waitToken) until it is released, then go on. Do not ask again meanwhile.')
+      b.untilBack
+        ? `Call password_wait with id (requestId) and token (waitToken) a few times. If it still waits, ${OWN_WAIT_TURN_END}: the ask stays open until they answer (at most until ${b.expiresAt}), Walnut tells this session the answer, and password_wait then gives the values. Do not ask again meanwhile.`
+        : 'Call password_wait with id (requestId) and token (waitToken) until it is released, then go on. Do not ask again meanwhile.')
   }
   if (b.status === 'expired' || b.status === 'canceled') {
     return withOutcome(b as Record<string, unknown>, b.status === 'expired' ? 'Nobody answered in time: not released.' : 'The ask was withdrawn: not released.',

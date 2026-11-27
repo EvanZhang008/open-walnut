@@ -16,14 +16,14 @@
  * the agent can write it, so a "person" row there proves nothing (review 2026-11-16). The ask is
  * answered like every approval: a tap on any device the person is signed in on.
  */
-import type { ApprovalRequester } from '../approvals/types.js'
+import { askEndOf, type ApprovalRequester, type AskEnd } from '../approvals/types.js'
 import { keptMap } from '../kept-asks.js'
 
 /** How long a yes lets the task send the same file again. */
 export const GRANT_MS = 24 * 3600_000
 /** How long a no holds. */
 export const DENIED_MS = 3600_000
-/** How long the ask waits for the person. */
+/** An ask's short clock (one an older Walnut kept, or one past store.ts UNTIL_BACK_MAX); else it waits until the person answers (store.ts untilBack). */
 export const ASK_MS = 10 * 60_000
 /** The extension's cap for taking granted paths (packages/browser-extension/src/agent.ts). */
 export const UPLOAD_GRANTED = 'upload-granted'
@@ -36,8 +36,9 @@ export const FILE_ACCESS = 'file-access'
 const grants = keptMap<number>('browser-upload-grants')
 /** The same key → until when their no holds. */
 const denials = keptMap<number>('browser-upload-denials')
-/** An ask's id → whose, into which site and for which files. */
-const asks = keptMap<{ taskId: string; site: string; paths: string[]; at: number }>('browser-upload-asks')
+/** An ask's id → whose, into which site and for which files; `end`: the approval's own end (absent in one an older Walnut kept: ASK_MS after `at`). */
+const asks = keptMap<{ taskId: string; site: string; paths: string[]; at: number; end?: AskEnd }>('browser-upload-asks')
+const endOf = (a: { at: number; end?: AskEnd }): AskEnd => a.end ?? { until: a.at + ASK_MS }
 
 /** A yes or a no whose time is over is dropped (the files keep only what still holds). */
 function hold(map: Map<string, number>, k: string, until: number, now = Date.now()): void {
@@ -87,21 +88,23 @@ export function askWords(paths: string[], site: string, taskTitle: string | unde
 }
 
 /** Ask the person, or the open ask for the same task and files. */
-export async function askUpload(input: { taskId: string; paths: string[]; site: string; requester: ApprovalRequester; testRun?: string; now?: number }): Promise<{ id: string; reused: boolean }> {
+export async function askUpload(input: { taskId: string; paths: string[]; site: string; requester: ApprovalRequester; testRun?: string; now?: number }): Promise<{ id: string; reused: boolean; end: AskEnd }> {
   const now = input.now ?? Date.now()
   const want = [...input.paths].sort().join('\n')
   const { getApproval, createApproval } = await import('../approvals/store.js')
   for (const [id, a] of asks) {
-    if (now - a.at > ASK_MS) { asks.delete(id); continue }
-    if (a.taskId === input.taskId && a.site === input.site && [...a.paths].sort().join('\n') === want && (await getApproval(id))?.status === 'pending') return { id, reused: true }
+    if (now > endOf(a).until) { asks.delete(id); continue }
+    if (a.taskId === input.taskId && a.site === input.site && [...a.paths].sort().join('\n') === want && (await getApproval(id))?.status === 'pending') return { id, reused: true, end: endOf(a) }
   }
   const words = askWords(input.paths, input.site, input.requester.taskTitle)
   const { approval } = await createApproval({
-    what: words.what, detail: words.detail, detailRole: 'summary', timeoutMs: ASK_MS,
+    // Open until the person answers, while they are away too; the asking session is told the answer.
+    what: words.what, detail: words.detail, detailRole: 'summary', timeoutMs: ASK_MS, untilBack: true,
     requester: input.requester, ...(input.testRun ? { testRun: input.testRun } : {}),
   })
-  asks.set(approval.id, { taskId: input.taskId, site: input.site, paths: [...input.paths], at: now })
-  return { id: approval.id, reused: false }
+  const end = askEndOf(approval)
+  asks.set(approval.id, { taskId: input.taskId, site: input.site, paths: [...input.paths], at: now, end })
+  return { id: approval.id, reused: false, end }
 }
 
 export type AnswerState = 'approved' | 'pending' | 'denied' | 'unknown'
@@ -152,6 +155,12 @@ export async function settledAsk(taskId: string, site: string, paths: string[]):
 /** Approvals off: these files went ahead unasked (recorded by the caller), and hold as a yes would. */
 export function grantUnasked(taskId: string, site: string, paths: string[], now = Date.now()): void {
   for (const p of paths) hold(grants, key(taskId, site, p), now + GRANT_MS, now)
+}
+
+/** When ask `id` ends (undefined: no such ask). */
+export function uploadAskEnd(id: string): AskEnd | undefined {
+  const a = asks.get(id)
+  return a ? endOf(a) : undefined
 }
 
 /** Tests: forget every ask and grant. */

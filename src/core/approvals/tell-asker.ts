@@ -24,6 +24,7 @@ const pending = new Set<string>()
 let graceMs = ASKER_GRACE_MS
 
 type NoticeInput = Pick<ApprovalRecord, 'id' | 'what' | 'status' | 'answer' | 'requester' | 'consumedAt' | 'readAt' | 'askerToldAt' | 'singleUse' | 'requestOnly'>
+  & Partial<Pick<ApprovalRecord, 'untilBack' | 'expiresAt' | 'detailRole'>>
 
 /** Whether this decision is one the asking session must hear about, and in which words. */
 export function askerNoticeFor(rec: NoticeInput): { outcome: 'approved' | 'denied' | 'expired'; body: string } | null {
@@ -46,11 +47,19 @@ export function askerNoticeFor(rec: NoticeInput): { outcome: 'approved' | 'denie
         : undefined
       if (rerun) return { outcome: 'approved', body: `Approved: "${what}". Your approval request ${rec.id} was approved by the person, with ${by}${where}${at}. The command that asked has ended, so the step has not run.${rec.singleUse ? " Do not run yet by hand." : ""} ${rerun}` }
       if (rec.singleUse) return { outcome: 'approved', body: `Approved: "${what}". Request ${rec.id} was approved by the person, with ${by}${where}${at}. Do not run yet: check the record, rebuild the current operation context and call approval_consume. Run only after used:true; a changed or expired operation needs a new approval.${once}` }
-      return { outcome: 'approved', body: `Approved: "${what}". Your approval request ${rec.id} was approved by the person, with ${by}${where}${at}. Go ahead with that step now${step}, then report the result where you planned to.${once}` }
+      // One of Walnut's own asks (a browser step, a sign-in, an upload, a password, a locked note:
+      // its detail is a summary, types.ts) goes on through the same call, soon after the tap.
+      const held = rec.detailRole !== 'summary' ? ''
+        : ` The step Walnut held on it goes on when you make that same call again now: a browser action with request "${rec.id}" (a new sign-in's yes holds 10 minutes from the tap), a password with password_wait, a locked note with locked_note_wait.`
+      return { outcome: 'approved', body: `Approved: "${what}". Your approval request ${rec.id} was approved by the person, with ${by}${where}${at}. Go ahead with that step now${step}, then report the result where you planned to.${held}${once}` }
     }
     return { outcome: 'denied', body: `Denied: "${what}". Your approval request ${rec.id} was denied by the person, with ${by}${where}${at}. Do not take that step${step}; carry on without it, or ask again only if something changed.` }
   }
   if (rec.status === 'expired') {
+    // One open until the person answered ran out: they did not come back to it, so asking again on a clock asks nobody.
+    if (rec.untilBack) {
+      return { outcome: 'expired', body: `Expired, not approved: "${what}". Your approval request ${rec.id} stayed open until ${rec.expiresAt ?? 'its end'} and the person did not answer it. It is not approved: do not take that step${step}, and do not ask again by yourself; say in your report that the step waits for their approval.` }
+    }
     return { outcome: 'expired', body: `Expired, not approved: "${what}". Your approval request ${rec.id} got no answer in time. It is not approved: do not take that step${step}. Ask again (approval_request) if it is still needed.` }
   }
   return null

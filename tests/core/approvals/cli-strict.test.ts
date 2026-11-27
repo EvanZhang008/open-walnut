@@ -292,10 +292,10 @@ describe('the token file', () => {
     expect(fs.readdirSync(dir)).toEqual([])
   })
 
-  it('round-trips, and the sweep removes files older than a day', () => {
+  it('round-trips, and the sweep removes files older than four days (an ask stays open up to 72 hours)', () => {
     saveToken(saved, dir)
     expect(loadToken('apr-t1', dir)).toEqual(saved)
-    const old = (Date.now() - 25 * 3_600_000) / 1000
+    const old = (Date.now() - 97 * 3_600_000) / 1000
     fs.utimesSync(path.join(dir, 'apr-t1.json'), old, old)
     saveToken({ ...saved, id: 'apr-t2' }, dir)
     expect(sweepTokens(dir)).toBe(1)
