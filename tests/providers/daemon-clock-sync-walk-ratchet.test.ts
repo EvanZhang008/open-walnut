@@ -79,7 +79,7 @@ const LISTING_BASELINE: Record<string, { count: number; why: string }> = {
 }
 
 function listingCounts(): Map<string, number> {
-  const out = execFileSync('git', ['grep', '-cE', '\\b(readdirSync|opendirSync)\\(', '--', 'src/providers/daemon-*.ts', ...Object.keys(LISTING_BASELINE)], { cwd: ROOT, encoding: 'utf8' })
+  const out = execFileSync('git', ['grep', '-cE', '(^|[^[:alnum:]_$])(readdirSync|opendirSync)\\(', '--', 'src/providers/daemon-*.ts', ...Object.keys(LISTING_BASELINE)], { cwd: ROOT, encoding: 'utf8' })
   const counts = new Map<string, number>()
   for (const line of out.split('\n')) {
     if (!line) continue

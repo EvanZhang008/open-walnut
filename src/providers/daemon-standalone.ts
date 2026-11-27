@@ -6094,9 +6094,10 @@ const { SESSION_IDLE_WARNING_MS, SESSION_IDLE_KILL_MS, SESSION_SCAN_INTERVAL_MS,
 // cleanup() began: a pass over a directory still running stops before its next batch (eachInBatches).
 let daemonStopping = false
 function cleanup(opts: { registrySaved?: boolean } = {}) {
-  daemonStopping = true
   // One-shot claude runs and the warm pool never outlive the daemon (oneshot-core.ts).
   try { oneShot.disposeAll() } catch {}
+  // A timer pass still walking a dir (scratch prune, stream sweeps) stops before its next batch.
+  daemonStopping = true
   // MCP servers started for tasks on other hosts end with the daemon that holds their stdin.
   try { hostMcp.closeAll() } catch {}
   usageBudget.close()
