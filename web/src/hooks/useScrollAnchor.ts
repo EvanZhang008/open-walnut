@@ -23,7 +23,7 @@ import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 import { ANCHOR_SLOP_PX, anchoredScrollTop, endClamp, enginePull, heldPlace, holdsRows, releaseScrollTop, roomBelow, slackStep, SCROLL_HELD_ATTR, SCROLL_INPUT_EVENTS, SCROLL_RELEASED_EVENT, SCROLL_REPICK_EVENT, stepScrollInput, type AnchorMark, type ReadSession, type ScrollInput } from './scroll-anchor';
 import { isTypingField } from '@/utils/focus-unless-typing';
 
-interface Anchor extends AnchorMark {
+export interface Anchor extends AnchorMark {
   el: Element;
   /** The row the person reads (`reading`): held with room at the top when no scroll can hold it. */
   read?: boolean;
@@ -139,6 +139,29 @@ function edgeRoom(side: 'paddingTop' | 'paddingBottom') {
   return r;
 }
 
+/**
+ * A held row drawn again in another form in its own place (a Threads card its × folded to one line,
+ * that line's Show opening it again: a new element under the same key) is the same row: the anchor
+ * follows it there, so only what is below it moves (2026-11-27: folding the first card left 728px of
+ * room at the list's top, its next card held in its old place). The key says what stays the same (a
+ * Threads card: its thread and its group), and the rows on both sides must be those it stood between:
+ * a card drawn again in another group is a row that left, held by its neighbour.
+ */
+export type RowKey = (row: Element) => string | null;
+
+export function followRedrawn(held: Anchor, box: HTMLElement, rows: string, key: RowKey | undefined): void {
+  if (!key || held.el.isConnected) return;
+  const k = key(held.el);
+  if (!k) return;
+  const list = Array.from(box.querySelectorAll(rows));
+  // The same neighbour on each side; none then means none now (the first row stays the first). Only a
+  // neighbour itself drawn again (gone from the page) is not asked. Every row under the key is tried: a
+  // watched thread's copy (Watching, above the groups) carries the same key and is not it.
+  const side = (was: Element | null, now: Element | null) => (was ? !was.isConnected || was === now : now === null);
+  const i = list.findIndex((r, j) => key(r) === k && drawn(r) && side(held.prev, list[j - 1] ?? null) && side(held.next, list[j + 1] ?? null));
+  if (i >= 0) held.el = list[i];
+}
+
 interface Attached {
   box: HTMLElement;
   stop: () => void;
@@ -158,7 +181,7 @@ interface Attached {
  * goes to another group), the row drawn right before it, else right after it, holds the place
  * (heldPlace) until they move or scroll. A box with no `reading` is held exactly as before.
  */
-export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string, paused = false, reading?: () => Element | null): void {
+export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string, paused = false, reading?: () => Element | null, rowKey?: RowKey): void {
   const anchor = useRef<Anchor | null>(null);
   const attached = useRef<Attached | null>(null);
   const rowsRef = useRef(rows);
@@ -167,6 +190,8 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
   pausedRef.current = paused;
   const readingRef = useRef(reading);
   readingRef.current = reading;
+  const rowKeyRef = useRef(rowKey);
+  rowKeyRef.current = rowKey;
   const standsDown = (box: HTMLElement) => pausedRef.current || box.hasAttribute(SCROLL_HELD_ATTR);
   // The room kept at the top and at the bottom for the row being read (edgeRoom). Only a box with
   // `reading` ever makes any: every other box keeps its layout.
@@ -226,6 +251,7 @@ export function useScrollAnchor(ref: RefObject<HTMLElement | null>, rows: string
   // a box with `reading` puts back the engine's own pull (enginePull); never a scroll.
   const keep = useRef((box: HTMLElement, from: 'commit' | 'mark' | 'repick' | null = null) => {
     const held = standsDown(box) ? null : anchor.current;
+    if (held) followRedrawn(held, box, rowsRef.current, rowKeyRef.current);
     // The held row; for a row that left its place in a box with `reading`, a neighbour: the row being
     // read, the one before it, else after it; the top of the view, gone (drawn again in another group),
     // the one after it (still in view), else before. The top of the view only moved in the order (his

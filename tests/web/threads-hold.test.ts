@@ -290,9 +290,13 @@ describe('the hold-still matrix covers everything that can stand above a card', 
     expect(hook).not.toMatch(/const onScroll = \(\) => \{ anchor\.current = pick\(box\); \};/)
   })
 
-  it('the Threads list tells the anchor which card he reads', () => {
+  it('the Threads list tells the anchor which card he reads, and that a card drawn again under its thread id is the same card', () => {
     const src = fs.readFileSync(`${root}/web/src/components/org/useThreadsHold.ts`, 'utf8')
-    expect(src).toContain('useScrollAnchor(boxRef, THREAD_CARD_ROWS, false, () => readCard(rootRef.current, pointer.current))')
+    expect(src).toContain("useScrollAnchor(boxRef, THREAD_CARD_ROWS, false, () => readCard(rootRef.current, pointer.current), threadRowKey)")
+    // Both forms of a card (open, and folded to its line by its ×) carry the key.
+    const fold = fs.readFileSync(`${root}/web/src/components/org/thread-fold.tsx`, 'utf8')
+    expect(fold).toContain('data-thread-id={t.id}')
+    expect(fold).toContain('data-group={badge.group}')
   })
 })
 

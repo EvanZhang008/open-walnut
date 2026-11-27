@@ -127,13 +127,17 @@ function useTopRoom(shown: boolean, float: boolean) {
       // The body runs on under the composer's glass (a negative bottom margin, session-scroll-glass.css):
       // its share is of the part above the composer.
       const h = body.clientHeight + Math.min(0, parseFloat(getComputedStyle(body).marginBottom) || 0);
+      // With no thread card to make room for, the strip is all the top holds: it scrolls inside half the
+      // body and never folds away (snug), or its Show would open nothing (2026-11-27, a 390 px phone:
+      // Show on the strip's one line left the top empty, the question nowhere on the page).
+      const stripOnly = !el.querySelector(':scope > .top-thread:not(.is-hidden)');
       for (const [i, level] of ROOM_LEVELS.entries()) {
         el.style.setProperty('--session-top-room', `${Math.floor(h / level.share)}px`);
         el.dataset.room = level.room;
         // Measured while the level shows them (full and snug show every block).
         floorWords(el, level.floor);
         el.dataset.share = String(level.share);
-        if (i === ROOM_LEVELS.length - 1) break;
+        if (i === ROOM_LEVELS.length - 1 || (stripOnly && level.room === 'full' && level.share === 2)) break;
         if (level.room === 'min' ? el.offsetHeight <= h * MIN_SHARE : el.scrollHeight <= el.clientHeight + 1) break;
       }
     };

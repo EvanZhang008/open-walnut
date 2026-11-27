@@ -20,6 +20,10 @@
   min-height: min(40px, calc(var(--session-top-room, 120px) * 0.3));
 }
 .session-top > .action-needed.is-strip:has(+ .top-thread:not(.is-hidden)) { max-height: calc(var(--session-top-room, 100vh) * 0.3); }
+/* Alone (no thread card after it, or only the top's one line), the strip is what gives way, all of it:
+   a shrink factor under 1 gives back only that part of what overflows (flex's rule for a sum under
+   one), and at 0.2 it ran 34px out of the top over the chat's first line (2026-11-27, a 390 px phone). */
+.session-top > .action-needed.is-strip:not(:has(+ .top-thread:not(.is-hidden))) { flex-shrink: 1; }
 .top-thread { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 0 1 auto; min-height: 0; }
 /* Hidden to its one line, the top never shrinks under the strip's items: squeezed, the line drew
    over the chat below it and the top's fit swung as it did (2026-11-22, the user on a session with an

@@ -29,6 +29,13 @@ import { isTypingField } from '@/utils/focus-unless-typing';
 /** The cards a person reads by: the anchor is the first one in view. */
 export const THREAD_CARD_ROWS = '[data-testid="org-thread"]';
 
+/** What makes a card the same card when it is drawn again (folded to its line, opened by Show): its
+ *  thread in its group. A card drawn in another group is one that moved (useScrollAnchor followRedrawn). */
+export const threadRowKey = (row: Element): string | null => {
+  const id = row.getAttribute('data-thread-id');
+  return id ? `${id}|${row.getAttribute('data-group') ?? ''}` : null;
+};
+
 /** The nearest box above `el` that scrolls vertically (the rail's or the session pane's body). */
 export function scrollBoxOf(el: HTMLElement | null): HTMLElement | null {
   for (let p = el?.parentElement ?? null; p; p = p.parentElement) {
@@ -116,7 +123,8 @@ export function useThreadsHold<G extends string>(rootRef: RefObject<HTMLElement 
   const pointer = useRef<{ x: number; y: number } | null>(null);
   const over = useRef<Element | null>(null);
   const repick = () => boxRef.current?.dispatchEvent(new Event(SCROLL_REPICK_EVENT));
-  useScrollAnchor(boxRef, THREAD_CARD_ROWS, false, () => readCard(rootRef.current, pointer.current));
+  // A card folded by its × (or opened by Show) is drawn again in its own group: still his row.
+  useScrollAnchor(boxRef, THREAD_CARD_ROWS, false, () => readCard(rootRef.current, pointer.current), threadRowKey);
   // A focus that dropped to the page (its card left: no blur is sent) holds the order no longer.
   useLayoutEffect(() => {
     const active = document.activeElement;

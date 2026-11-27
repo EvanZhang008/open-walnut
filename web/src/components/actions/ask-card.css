@@ -190,3 +190,10 @@
 /* The same × on a part drawn with no card around it (OneCardFrame with threads_one_card off). */
 .one-card-plain { position: relative; }
 .one-card-plain > .ask-card-close { top: 0; right: 0; }
+/* On a phone the × is a finger's 44px (the button family's touch size): the first line keeps clear of
+   all of it, and so does a question under a title, which still starts beside it (2026-11-27, a 390 px
+   phone: the question's first words ran under the ×). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .ask-card.has-close > :is(.ask-card-title, .ask-card-question),
+  .ask-card.has-close > .ask-card-close + :is(.ask-card-title, .ask-card-question) { padding-right: 40px; }
+}
