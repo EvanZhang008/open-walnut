@@ -59,10 +59,20 @@
 .session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list .ask-card > :not(.ask-card-answer),
 .session-top:is([data-room="lean"], [data-room="min"], [data-room="box"]) .top-thread-list :is(.ask-card-tools, .org-thread-held-ask > :not(.ask-card)),
 .session-top:is([data-room="snug"], [data-room="lean"], [data-room="min"], [data-room="box"]) > .action-needed.is-strip,
-.session-top:is([data-room="min"], [data-room="box"]) :is(.top-thread-bar, .top-thread-list .org-answer-options),
+.session-top:is([data-room="min"], [data-room="box"]) :is(.top-thread-bar > :not(.top-thread-close), .top-thread-list .org-answer-options),
 .session-top[data-room="box"] .top-thread-list .org-thread-head { display: none; }
 .session-top:is([data-room="lean"], [data-room="min"]) .top-thread-list .org-thread-title { grid-row: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-top:is([data-room="min"], [data-room="box"]) { max-height: none; }
+/* Everything folded to its line (the strip's, the top's): the lines take what they need, a line each,
+   never a share smaller than them (2026-11-27, a phone with its keyboard up: a third of a few lines was
+   less than two lines, and the second ran over the chat, which then took its taps). */
+.session-top:not(:has(> :not(.is-hidden))) { max-height: none; }
+/* Min and box keep the bar's × alone, in the card's top right corner and out of the flow, so the card
+   still folds to its line however little room is left (2026-11-27, a 390 px phone: the bar went whole,
+   its × with it, and nothing folded the card back). The card's row keeps clear of it. */
+.session-top:is([data-room="min"], [data-room="box"]) .top-thread { position: relative; }
+.session-top:is([data-room="min"], [data-room="box"]) .top-thread-bar { position: absolute; top: 0; right: 0; z-index: 1; }
+.session-top:is([data-room="min"], [data-room="box"]) .top-thread-list > .org-thread { padding-right: 52px; }
 .session-top:is([data-room="min"], [data-room="box"]) .top-thread-list > .org-thread { padding: 6px 8px; gap: 4px; }
 .top-thread-bar { display: flex; align-items: center; gap: 4px; font-size: var(--font-size-sm); color: var(--fg-muted); }
 .top-thread-step {

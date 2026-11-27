@@ -298,10 +298,27 @@ test.describe('a phone with its keyboard up', () => {
       await expect(top).toHaveAttribute('data-room', /min|box/)
       await expect(panel.getByTestId('session-action-needed')).toBeHidden()
       await fits()
+      // Its × stays, a finger's size, clear of the box (the bar's other keys go at this size).
+      const x = card.getByTestId('top-thread-hide')
+      await expect(x).toBeVisible()
+      const [xb, ib] = [await box(x), await box(input)]
+      expect(Math.min(xb.width, xb.height)).toBeGreaterThanOrEqual(43.5)
+      expect(xb.y + xb.height <= ib.y + 1 || xb.x >= ib.x + ib.width - 1, 'the × keeps clear of the box').toBe(true)
       await page.screenshot({ path: `${SHOTS}/phone-keyboard-${inset}.png` })
       await video.caption(`Keyboard up (${inset}px): the box stays in sight, the chat keeps the rest`)
       await video.hold(1200)
     }
+    // With the keyboard up its × still folds the card to its line, and Show opens it again.
+    await card.getByTestId('top-thread-hide').click()
+    await expect(panel.getByTestId('top-thread-show')).toBeVisible()
+    // Folded, the lines end above the chat (a share of a few lines is no cap for them).
+    await page.waitForTimeout(400)
+    {
+      const [t, h] = [await box(top), await box(history)]
+      expect(t.y + t.height, `folded top ends ${t.y + t.height}, chat starts ${h.y}`).toBeLessThanOrEqual(h.y + 1)
+    }
+    await panel.getByTestId('top-thread-show').click()
+    await expect(input).toBeVisible()
     // He types: the words are in the box he sees.
     await input.click()
     await page.keyboard.type('Hold it')

@@ -32,6 +32,7 @@ const PAINTS_NOTHING: Record<string, string> = {
   'thread-drawer': 'its .thread-drawer-body paints the drawer (var(--bg-elevated)); the drawer box is only its frame',
   'editor-mic-dock': 'a zero-height sticky anchor; the mic inside it paints its own background',
   'thread-review-bar': 'a 12px rail in the gap between the text and the review cards: nothing lies under it',
+  'top-thread-bar': 'positioned only in the min and box rooms of the top of a chat, where it holds the card\'s × alone in the card\'s own top right corner, over its padding: nothing scrolls under it',
 };
 
 /**
