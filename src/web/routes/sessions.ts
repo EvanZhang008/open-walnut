@@ -1894,6 +1894,16 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           return
         }
       }
+      // A delta from a client that takes a stale one (`staleOk=1`) while the host is not
+      // reachable now: nothing new is known, so it gets no rows and no cursor under the
+      // stale marker; the client keeps its timeline and cursor and re-reads in full until
+      // the host is back. Every leader restart re-read each open remote session as a delta
+      // within its first seconds, before the link came back: 218 such 503s on 2026-11-27.
+      // An older bundle (no `staleOk`) keeps the 503 it handles.
+      if (req.query.since !== undefined && req.query.staleOk === '1' && err instanceof HostReconnectingError && !loading.loading) {
+        res.json({ messages: [], delta: true, stale: true, staleReason: condenseStaleReason(msg) })
+        return
+      }
       // A failed delta is answered in place: the client keeps its timeline under
       // the stale banner and retries, so it is not an endpoint incident card.
       if (req.query.since !== undefined) markHandledFailure(res)

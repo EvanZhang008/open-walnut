@@ -181,8 +181,9 @@ test.describe('stale history banner self-heals on reconnect', () => {
     });
     await mockSessionDetail(page);
 
+    // No networkidle wait: the stale retry polls every 500 ms here, so the page is
+    // seldom idle for 500 ms (it timed out about one run in three). The banner wait is the sync.
     await page.goto(`/sessions?id=${SESSION_ID}`);
-    await page.waitForLoadState('networkidle');
 
     // Banner is visible over the cached content.
     const banner = page.locator('.session-history-stale-banner');
@@ -205,3 +206,107 @@ test.describe('stale history banner self-heals on reconnect', () => {
     expect(deltaRequested, 'self-heal must NOT poll the ?since= delta path (it 502s and corrupts the cursor)').toBe(false);
   });
 });
+
+/**
+ * A leader restart: the browser's socket reconnects within a second or two, and every open
+ * remote session re-reads its history as a delta (`?since=`) before the link to its host is
+ * back. That delta answered 503 host_reconnecting, about five a restart per open session (218
+ * on 2026-11-27). The client now asks with `staleOk=1`, the server answers 200 stale with no
+ * rows, and the client keeps its timeline and cursor and catches up through its quick full
+ * re-reads: no 503, no banner for a short drop, the newest turn shown once the host is back.
+ */
+test.describe('a delta while the host reconnects', () => {
+  type SocketWindow = Window & { historyTestSocket?: WebSocket }
+
+  test('answers stale instead of a 503, keeps what is shown, and catches up once the host is back', async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as { __staleRetryMs?: number; __staleBannerGraceMs?: number }
+      w.__staleRetryMs = 10_000
+      delete w.__staleBannerGraceMs
+      const NativeWebSocket = window.WebSocket
+      window.WebSocket = class extends NativeWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(url, protocols)
+          if (new URL(String(url), location.href).pathname === '/ws') (window as SocketWindow).historyTestSocket = this
+        }
+      }
+      for (const key of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'] as const) {
+        Object.defineProperty(window.WebSocket, key, { value: NativeWebSocket[key] })
+      }
+    })
+    const before = [
+      { role: 'user', text: 'Question before the restart', timestamp: '2026-01-01T00:00:00.000Z' },
+      { role: 'assistant', text: 'Answer before the restart', timestamp: '2026-01-01T00:00:01.000Z' },
+    ]
+    const after = [
+      ...before,
+      { role: 'user', text: 'Question asked while the link came back', timestamp: '2026-01-01T00:01:00.000Z' },
+      { role: 'assistant', text: 'Answer written while the link came back', timestamp: '2026-01-01T00:01:01.000Z' },
+    ]
+    let down = false
+    let hostBack = false
+    const deltas: Array<{ staleOk: string | null; answered: number }> = []
+    let fivehundreds = 0
+    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
+      const url = new URL(route.request().url())
+      if (url.searchParams.get('source') === 'streams') return route.fulfill({ json: { messages: [], total: 0 } })
+      const live = hostBack ? after : before
+      if (url.searchParams.get('since') !== null) {
+        const staleOk = url.searchParams.get('staleOk')
+        if (down) {
+          // The server's contract (tests/web/routes/sessions-stale-history.test.ts).
+          if (staleOk === '1') {
+            deltas.push({ staleOk, answered: 200 })
+            return route.fulfill({ json: { messages: [], delta: true, stale: true, staleReason: 'Reconnecting to clouddev' } })
+          }
+          deltas.push({ staleOk, answered: 503 })
+          fivehundreds++
+          return route.fulfill({ status: 503, json: { error: 'Reconnecting to clouddev', code: 'host_reconnecting' } })
+        }
+        deltas.push({ staleOk, answered: 200 })
+        const since = Number(url.searchParams.get('since'))
+        return route.fulfill({ json: { messages: live.slice(since), cursor: live.length, total: live.length, delta: true } })
+      }
+      if (down) return route.fulfill({ json: { messages: before, total: before.length, stale: true, staleReason: 'Reconnecting to clouddev' } })
+      return route.fulfill({ json: { messages: live, cursor: live.length, total: live.length, delta: false } })
+    })
+    await mockSessionDetail(page)
+
+    await page.goto(`/sessions?id=${SESSION_ID}`)
+    const history = page.locator('.session-history')
+    const banner = page.locator('.session-history-stale-banner')
+    await expect(history).toContainText('Answer before the restart', { timeout: 15_000 })
+
+    // The leader restarted: the link to clouddev is down, and the page's socket reconnects.
+    down = true
+    await page.waitForFunction(() => (window as SocketWindow).historyTestSocket?.readyState === 1, null, { timeout: 30_000 })
+    await page.evaluate(() => {
+      (window as SocketWindow).historyTestSocket!.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: '_ws:reconnected', data: {} }) }))
+    })
+    await expect.poll(() => deltas.length, { message: 'the reconnect re-reads as a delta', timeout: 10_000 }).toBeGreaterThan(0)
+    expect(deltas[0]).toEqual({ staleOk: '1', answered: 200 })
+    // What is shown stays.
+    await expect(history).toContainText('Answer before the restart')
+
+    // The link is back two seconds later, with a turn written meanwhile.
+    const t0 = Date.now()
+    await page.waitForTimeout(2_000)
+    hostBack = true
+    down = false
+    let shown = false
+    while (Date.now() - t0 < 12_000) {
+      if (await banner.count()) shown = true
+      if (await history.textContent().then((t) => t?.includes('Answer written while the link came back'))) break
+      await page.waitForTimeout(200)
+    }
+    await expect(history).toContainText('Answer written while the link came back', { timeout: 1_000 })
+    expect(shown, 'a short drop must not show the cached-history banner').toBe(false)
+    expect(Date.now() - t0, 'caught up by the quick re-reads, before the 10 s steady retry').toBeLessThan(9_000)
+    expect(fivehundreds, 'no delta asked without staleOk').toBe(0)
+    // Exactly one copy of each row: the stale delta moved no cursor.
+    const text = (await history.textContent()) ?? ''
+    for (const row of ['Question before the restart', 'Question asked while the link came back', 'Answer written while the link came back']) {
+      expect(text.split(row).length - 1, row).toBe(1)
+    }
+  })
+})

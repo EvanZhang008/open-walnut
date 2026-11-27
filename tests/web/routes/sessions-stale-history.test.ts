@@ -13,7 +13,11 @@
  *   · ?since= delta + read failure → 502 even WITH cache (a stale total would
  *     corrupt the client's delta cursor);
  *   · ?since= delta while the host is not reachable now → 503 host_reconnecting,
- *     the degraded answer every other host read gives (gate links F9).
+ *     the degraded answer every other host read gives (gate links F9);
+ *   · the same delta from a client that takes a stale one (`staleOk=1`) → 200
+ *     { stale, no rows, no cursor }: every leader restart re-read each open
+ *     remote session as a delta before the link came back (218 such 503s on
+ *     2026-11-27); the client keeps its cursor and re-reads in full.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -147,6 +151,26 @@ describe('GET /:sessionId/history — degraded mode on live-read failure', () =>
     const full = await request(app).get('/api/sessions/sid-delta-reconnecting/history');
     expect(full.status).toBe(200);
     expect(full.body.stale).toBe(true);
+  });
+
+  it('a ?since delta while the host reconnects, from a client that takes a stale one: 200 stale with no rows and no cursor', async () => {
+    await seedRemoteSession('sid-delta-staleok');
+    reconnectingSids.add('sid-delta-staleok');
+    cacheBySid.set('sid-delta-staleok', [msg('cached-1')]);
+    const app = createApp();
+
+    const res = await request(app).get('/api/sessions/sid-delta-staleok/history?since=7&staleOk=1');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ messages: [], delta: true, stale: true, staleReason: 'Reconnecting to Dev box' });
+    // Only the host being away: a read that failed for itself, or a host still sending, answers as before.
+    failingSids.add('sid-delta-staleok-failed');
+    await seedRemoteSession('sid-delta-staleok-failed');
+    expect((await request(app).get('/api/sessions/sid-delta-staleok-failed/history?since=1&staleOk=1')).status).toBe(502);
+    loadingSids.add('sid-delta-staleok-loading');
+    await seedRemoteSession('sid-delta-staleok-loading');
+    const loading = await request(app).get('/api/sessions/sid-delta-staleok-loading/history?since=1&staleOk=1');
+    expect(loading.status).toBe(503);
+    expect(loading.body.loading).toEqual({ from: 'Dev box' });
   });
 
   it('healthy read never reports stale', async () => {

@@ -438,6 +438,12 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           // stuck on screen for the life of the session even though every later
           // fetch was healthy.
           setError(null);
+          // The host is not reachable now: nothing new is known. Keep the timeline and
+          // cursor; the stale banner's quick full re-reads catch up once it is back.
+          if (result.stale) {
+            setStale(result.staleReason ?? 'live read failed');
+            return;
+          }
           if (result.delta) {
             // Fold the delta via the SHARED merge planner (history-merge.ts) —
             // session-cache uses the same function, so the two mirrors can't

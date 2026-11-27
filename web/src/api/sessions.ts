@@ -337,7 +337,12 @@ export async function fetchSessionHistory(
   // Delta mode: ask only for messages after the client's cursor. Server returns a
   // small slice (usually 1-5 messages) + the new cursor. Empty slice = archive
   // hasn't caught up yet (turn not flushed); caller keeps streaming blocks & retries.
-  if (opts?.since !== undefined) params.since = String(opts.since);
+  if (opts?.since !== undefined) {
+    params.since = String(opts.since);
+    // A delta while the host is not reachable now answers 200 `stale` with no rows
+    // (the caller keeps its cursor and re-reads in full), not a 503.
+    params.staleOk = '1';
+  }
   if (opts?.anchorMsgId) {
     params.anchorMsgId = opts.anchorMsgId;
     params.anchorTail = String(opts.anchorTail ?? 0);

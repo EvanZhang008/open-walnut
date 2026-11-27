@@ -568,6 +568,8 @@ function registerGlobalListeners(): void {
       tail: HISTORY_TAIL_LIMIT,
     })
       .then((r) => tracePhase(`bg-delta-merge:${sid.substring(0, 8)}(+${r.messages.length})`, () => {
+        // The host is not reachable now (no rows, no cursor): as a failed read, the next sweep retries.
+        if (r.stale) return;
         // Fold via the SHARED merge planner (history-merge.ts) — same function
         // as useSessionHistory, so the two mirrors can't drift apart again.
         const plan = r.delta && cached
