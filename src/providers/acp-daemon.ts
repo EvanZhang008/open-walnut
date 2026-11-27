@@ -202,7 +202,7 @@ function psGroupMembers(pgid: number, run: typeof execFile = execFile, env: Node
   })
 }
 
-async function psProcessInfo(pid: number, run: typeof execFile = execFile): Promise<AcpProcessInfo> {
+export async function psProcessInfo(pid: number, run: typeof execFile = execFile): Promise<AcpProcessInfo> {
   const start = await psField(pid, 'lstart', run)
   if (start === undefined) return { state: 'unknown' }
   if (start === null) return { state: 'gone' }
@@ -926,6 +926,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       : await rpc(entry, 'cancel', workerParams, cancelRpcTimeoutMs)
     await waitFor(() => entry.terminalVersion > beforeTerminal, abortWaitMs)
 
+    // A strict stop that began during the cancel wait owns the end now: no SIGKILL from here.
+    if (entry.strictStop) return { id: -1, ok: false, error: { kind: 'worker_stopping', message: 'a leader switch is stopping the ACP worker for ' + sid } }
     entry.aborting = true
     entry.stopping = true
     const pid = entry.pid
@@ -1015,11 +1017,21 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
    */
   async function acpStopStrict(sid: string): Promise<void> {
     const deadline = Date.now() + STRICT_STOP_BUDGET_MS
-    await settleForStrictStop(sid, deadline)
+    // Marked before the settle (which can take ~13 s): from now on no 6 s SIGKILL timer of a plain stop and no hard
+    // abort acts on this worker. A worker adopted during the settle is a new entry and is marked below.
+    const before = workers.get(sid)
+    const was = before && { stopping: before.stopping, strictStop: before.strictStop }
+    markStrict(before)
+    try {
+      await settleForStrictStop(sid, deadline)
+    } catch (error) {
+      // Nothing was asked of the worker yet: it goes back to how it was (a user can still stop or abort it).
+      if (before && was && workers.get(sid) === before) { before.stopping = was.stopping; before.strictStop = was.strictStop }
+      throw error
+    }
     const entry = workers.get(sid)
     if (entry && entry.state === 'running') {
-      entry.stopping = true
-      entry.strictStop = true
+      markStrict(entry)
       const pid = entry.pid
       await rpc(entry, 'shutdown', undefined, Math.max(1, within(deadline, 6000)))
       if (pid && !await waitFor(() => !groupAlive(pid), within(deadline, STRICT_SHUTDOWN_WAIT_MS))) {
@@ -1037,6 +1049,12 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       if (exitedGroups.get(sid) === group) { exitedGroups.delete(sid); persistPids() }
       if (leftGroups.get(sid) === group) leftGroups.delete(sid)
     }
+  }
+
+  function markStrict(entry: AcpWorkerEntry<W> | undefined): void {
+    if (!entry || entry.state !== 'running') return
+    entry.stopping = true
+    entry.strictStop = true
   }
 
   /** The rest of a strict stop's budget, at most `ms`. */
@@ -1062,9 +1080,12 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     const settled = await Promise.race([straggler.settled, new Promise<'late'>((resolve) => { setTimeout(() => resolve('late'), within(deadline, 3_000)).unref?.() })])
     if (settled === 'settled') return
     outOfTime(deadline, STRICT_PS_STEP_MS)
-    const judged = await judgeStraggler(sid, straggler.row).catch(() => ({ verdict: 'unknown' as const, pid: 0 }))
+    const judged = await judgeStraggler(sid, straggler.row, { strict: true }).catch(() => ({ verdict: 'unknown' as const, pid: 0 }))
     if (judged.verdict === 'unknown') {
       throw new Error(`the ACP worker for ${sid} from the last daemon life could not be checked (ps gave no answer); its process may still run`)
+    }
+    if (judged.verdict === 'unproved') {
+      throw new Error(`the ACP worker for ${sid} from the last daemon life is not proved to be process ${judged.pid} (no start time recorded and its journal is not in that process's command, or only its group is left); not signalled`)
     }
     if (judged.verdict !== 'leave') await termProvedGroup(judged.pid, deadline)
     if (stragglers.get(sid) === straggler) stragglers.delete(sid)
@@ -1494,9 +1515,14 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   /**
    * The judgement of the sweep above, asked of ps only (no signal): 'kill-leader' (the pid still is the worker),
    * 'kill-group' (the worker is gone, its group still runs its adapter), 'leave' (not provably ours, or nothing left),
-   * or 'unknown' (ps gave no answer). A strict stop acts on it with SIGTERM (settleForStrictStop).
+   * or 'unknown' (ps gave no answer). A strict stop acts on it with SIGTERM (settleForStrictStop) and asks with
+   * `strict`: then 'kill-leader' needs the recorded start to match, or (no start recorded) the worker's own journal
+   * path in the process's command; the shared 'acp-worker' name proves nothing (a reused pid may be another
+   * session's worker). A recorded start that differs proves the worker gone ('leave': its group id cannot be reused
+   * while its group lives). Anything else alive is 'unproved', and so is a group whose leader is gone (nothing
+   * proves its members are this worker's): the strict stop answers an error and sends no signal.
    */
-  async function judgeStraggler(sid: string, row: PidRow): Promise<{ verdict: 'kill-leader' | 'kill-group' | 'leave' | 'unknown'; pid: number }> {
+  async function judgeStraggler(sid: string, row: PidRow, opts: { strict?: boolean } = {}): Promise<{ verdict: 'kill-leader' | 'kill-group' | 'leave' | 'unknown' | 'unproved'; pid: number }> {
     const pid = typeof row === 'number' ? row : row?.pid
     if (!Number.isInteger(pid) || pid <= 1) return { verdict: 'leave', pid }
     const cmd = typeof row === 'number' ? 'acp-worker' : (row.cmd || 'acp-worker')
@@ -1511,6 +1537,11 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       log('warn', 'acp: straggler left alone, ps gave no answer', { sid, pid })
       return { verdict: 'unknown', pid }
     }
+    if (info.state === 'alive' && opts.strict) {
+      if (start) return { verdict: info.start === start ? 'kill-leader' : 'leave', pid }
+      return { verdict: info.command.includes(journalPathFor(sid)) ? 'kill-leader' : 'unproved', pid }
+    }
+    if (opts.strict) return { verdict: groupAlive(pid) ? 'unproved' : 'leave', pid }
     if (info.state === 'alive') {
       const ours = start ? info.start === start : info.command.includes(cmd)
       if (!ours) log('info', 'acp: straggler pid now belongs to another process; left alone', { sid, pid })
