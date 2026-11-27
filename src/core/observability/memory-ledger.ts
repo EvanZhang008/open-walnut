@@ -348,7 +348,9 @@ function settleNudge(rssMb: number): void {
 // A peak past BURST_HEAP_WALK_MB also says what the heap holds by type (one walk, at most
 // one an hour: a second or two of the loop at that size), so the line tells live objects
 // from memory the allocator keeps.
-export const BURST_RISE_MB = 1024;
+// 448 MB since 2026-11-27: the steady footprint is 650 to 850 MB now, and the step it still takes
+// after a start (to 1.3 to 2 GB, 30 s samples: +528 MB in one tick) stayed under a 1 GB rise.
+export const BURST_RISE_MB = 448;
 export const BURST_WINDOW_MS = 3 * 60_000;
 export const BURST_EVERY_MS = 15 * 60_000;
 export const BURST_HEAP_WALK_MB = 6144;

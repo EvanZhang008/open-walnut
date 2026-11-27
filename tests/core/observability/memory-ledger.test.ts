@@ -185,9 +185,9 @@ describe('watchMemoryBurst', () => {
       const t = 10_000_000;
       expect(await watchMemoryBurst(t, 2000)).toBe(false);
       expect(await watchMemoryBurst(t + 30_000, 2000 + BURST_RISE_MB - 1)).toBe(false);
-      expect(await watchMemoryBurst(t + 60_000, 2000 + BURST_RISE_MB + 500)).toBe(true);
+      expect(await watchMemoryBurst(t + 60_000, 2000 + BURST_RISE_MB * 1.5)).toBe(true);
       const line = warn.mock.calls.find((c) => c[0] === 'memory burst');
-      expect(line?.[1]).toMatchObject({ lowMb: 2000, riseMb: BURST_RISE_MB + 500, context: { 'test-context': [{ route: 'GET /api/example' }] } });
+      expect(line?.[1]).toMatchObject({ lowMb: 2000, riseMb: BURST_RISE_MB * 1.5, context: { 'test-context': [{ route: 'GET /api/example' }] } });
       // Inside BURST_EVERY_MS a climb of less than BURST_RISE_MB past the last line logs nothing...
       expect(await watchMemoryBurst(t + 90_000, 2000 + BURST_RISE_MB * 2)).toBe(false);
       // ...and a new peak BURST_RISE_MB past it is logged, marked as one (2026-11-23: the line at
@@ -195,7 +195,7 @@ describe('watchMemoryBurst', () => {
       warn.mockClear();
       expect(await watchMemoryBurst(t + 120_000, 2000 + BURST_RISE_MB * 3)).toBe(true);
       expect(warn.mock.calls.find((c) => c[0] === 'memory burst')?.[1]).toMatchObject({ newPeak: true, lowMb: 2000 });
-      expect(await watchMemoryBurst(t + 150_000, 2000 + BURST_RISE_MB * 3 + 500)).toBe(false);
+      expect(await watchMemoryBurst(t + 150_000, 2000 + BURST_RISE_MB * 3.5)).toBe(false);
       // A rise against a low older than the window does not count.
       expect(await watchMemoryBurst(t + 150_000 + BURST_EVERY_MS + BURST_WINDOW_MS, 2000 + BURST_RISE_MB * 3)).toBe(false);
     } finally { off(); warn.mockRestore(); }

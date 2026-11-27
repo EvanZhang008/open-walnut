@@ -9,8 +9,13 @@
  */
 import type { CpuProfile } from './stall-recorder-profiler.js';
 
-/** Only a burst to this footprint keeps a profile: the goal for the first 10 minutes after a restart (a restart's own rise to about 1.8 GB is no news). */
-export const BURST_PROFILE_MIN_MB = 2_500;
+/**
+ * Only a burst to this footprint keeps a profile. 2026-11-27: with the steady footprint down to
+ * 650 to 850 MB, the server's remaining growth is a step to 1.3 to 2 GB 10 to 60 minutes after
+ * a start (50 starts over two days), which stays: below the old 2.5 GB floor no profile said what
+ * ran. Under 1.1 GB is the steady state itself.
+ */
+export const BURST_PROFILE_MIN_MB = 1_100;
 
 /** At most one burst profile per this long (a climb logs several burst lines), unless it climbs half again. */
 export const BURST_KEEP_EVERY_MS = 10 * 60_000;

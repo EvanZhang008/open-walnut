@@ -139,7 +139,7 @@ describe('profile windows', () => {
   it('a memory burst keeps the window before it and the one it fell in, once per ten minutes', async () => {
     const warn = vi.spyOn(log.obs, 'warn').mockImplementation(() => {})
     await _rotateNowForTest()
-    expect(keepProfileForBurst({ rssMb: 1800, riseMb: 1300 })).toBe(false)
+    expect(keepProfileForBurst({ rssMb: 1000, riseMb: 500 })).toBe(false)
     expect(keepProfileForBurst({ rssMb: 6000, riseMb: 3000 })).toBe(true)
     expect(keepProfileForBurst({ rssMb: 7000, riseMb: 4000 })).toBe(false)
     await _rotateNowForTest()
