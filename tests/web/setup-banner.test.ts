@@ -298,11 +298,13 @@ describe('the local section mounted', () => {
     expect(recheck.recheckLocalClaudeNow).not.toHaveBeenCalled()
   })
 
-  it('the x: title equals its label, it sits at the card\'s top right (not in the section), and hands the key to the card', async () => {
+  it('the x: any title equals its label, it sits at the card\'s top right (not in the section), and hands the key to the card', async () => {
     const got: string[] = []
     await mount(signIn, (k) => got.push(k))
     const x = host.querySelector<HTMLButtonElement>('.ab-local-x')!
-    expect(x.getAttribute('title')).toBe(x.getAttribute('aria-label'))
+    // The one × (NoticeClose) draws no native tooltip (org-alert-answer.spec.ts forbids [title] on a row);
+    // a tooltip, if one is ever added, says exactly its label.
+    expect([null, x.getAttribute('aria-label')]).toContain(x.getAttribute('title'))
     expect(x.getAttribute('aria-label')).toBe('Dismiss Claude Code notice')
     expect(x.closest('.setup-banner-header')).toBeNull()
     expect(x.parentElement?.classList.contains('setup-banner-x')).toBe(true)
