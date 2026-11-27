@@ -23,6 +23,7 @@ import { createRegistryWriter } from './registry-writer-core.js'
 import { armFilePoolDeadline } from './file-pool-deadline.js'
 import { lineFateScan, lineFateVerdict, lineReachedSession, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, transcriptLineScan, transcriptLineVerdict, type LineFate, type LineFateKind, type LineFateScan, type LineReached, type LineWritten, type TranscriptLineScan } from './line-fate-core.js'
 import { clause } from '../utils/format.js'
+import { sharedLoopBudget, type LoopBudget } from './loop-budget.js'
 
 // ── Shared types ──
 
@@ -562,6 +563,36 @@ export const DAEMON_LOG_KEEP_MS = 14 * 24 * 3600_000
 export const DAEMON_PICTURE_KEEP_MS = 10 * 24 * 3600_000
 const DAEMON_LOG_NAME = /^daemon-(exit-)?d-\d+-[0-9a-f]+\.log$/
 
+/** The fs.promises calls the scratch prune makes (pruneDaemonScratch; the daemon passes fs.promises). */
+export interface DirPassFs {
+  readdir(p: string, o: { withFileTypes: true }): Promise<Array<{ name: string; isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }>>
+  lstat(p: string): Promise<{ mtimeMs: number; atimeMs: number; isFile(): boolean; isDirectory(): boolean }>
+  unlink(p: string): Promise<void>
+}
+
+/** How many fs calls a pass over a directory keeps in flight (libuv's pool has 4 threads, which the CLIs' reads share). */
+export const DIR_PASS_CONCURRENCY = 8
+
+/**
+ * Runs `each` over `items`, `concurrency` at a time, and gives the loop back between batches once
+ * this turn's budget is spent (loop-budget.ts). A pass over a directory on a daemon clock goes this
+ * way, never through the sync fs: the runtime can share the web server's loop (experiment
+ * in_process_daemon), and the hourly scratch prune's lstatSync walk over a big picture tree held it
+ * 1.1 to 1.8 s every hour (2026-11-27). Stops before the next batch once `aborted()`.
+ */
+export async function eachInBatches<T>(items: readonly T[], each: (item: T) => Promise<void>, opts: { concurrency?: number; budget?: LoopBudget; aborted?: () => boolean } = {}): Promise<void> {
+  const size = Math.max(1, opts.concurrency ?? DIR_PASS_CONCURRENCY)
+  const budget = opts.budget ?? sharedLoopBudget
+  for (let i = 0; i < items.length; i += size) {
+    if (opts.aborted?.()) return
+    if (budget.over()) await budget.yieldTurn()
+    await Promise.all(items.slice(i, i + size).map((item) => each(item).catch(() => { /* one item's failure is its own */ })))
+  }
+}
+
+/** The passes of pruneDaemonScratch still running, by dir: a clock tick that comes while one runs joins it. */
+const scratchPasses = new Map<string, Promise<string[]>>()
+
 /**
  * Removes what the system's temp cleanup removed for this daemon while its dir was in /tmp. The dir
  * is in the home now (lib/daemon-dir.ts), which nothing empties, so the daemon ages its own scratch:
@@ -569,41 +600,46 @@ const DAEMON_LOG_NAME = /^daemon-(exit-)?d-\d+-[0-9a-f]+\.log$/
  * `ownLogs`) once their last line is DAEMON_LOG_KEEP_MS old, and the pictures under `images/` and
  * `<dir>-images/` (a session's attachments: the CLI read them when the message was sent) once
  * nobody read or wrote them for DAEMON_PICTURE_KEEP_MS. Regular files only, never through a
- * symlink, never a dir. Returns the paths removed.
+ * symlink, never a dir. Async, in bounded batches that yield the loop (eachInBatches); a call while
+ * a pass of the same dir runs gets that pass. Resolves to the paths removed.
  */
-export function pruneDaemonScratch(io: {
-  fs: {
-    readdirSync(p: string, o: { withFileTypes: true }): Array<{ name: string; isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }>
-    lstatSync(p: string): { mtimeMs: number; atimeMs: number; isFile(): boolean }
-    unlinkSync(p: string): void
-  }
-  dir: string
-  ownLogs: string[]
-  now: number
-}): string[] {
+export function pruneDaemonScratch(io: { fs: DirPassFs; dir: string; ownLogs: string[]; now: number; aborted?: () => boolean; budget?: LoopBudget }): Promise<string[]> {
+  const running = scratchPasses.get(io.dir)
+  if (running) return running
+  const pass = scratchPass(io).finally(() => { scratchPasses.delete(io.dir) })
+  scratchPasses.set(io.dir, pass)
+  return pass
+}
+
+async function scratchPass(io: { fs: DirPassFs; dir: string; ownLogs: string[]; now: number; aborted?: () => boolean; budget?: LoopBudget }): Promise<string[]> {
   const removed: string[] = []
-  const list = (p: string) => { try { return io.fs.readdirSync(p, { withFileTypes: true }) } catch { return [] } }
-  const remove = (file: string, olderThan: number, age: (st: { mtimeMs: number; atimeMs: number }) => number): void => {
-    try {
-      const st = io.fs.lstatSync(file)
-      if (!st.isFile() || age(st) > olderThan) return
-      io.fs.unlinkSync(file)
-      removed.push(file)
-    } catch { /* gone, or not ours to remove */ }
-  }
+  const batches = { budget: io.budget, aborted: io.aborted }
+  const list = async (p: string) => { try { return await io.fs.readdir(p, { withFileTypes: true }) } catch { return [] } }
+  const removeOld = (files: string[], olderThan: number, age: (st: { mtimeMs: number; atimeMs: number }) => number) => eachInBatches(files, async (file) => {
+    const st = await io.fs.lstat(file)
+    if (!st.isFile() || age(st) > olderThan) return
+    await io.fs.unlink(file)
+    removed.push(file)
+  }, batches)
   const own = new Set(io.ownLogs.map((p) => p.slice(p.lastIndexOf('/') + 1)))
-  for (const e of list(io.dir)) {
-    if (e.isFile() && DAEMON_LOG_NAME.test(e.name) && !own.has(e.name)) remove(io.dir + '/' + e.name, io.now - DAEMON_LOG_KEEP_MS, (st) => st.mtimeMs)
+  const logs = (await list(io.dir)).filter((e) => e.isFile() && DAEMON_LOG_NAME.test(e.name) && !own.has(e.name)).map((e) => io.dir + '/' + e.name)
+  await removeOld(logs, io.now - DAEMON_LOG_KEEP_MS, (st) => st.mtimeMs)
+  // Breadth first, one dir's listing at a time: a dir at depth 4 is not entered. A root that is a symlink is not walked.
+  const dirs: Array<{ p: string; depth: number }> = []
+  for (const root of [io.dir + '/images', io.dir + '-images']) {
+    try { if ((await io.fs.lstat(root)).isDirectory()) dirs.push({ p: root, depth: 0 }) } catch { /* none */ }
   }
-  const pictures = (p: string, depth: number): void => {
-    for (const e of list(p)) {
+  for (let next = dirs.shift(); next && !io.aborted?.(); next = dirs.shift()) {
+    // Listed a while ago: a dir that became a symlink since is not entered.
+    try { if (!(await io.fs.lstat(next.p)).isDirectory()) continue } catch { continue }
+    const files: string[] = []
+    for (const e of await list(next.p)) {
       if (e.isSymbolicLink()) continue
-      if (e.isDirectory()) { if (depth < 4) pictures(p + '/' + e.name, depth + 1) }
-      else if (e.isFile()) remove(p + '/' + e.name, io.now - DAEMON_PICTURE_KEEP_MS, (st) => Math.max(st.mtimeMs, st.atimeMs))
+      if (e.isDirectory()) { if (next.depth < 4) dirs.push({ p: next.p + '/' + e.name, depth: next.depth + 1 }) }
+      else if (e.isFile()) files.push(next.p + '/' + e.name)
     }
+    await removeOld(files, io.now - DAEMON_PICTURE_KEEP_MS, (st) => Math.max(st.mtimeMs, st.atimeMs))
   }
-  pictures(io.dir + '/images', 0)
-  pictures(io.dir + '-images', 0)
   return removed
 }
 

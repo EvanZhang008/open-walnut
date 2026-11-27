@@ -39,6 +39,7 @@ import {
   type RegistryEntry as CoreRegistryEntry,
   type SessionMode,
   LIVE_FIFO_MODE,
+  eachInBatches,
   keepRuntimeFiles,
   pruneDaemonScratch,
   RUNTIME_KEEP_MS,
@@ -631,29 +632,39 @@ const STREAM_RETENTION_MS = parseInt(daemonEnv.WALNUT_STREAM_RETENTION_MS || '',
   || 90 * 24 * 60 * 60 * 1000
 const STREAM_RETENTION_SWEEP_MS = parseInt(daemonEnv.WALNUT_STREAM_SWEEP_MS || '', 10)
   || 60 * 60 * 1000
+// Async, in bounded batches (daemon-core.ts eachInBatches): the streams dir grows with every session
+// of the last 90 days, and this runtime can share the web server's loop. A tick while a pass runs skips.
+let deadStreamSweep: Promise<void> | null = null
 function sweepDeadStreams(): void {
+  if (deadStreamSweep) return
+  deadStreamSweep = sweepDeadStreamsPass()
+    .catch((err) => logMsg('warn', 'dead-stream retention sweep failed', { error: (err as Error).message }))
+    .finally(() => { deadStreamSweep = null })
+}
+async function sweepDeadStreamsPass(): Promise<void> {
   let names: string[] = []
-  try { names = fs.readdirSync(STREAMS_DIR) } catch { return }
+  try { names = await fs.promises.readdir(STREAMS_DIR) } catch { return }
   const now = Date.now()
   const reaped = new Set<string>()
-  for (const f of names) {
-    if (!f.endsWith('.jsonl')) continue
+  const candidates = names.filter((f) => f.endsWith('.jsonl') && !sessions.has(f.slice(0, -'.jsonl'.length)))
+  await eachInBatches(candidates, async (f) => {
     const sid = f.slice(0, -'.jsonl'.length)
-    if (sessions.has(sid)) continue
-    const jsonlPath = path.join(STREAMS_DIR, f)
-    let st: fs.Stats
-    try { st = fs.statSync(jsonlPath) } catch { continue }
-    if (now - st.mtimeMs < STREAM_RETENTION_MS) continue
+    const st = await fs.promises.stat(path.join(STREAMS_DIR, f))
+    if (now - st.mtimeMs < STREAM_RETENTION_MS || sessions.has(sid)) return
     // Paranoia: a live pgid means a process still owns this family — skip.
     try {
-      const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10)
-      if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) continue
+      const pid = parseInt((await fs.promises.readFile(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8')).trim(), 10)
+      if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) return
     } catch {}
+    if (sessions.has(sid)) return
     for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.fold.next', '.jsonl.lines', '.jsonl.compact', '.pgid', '.pipe', '.log']) {
-      try { fs.unlinkSync(path.join(STREAMS_DIR, sid + ext)) } catch {}
+      // A resume of the same sid between two unlinks owns the files from then on: stop.
+      if (sessions.has(sid)) return
+      try { await fs.promises.unlink(path.join(STREAMS_DIR, sid + ext)) } catch {}
     }
     reaped.add(sid)
-  }
+  }, { aborted: () => daemonStopping })
+  if (daemonStopping) return
   // Argv files nothing names: no session of this daemon, no live process (another
   // daemon's CLI included; a CLI reads its --settings file again).
   execFile('ps', ['-A', '-ww', '-o', 'args='], { encoding: 'utf-8', timeout: 10_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
@@ -6080,7 +6091,10 @@ const { SESSION_IDLE_WARNING_MS, SESSION_IDLE_KILL_MS, SESSION_SCAN_INTERVAL_MS,
 
 // ── Cleanup ──
 /** `registrySaved`: the stop wrote the registry just before (stopDaemon). */
+// cleanup() began: a pass over a directory still running stops before its next batch (eachInBatches).
+let daemonStopping = false
 function cleanup(opts: { registrySaved?: boolean } = {}) {
+  daemonStopping = true
   // One-shot claude runs and the warm pool never outlive the daemon (oneshot-core.ts).
   try { oneShot.disposeAll() } catch {}
   // MCP servers started for tasks on other hosts end with the daemon that holds their stdin.
@@ -6743,10 +6757,12 @@ async function startDaemon(): Promise<{ kind: 'started'; port: number } | { kind
     ]
     const restored = keepRuntimeFiles({ fs, pid: process.pid, pidFile: PID_FILE, files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), STAMP_FILE, SERVES_FILE, BRIDGE_FILE, ...[...bridgeLinks.keys()].filter(Boolean).map(bridgeFileFor)], touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: () => persistRegistry(), now: new Date() })
     if (restored.length > 0) logMsg('warn', 'runtime files written back', { restored })
-    // The same clock ages this dir's own scratch: no temp cleanup does it in the home dir (daemon-core.ts).
-    const pruned = pruneDaemonScratch({ fs, dir: DAEMON_DIR, ownLogs: [LOG_FILE, EXIT_BREADCRUMB_FILE], now: Date.now() })
-    if (pruned.length > 0) logMsg('info', 'old daemon logs and pictures removed', { count: pruned.length })
     keepOlderReleaseLink()
+    // The same clock ages this dir's own scratch: no temp cleanup does it in the home dir. Async, off the
+    // loop (daemon-core.ts pruneDaemonScratch); a tick while a pass runs joins it, and cleanup() ends it.
+    void pruneDaemonScratch({ fs: fs.promises, dir: DAEMON_DIR, ownLogs: [LOG_FILE, EXIT_BREADCRUMB_FILE], now: Date.now(), aborted: () => daemonStopping })
+      .then((pruned) => { if (pruned.length > 0) logMsg('info', 'old daemon logs and pictures removed', { count: pruned.length }) },
+        (err) => logMsg('warn', 'daemon scratch prune failed', { error: (err as Error).message }))
   }, Number(daemonEnv.WALNUT_RUNTIME_KEEP_MS) > 0 ? Number(daemonEnv.WALNUT_RUNTIME_KEEP_MS) : RUNTIME_KEEP_MS)
   runtimeKeepTimer.unref?.()
 

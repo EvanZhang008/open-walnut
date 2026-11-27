@@ -216,8 +216,8 @@ describe('sweepDeadStreams (real daemon, fast test clock)', () => {
     // starts at listen time, so a sweep pass lands within ~1s.
     await vi.waitFor(() => {
       expect(fs.existsSync(path.join(streamsDir, 'reap-me.jsonl'))).toBe(false)
+      expect(fs.existsSync(path.join(streamsDir, 'reap-me.pgid'))).toBe(false)
     }, { timeout: 10_000, interval: 200 })
-    expect(fs.existsSync(path.join(streamsDir, 'reap-me.pgid'))).toBe(false)
     expect(fs.existsSync(path.join(streamsDir, 'fresh-sid.jsonl'))).toBe(true)
     expect(fs.existsSync(path.join(streamsDir, 'live-old.jsonl'))).toBe(true)
   }, 60_000)

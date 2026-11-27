@@ -327,9 +327,11 @@ export function createStreamCompact(deps: StreamCompactDeps) {
   }
 
   /** Remove temp files no live daemon is writing, and marks whose stream file is gone. */
-  function sweepStale(dir: string, isAlive: (pid: number) => boolean): void {
-    let names: string[] = []
-    try { names = fs.readdirSync(dir) } catch { return }
+  /** `listed`: the dir's names, when the caller has just read them (the daemon's sweep reads them async). */
+  function sweepStale(dir: string, isAlive: (pid: number) => boolean, listed?: readonly string[]): void {
+    let names: readonly string[] = []
+    if (listed) names = listed
+    else { try { names = fs.readdirSync(dir) } catch { return } }
     const present = new Set(names)
     for (const f of names) {
       const at = f.lastIndexOf(TMP_INFIX)

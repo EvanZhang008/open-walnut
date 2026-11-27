@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { foldLine, initialFoldState, type FoldState } from './daemon-fold.js'
 import { createStreamCompact } from './stream-compact-core.js'
+import { eachInBatches } from './daemon-core.js'
 import { createStreamFold } from './stream-fold-core.js'
 import type { CliOwner } from './cli-owner-core.js'
 import type { DaemonSessionGate } from './daemon-cron-controller.js'
@@ -99,22 +100,23 @@ export function createDaemonStreamCompaction<W extends object>(deps: DaemonStrea
     if (streamCompactRunning) return
     streamCompactRunning = true
     try {
+      // The streams dir holds every session of the last 90 days: listed and stat'ed async, in
+      // bounded batches that give the loop turns (daemon-core.ts eachInBatches), since this runtime
+      // can share the web server's loop.
       let names: string[] = []
-      try { names = fs.readdirSync(STREAMS_DIR) } catch { return }
+      try { names = await fs.promises.readdir(STREAMS_DIR) } catch { return }
       const now = Date.now()
       // Temp files a dead daemon left, and marks whose stream file is gone.
-      streamCompact.sweepStale(STREAMS_DIR, pidAlive)
+      streamCompact.sweepStale(STREAMS_DIR, pidAlive, names)
       const due: Array<{ sid: string; jsonlPath: string; size: number }> = []
-      for (const f of names) {
-        if (!streamCompact.isStreamFile(f)) continue
+      await eachInBatches(names.filter((f) => streamCompact.isStreamFile(f)), async (f) => {
         const sid = f.slice(0, -'.jsonl'.length)
         const jsonlPath = path.join(STREAMS_DIR, f)
-        let st: fs.Stats
-        try { st = fs.statSync(jsonlPath) } catch { continue }
-        if (now - st.mtimeMs < STREAM_COMPACT_IDLE_MS) continue
-        if (!streamCompact.due(jsonlPath, st) || !streamWriterGone(sid)) continue
+        const st = await fs.promises.stat(jsonlPath)
+        if (now - st.mtimeMs < STREAM_COMPACT_IDLE_MS) return
+        if (!streamCompact.due(jsonlPath, st) || !streamWriterGone(sid)) return
         due.push({ sid, jsonlPath, size: st.size })
-      }
+      })
       due.sort((a, b) => a.size - b.size)
       for (const c of due) await compactOneStream(c.sid, c.jsonlPath)
     } catch (err) {

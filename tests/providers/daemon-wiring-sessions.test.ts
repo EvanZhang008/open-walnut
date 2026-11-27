@@ -382,7 +382,7 @@ describe('daemon wiring: session reap, registry, orphan poll, send paths and str
     expect(standaloneSrc).toMatch(/90 \* 24 \* 60 \* 60 \* 1000/)
     expect(standaloneSrc).toMatch(/setInterval\(sweepDeadStreams, STREAM_RETENTION_SWEEP_MS\)/)
     // Liveness paranoia: never reap a family whose pgid is still alive.
-    expect(standaloneSrc).toMatch(/isProcessGroupAlive\(pid\)\)\s*continue/)
+    expect(standaloneSrc).toMatch(/isProcessGroupAlive\(pid\)\)\s*return/)
   })
 
   // Isolated-dir CLI reap (2026-07-25 leak): cleanup() preserves session process

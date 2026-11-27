@@ -18,6 +18,7 @@ breaking changes).
 
 ### Fixed
 
+- The server no longer freezes for one to two seconds every hour: the session daemon's hourly cleanup of old pictures and logs, and its sweeps of old session streams, now read the disk without holding the server
 - A session daemon that keeps running after its port, pid and instance files were removed (a temp-folder cleanup) is found through its instance lock and used, then updated as usual; sessions no longer fail to start with "port file not created within 10s", on this machine or a remote host
 
 ## [0.6.37] - 2026-11-20
