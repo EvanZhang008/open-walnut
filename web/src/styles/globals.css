@@ -2677,6 +2677,12 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
 }
 /* Its × (NoticeClose) at the end of the header; folded, the one line ends with Show. */
 .permission-request-close { margin: -4px -8px -4px auto; }
+/* On a phone its finger ring (notice-close.css, 10px around it) stays inside the card: pulled 8px into
+   the card's padding it reached past the card's edge, and a long command's card scrolled sideways
+   (2026-11-27: tests/e2e/browser/phone-prompts.spec.ts C84). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .permission-request-close { margin-right: 0; }
+}
 .permission-request-card.is-folded { padding-top: 6px; padding-bottom: 6px; }
 .permission-request-show { margin-left: auto; }
 .permission-request-input { margin-top: 8px; }
@@ -27891,6 +27897,13 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 /* Later: its × (NoticeClose, the family's look), centred on the pill's line. */
 .stale-build-pill-later { flex-shrink: 0; align-self: center; margin-right: 2px; }
+/* The update notice's × (NoticeClose) keeps the notice's own geometry, as the hand-drawn one had it:
+   a square key the height of its line (its whole box takes the click, corners too), no taller than
+   the text (a popout's bar stays one line high on the window's edge), and on a phone no ring over
+   Restart beside it (2026-11-27: tests/e2e/browser/update-notice-dock.spec.ts). The collapsed rail's
+   corner badge is its own rule below. */
+.stale-build-pill .stale-build-pill-later.wn-notice-close { width: auto; min-width: 26px; min-height: 0; height: auto; padding: 0 6px; border-radius: 0; }
+html body .stale-build-pill .stale-build-pill-later.wn-notice-close::after { content: none; }
 
 .stale-build-pill.is-docked .stale-build-pill-later { margin-left: auto; }
 /* Docked (the open rail, a popout's bar): a heading too long for one line ("Updating

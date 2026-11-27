@@ -38,7 +38,7 @@ export function SendFailedNote({ reason, onRetry }: { reason: string; onRetry?: 
     <div className={`chat-send-failed${folded ? ' is-folded' : ''}`} role="alert" data-testid="chat-send-failed" title={folded ? reason : undefined}>
       <span className="chat-send-failed-reason">{folded ? 'Not sent' : `Not sent: ${reason}`}</span>
       {onRetry && <button className="btn btn-sm" onClick={onRetry} type="button">Retry</button>}
-      {!folded && <NoticeClose onClose={() => setFolded(true)} label="Hide the reason: Not sent and Retry stay" testId="chat-send-failed-close" />}
+      {!folded && <NoticeClose onClose={() => setFolded(true)} label="Hide why it was not sent" testId="chat-send-failed-close" />}
     </div>
   );
 }
