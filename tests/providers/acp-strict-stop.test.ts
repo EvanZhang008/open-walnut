@@ -8,6 +8,8 @@
  *     stop; still no answer is an error, an answer lets the stop through;
  *   - a straggler row with no start whose pid now runs another worker (its command says acp-worker, its
  *     journal is not this session's): an error, no signal; the session's own journal in argv proves it;
+ *   - a surviving worker row with no start (adoption, which the strict stop and every start/op reach first)
+ *     whose pid runs another session's worker: never signalled; the session's own journal in argv proves it;
  *   - a running worker while the strict stop waits on such a straggler: a plain stop's 6 s SIGKILL timer
  *     and a hard abort do nothing to it meanwhile, and the strict stop ends it with SIGTERM only.
  * Real processes: the worker and its adapter are this file's scripts (the adapter ends on SIGTERM or
@@ -236,6 +238,34 @@ describe('a strict ACP stop of a straggler row with no start time', () => {
       expect(alive(own)).toBe(false)
       expect(acp.heldBy('rt-own')).toBeNull()
       expect(kill.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined)).toEqual([[-own, 'SIGTERM']])
+    } finally { kill.mockRestore() }
+  }, 30_000)
+})
+
+describe('a surviving worker row with no start time (adoption, reached by a strict stop or any start/op)', () => {
+  it('signals nothing when the reused pid runs another session\'s worker; the session\'s own journal in argv proves it', async () => {
+    const foreign = await workerLookalike(path.join(dir, 'other-walnut', 'streams', 'rt-other.acp.jsonl'))
+    const own = await workerLookalike(path.join(dir, 'streams', 'rt-own.acp.jsonl'))
+    fs.mkdirSync(path.join(dir, 'daemon'), { recursive: true })
+    // Rows the last daemon life wrote a few ms after the spawn (no start yet), on this boot, survive workers.
+    fs.writeFileSync(path.join(dir, 'daemon', 'acp-workers.json'), JSON.stringify({
+      'rt-nostart': { pid: foreign, cmd: 'acp-worker', boot: 1000, survive: true },
+      'rt-own': { pid: own, cmd: 'acp-worker', boot: 1000, survive: true },
+    }))
+    // ps gives no answer at boot, so both adoptions stay open and the strict stop's own look adopts them.
+    let boot = true
+    const acp = daemon({ bootMinute: () => 1000, processInfo: async (pid) => boot ? { state: 'unknown' } : psProcessInfo(pid) })
+    await acp.startupRepair()
+    boot = false
+    const kill = vi.spyOn(process, 'kill')
+    try {
+      await acp.acpStop('rt-nostart', { strict: true })
+      expect(alive(foreign)).toBe(true)
+      expect(kill.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined)).toEqual([])
+      await acp.acpStop('rt-own', { strict: true })
+      expect(await until(() => !alive(own), 10_000)).toBe(true)
+      expect(kill.mock.calls.some(([pid, signal]) => pid === -own && signal === 'SIGTERM')).toBe(true)
+      expect(kill.mock.calls.some(([pid, signal]) => (pid === foreign || pid === -foreign) && signal !== 0 && signal !== undefined)).toBe(false)
     } finally { kill.mockRestore() }
   }, 30_000)
 })

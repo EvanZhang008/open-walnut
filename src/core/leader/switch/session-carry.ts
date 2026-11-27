@@ -127,21 +127,41 @@ export async function carrySource(home: string, o: { records?: readonly SessionR
   return { root: empty, place, stagingDir: path.join(home, 'tmp', 'standby-carry-staging') }
 }
 
-/** What the carry would send now: the selected records' bytes and files in this machine's engine dir. */
-export function carrySize(engineDir: string, sel: CarrySelection): { bytes: number; files: number } {
-  const out = { bytes: 0, files: 0 }
-  const walk = (d: string, depth: number) => {
+/** At most this many files are counted for the size a refusal names (a real home keeps thousands of subagent files). */
+export const CARRY_SIZE_MAX_FILES = 50_000
+
+/**
+ * What the carry would send now: the bytes and files of the selected records in this machine's engine dir, by the
+ * carry's own place (carryPlace: what a batch walks and takes). Asynchronous, a few stats at a time, so a preflight's
+ * refusal never holds the server's event loop; it stops counting at `maxFiles` (`capped`: the size is a lower bound).
+ */
+export async function carrySize(engineDir: string, sel: CarrySelection, o: { maxFiles?: number } = {}): Promise<{ bytes: number; files: number; capped?: true }> {
+  const max = o.maxFiles ?? CARRY_SIZE_MAX_FILES
+  const place = carryPlace(sel)
+  const takes = place.fileTest()
+  const out: { bytes: number; files: number; capped?: true } = { bytes: 0, files: 0 }
+  const walk = async (rel: string, depth: number): Promise<void> => {
     let entries: fs.Dirent[]
-    try { entries = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
+    try { entries = await fs.promises.readdir(path.join(engineDir, rel), { withFileTypes: true }) } catch { return }
+    const files: string[] = []
     for (const e of entries) {
-      const p = path.join(d, e.name)
-      if (e.isDirectory()) { if (depth < 8) walk(p, depth + 1) } else if (e.isFile()) {
-        try { out.bytes += fs.statSync(p).size; out.files++ } catch { /* gone */ }
+      if (out.capped) return
+      const r = `${rel}/${e.name}`
+      if (e.isDirectory()) { if (depth < 8 && place.dirMayHold(r)) await walk(r, depth + 1) } else if (e.isFile() && takes(rel, e.name)) files.push(r)
+    }
+    for (let i = 0; i < files.length; i += 64) {
+      if (out.files >= max) { out.capped = true; return }
+      const sizes = await Promise.all(files.slice(i, i + 64).map((r) => fs.promises.stat(path.join(engineDir, r)).then((st) => st.size, () => -1)))
+      for (const n of sizes) {
+        if (n < 0) continue
+        if (out.files >= max) { out.capped = true; return }
+        out.bytes += n
+        out.files++
       }
     }
   }
-  for (const f of sel.folders) walk(path.join(engineDir, 'projects', f), 0)
-  for (const sid of sel.sids) walk(path.join(engineDir, 'tasks', sid), 0)
+  for (const f of sel.folders) await walk(`projects/${f}`, 0)
+  for (const sid of sel.sids) await walk(`tasks/${sid}`, 0)
   return out
 }
 
@@ -153,7 +173,7 @@ const mins = (ms: number) => (ms < 90_000 ? `${Math.max(1, Math.round(ms / 1000)
  * words with their size and how long sending them would take, or null when the carry is current. `state`: the standby
  * runner's carry state; `rate`: bytes per ms the copy link carried in the catch-up's batches (0 when unknown).
  */
-export function carryBehindLine(o: { size: { bytes: number; files: number }; state: { underWaySince?: number; last?: { at: number; ok: boolean; unchanged?: boolean; sentBytes?: number; totalMs?: number; reason?: string } }; rate: number; now?: number }): string | null {
+export function carryBehindLine(o: { size: { bytes: number; files: number; capped?: true }; state: { underWaySince?: number; last?: { at: number; ok: boolean; unchanged?: boolean; sentBytes?: number; totalMs?: number; reason?: string } }; rate: number; now?: number }): string | null {
   const now = o.now ?? Date.now()
   const last = o.state.last
   if (o.state.underWaySince === undefined && last?.ok && last.unchanged) return null
@@ -163,8 +183,9 @@ export function carryBehindLine(o: { size: { bytes: number; files: number }; sta
     : !last ? 'none has been carried yet'
       : !last.ok ? `the last carry of them did not finish (${last.reason ?? 'no reason'})`
         : 'the last carry of them still found changes'
-  const eta = rate > 0 ? `; at the ${(rate * 1000 / (1 << 20)).toFixed(1)} MB/s the copy link carried, sending them all takes about ${mins(o.size.bytes / rate)}` : ''
-  return `The sessions' records in the data home (${gb(o.size.bytes)} in ${o.size.files} files, carried beside the copy) are not all on the standby yet: ${how}${eta}. Run the switch again once the standby has caught up (walnut leader switch --status).`
+  const eta = rate > 0 ? `; at the ${(rate * 1000 / (1 << 20)).toFixed(1)} MB/s the copy link carried, sending them all takes ${o.size.capped ? 'more than' : 'about'} ${mins(o.size.bytes / rate)}` : ''
+  const size = o.size.capped ? `at least ${gb(o.size.bytes)} in more than ${o.size.files} files` : `${gb(o.size.bytes)} in ${o.size.files} files`
+  return `The sessions' records in the data home (${size}, carried beside the copy) are not all on the standby yet: ${how}${eta}. Run the switch again once the standby has caught up (walnut leader switch --status).`
 }
 
 /** carryBehindLine for this machine's home and engine dir now. */
@@ -174,7 +195,7 @@ export async function carryBehind(home: string, state: Parameters<typeof carryBe
   const records = await (await import('../../session-tracker.js')).sessionStoreView()
   const sent = batches.reduce((n, b) => n + b.sentBytes, 0)
   const ms = batches.reduce((n, b) => n + b.ms, 0)
-  return carryBehindLine({ size: carrySize(engineDir, carrySelection(records, home)), state, rate: sent > 1 << 20 && ms > 0 ? sent / ms : 0 })
+  return carryBehindLine({ size: await carrySize(engineDir, carrySelection(records, home)), state, rate: sent > 1 << 20 && ms > 0 ? sent / ms : 0 })
 }
 
 // ---- after the commit: the records into the new leader's engine dir --------------------------------------------

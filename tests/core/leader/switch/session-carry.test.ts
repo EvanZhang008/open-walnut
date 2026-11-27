@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { snapshotTo, HOME_PLACE } from '../../../../src/core/standby/index.js'
 import { removeTree, carryTargetDir } from '../../../../src/core/standby/target-files.js'
-import { carryPlace, carrySelection, carrySource, engineFolderUnder, homeEngineFolder, placeCarriedRecords, type PlaceDeps } from '../../../../src/core/leader/switch/session-carry.js'
+import { carryBehindLine, carryPlace, carrySelection, carrySize, carrySource, engineFolderUnder, homeEngineFolder, placeCarriedRecords, type PlaceDeps } from '../../../../src/core/leader/switch/session-carry.js'
 import { carryRefusal } from '../../../../src/core/leader/switch/target-job.js'
 import { finishSwitchStop, forgetHandedOver } from '../../../../src/core/leader/switch/final-stop.js'
 import { finalMarkName } from '../../../../src/core/leader/switch/ticket.js'
@@ -91,6 +91,26 @@ describe('a carry batch', () => {
     expect(place.appendOnly(`projects/${f}/${sid(1)}/subagents/agent-x.jsonl`)).toBe(true)
     expect(place.appendOnly(`projects/${f}/memory/MEMORY.md`)).toBe(false)
     expect(place.appendOnly(`tasks/${sid(1)}/1.json`)).toBe(false)
+  })
+
+  it('the size a refusal names counts what a batch takes, asynchronously, and stops at its file cap', async () => {
+    const root = dir()
+    const home = path.join(root, 'home')
+    fs.mkdirSync(path.join(home, 'notes'), { recursive: true })
+    const { eng, f } = engineDir(root, home)
+    // Many small subagent files under one session, as a real home keeps.
+    for (let i = 0; i < 300; i++) write(path.join(eng, 'projects', f, sid(1), 'subagents', `agent-${i}.jsonl`), '{"s":1}\n')
+    const sel = carrySelection([rec(1, home), rec(2, path.join(home, 'notes')), rec(9, home, { archived: true })], home)
+    const target = path.join(root, 'standby', 'carry')
+    expect((await snapshotTo(eng, target, { place: carryPlace(sel), stagingDir: path.join(root, 'staging') })).ok).toBe(true)
+    const taken = listCopy(target)
+    const bytes = taken.reduce((n, r) => n + fs.statSync(path.join(eng, r)).size, 0)
+    const pending = carrySize(eng, sel)
+    expect(pending).toBeInstanceOf(Promise)
+    expect(await pending).toEqual({ bytes, files: taken.length })
+    const capped = await carrySize(eng, sel, { maxFiles: 100 })
+    expect(capped).toMatchObject({ files: 100, capped: true })
+    expect(carryBehindLine({ size: capped, state: {}, rate: 0 })).toMatch(/at least \d+ MB in more than 100 files/)
   })
 
   it('a folder under the home that links out of it is not selected: another project\'s records are never carried', async () => {

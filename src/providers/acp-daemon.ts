@@ -1375,10 +1375,11 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       const now = listed ? await registryStart(row.pid) : null
       same = !!listed && now === listed
       // No start in either record (the daemon died a few ms after the spawn): a process on this boot
-      // that runs the worker's script is ours, but cannot be checked well enough to adopt; it is
-      // stopped before its turn is closed, as sweepStraggler does, so the next start is the only one.
+      // whose command carries this session's own journal is ours, but cannot be checked well enough to
+      // adopt; it is stopped before its turn is closed, so the next start is the only one. The worker's
+      // name is no proof: a reused pid may run another session's (or another Walnut's) worker.
       const sameBoot = typeof row.boot === 'number' && Math.abs(boot() - row.boot) <= 2
-      if (!listed && sameBoot && info.command.includes(row.cmd || 'acp-worker')) {
+      if (!listed && sameBoot && info.command.includes(journalPath)) {
         log('warn', 'acp: surviving worker has no start time recorded; stopping it', { sid, pid: row.pid })
         await terminateProcessGroup(row.pid)
       }
