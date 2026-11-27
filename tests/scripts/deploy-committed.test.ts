@@ -576,8 +576,8 @@ out="$(cd "$here" && bun -e "console.log(require('leftpad'))" 2>&1)"; rc=$?
     git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'empty')
     const empty = run(f, url)
     expect(empty.status, empty.stderr).toBe(0)
-    // (counted from what production serves: the earlier quiet commits' files)
-    expect(empty.stdout).toMatch(/changes nothing production runs since [0-9a-f]{12} \(7 file\(s\)/)
+    // (counted from the code production runs: the last quiet commit, which it holds already)
+    expect(empty.stdout).toMatch(/changes nothing production runs since [0-9a-f]{12} \(0 file\(s\)/)
     // Forced, it deploys anyway.
     commitFiles({ 'tests/e.test.ts': 'e\n' })
     expect(run(f, { ...url, WALNUT_DEVPROD_FORCE: '1' }).report).not.toBeNull()

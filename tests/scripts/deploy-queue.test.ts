@@ -599,6 +599,125 @@ esac
     await runnerGone(f)
   }, 60_000)
 
+  // 2026-11-27: 22% of the deploys that restarted production changed only web/. Such a target is
+  // swapped under the running server (scripts/deploy-web.sh), with none of a restart's waits.
+  const WEB_STUB = `#!/usr/bin/env bash
+set -euo pipefail
+here="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd -P)"
+sha="$(git -C "$here" rev-parse HEAD)"
+echo "web $sha $(date +%s)" >> "$STUB_DEPLOYS"
+if [[ -f "$STUB_FAIL.web-refused" ]]; then echo "Web swap refused: the stub says no"; exit 75; fi
+bundle="B\${sha:0:6}"
+served="$(sed -n 's/.*"commit":"\\([0-9a-f]*\\)".*/\\1/p' "$STUB_CONFIG")"
+printf '{"build":{"commit":"%s","dirty":false,"builtAt":"2026-11-27T00:00:00Z"},"webAssets":{"bundle":"%s","staticDir":"/x"}}' "$served" "$bundle" > "$STUB_CONFIG"
+echo "$bundle" > "$here/.walnut-web-swap-bundle"
+`
+  const webFixture = () => {
+    const f = fixture()
+    fs.writeFileSync(path.join(f.repo, 'scripts', 'deploy-web.sh'), WEB_STUB)
+    git(f.repo, 'add', '-A')
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'web stub')
+    const served = git(f.repo, 'rev-parse', 'HEAD')
+    fs.writeFileSync(f.config, JSON.stringify({ build: { commit: served.slice(0, 9), dirty: false, builtAt: '2026-11-27T00:00:00Z' } }))
+    const webCommit = (name: string) => {
+      fs.mkdirSync(path.join(f.repo, 'web', 'src'), { recursive: true })
+      fs.writeFileSync(path.join(f.repo, 'web', 'src', `${name}.tsx`), `${name}\n`)
+      git(f.repo, 'add', '-A')
+      git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', name)
+      return git(f.repo, 'rev-parse', 'HEAD')
+    }
+    return { f, served, webCommit }
+  }
+
+  it('a commit that changes only the web app is swapped under the running server at once, inside the gap, with no restart (2026-11-27)', async () => {
+    const { f, served, webCommit } = webFixture()
+    stampNow(f)
+    const web = webCommit('panel')
+    const started = Date.now()
+    const r = await call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '600' }).done
+    expect(r.code, r.stderr + r.stdout).toBe(0)
+    expect(Date.now() - started).toBeLessThan(30_000)
+    expect(deploys(f).map((x) => `${x.kind} ${x.sha}`)).toEqual([`web ${web}`])
+    await runnerGone(f)
+    // No restart: the next restart's gap still counts from the last one.
+    expect(fs.existsSync(path.join(f.queue, 'last-restart'))).toBe(false)
+    const bundle = `B${web.slice(0, 6)}`
+    expect(fs.readFileSync(path.join(f.queue, 'runtime-same'), 'utf8').trim().split('\n').pop()).toBe(`${web} ${served} ${bundle}`)
+    const read = (sha: string, b: string) => execFileSync('bash', ['-c', 'source scripts/lib/deploy-queue.sh; SERVE_ROOT="$PWD"; dq_runtime_same "$1" "$2"', 'x', sha, b],
+      { cwd: f.repo, env: { ...gitChildEnv(), WALNUT_DEPLOY_QUEUE_DIR: f.queue }, encoding: 'utf8' }).trim()
+    // Live only while production serves that web bundle: one unpacked again from the file, or a
+    // rollback to a copy of it, serves the file's own, and the commit is not live then.
+    expect(read(served, bundle)).toBe(web)
+    expect(read(served, 'Bother')).toBe(served)
+    expect(read(served, '')).toBe(served)
+    // Asked again: live already, nothing runs.
+    const again = await call(f).done
+    expect(again.stdout).toMatch(/Deploy skipped: production already serves/)
+    // A test-only commit after it is no restart either, and keeps the bundle it was made with.
+    fs.mkdirSync(path.join(f.repo, 'tests'), { recursive: true })
+    fs.writeFileSync(path.join(f.repo, 'tests', 'a.test.ts'), 'a\n')
+    git(f.repo, 'add', '-A')
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'tests')
+    const quiet = git(f.repo, 'rev-parse', 'HEAD')
+    const q = await call(f).done
+    expect(q.stdout).toMatch(/changes nothing production runs since [0-9a-f]{12} \(1 file/)
+    expect(fs.readFileSync(path.join(f.queue, 'runtime-same'), 'utf8').trim().split('\n').pop()).toBe(`${quiet} ${served} ${bundle}`)
+    // A second web commit swaps again, from the last one.
+    const web2 = webCommit('list')
+    expect((await call(f, { WALNUT_DEPLOY_MIN_GAP_SECS: '600' }).done).code).toBe(0)
+    expect(deploys(f).map((x) => `${x.kind} ${x.sha}`)).toEqual([`web ${web}`, `web ${web2}`])
+    await runnerGone(f)
+  }, 90_000)
+
+  it('a web app the server refuses to swap deploys with a restart, after the gap; a change beyond web/ restarts as ever', async () => {
+    const { f, webCommit } = webFixture()
+    fs.writeFileSync(`${f.fail}.web-refused`, '')
+    stampNow(f)
+    const web = webCommit('panel')
+    const r = await call(f).done
+    expect(r.code, r.stderr + r.stdout).toBe(0)
+    const seen = deploys(f)
+    expect(seen.map((x) => `${x.kind} ${x.sha}`)).toEqual([`web ${web}`, `start ${web}`, `stop ${web}`, `end ${web}`])
+    // The restart kept the gap after the last one.
+    const stamp = Number(fs.readFileSync(path.join(f.tmp, 'open-walnut-dev-prod.last-success'), 'utf8'))
+    expect(seen.find((x) => x.kind === 'stop')!.at).toBeGreaterThanOrEqual(stamp)
+    await runnerGone(f)
+    expect(fs.readFileSync(path.join(f.queue, 'runner.log'), 'utf8')).toMatch(/could not be swapped under the running server \(Web swap refused: the stub says no\)/)
+    // Web and server code in one commit: a restart, no swap.
+    fs.rmSync(`${f.fail}.web-refused`)
+    fs.writeFileSync(path.join(f.repo, 'web', 'src', 'both.tsx'), 'b\n')
+    fs.writeFileSync(path.join(f.repo, 'server.ts'), 's\n')
+    git(f.repo, 'add', '-A')
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'both')
+    const both = git(f.repo, 'rev-parse', 'HEAD')
+    expect((await call(f).done).code).toBe(0)
+    expect(deploys(f).filter((x) => x.sha === both).map((x) => x.kind)).toEqual(['start', 'stop', 'end'])
+    await runnerGone(f)
+  }, 90_000)
+
+  it('what a deploy changes: tests and docs nothing, web/ alone the web app, anything else a restart', () => {
+    const f = fixture()
+    const base = git(f.repo, 'rev-parse', 'HEAD')
+    const kind = (files: Record<string, string>) => {
+      for (const [p, body] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(f.repo, p)), { recursive: true })
+        fs.writeFileSync(path.join(f.repo, p), body)
+      }
+      git(f.repo, 'add', '-A')
+      git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'k')
+      const sha = git(f.repo, 'rev-parse', 'HEAD')
+      const out = execFileSync('bash', ['-c', 'source scripts/lib/deploy-queue.sh; SERVE_ROOT="$PWD"; dq_change_kind "$1" "$2"', 'x', base, sha],
+        { cwd: f.repo, env: gitChildEnv(), encoding: 'utf8' })
+      git(f.repo, 'reset', '-q', '--hard', base)
+      return out
+    }
+    expect(kind({ 'tests/a.test.ts': 'a', 'docs/b.md': 'b', 'web/src/AGENTS.md': 'c' })).toBe('none')
+    expect(kind({ 'web/src/x.tsx': 'x', 'web/package.json': '{}', 'tests/a.test.ts': 'a' })).toBe('web')
+    expect(kind({ 'web/src/x.tsx': 'x', 'src/y.ts': 'y' })).toBe('full')
+    expect(kind({ 'web/src/x.tsx': 'x', 'package.json': '{"v":2}' })).toBe('full')
+    expect(kind({ 'scripts/z.sh': 'z' })).toBe('full')
+  })
+
   it('a forced deploy and a dry run go straight on, inside the gap', async () => {
     const f = fixture()
     stampNow(f)

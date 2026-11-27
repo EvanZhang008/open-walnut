@@ -265,53 +265,98 @@ dq_config_url() {
   fi
 }
 
-# "<full sha> <built-at epoch>" of the clean build production serves, or nothing.
-dq_served() {
-  local json line sha
-  json="$(curl -s -m 3 "$(dq_config_url)" 2>/dev/null || true)"
-  line="$("${JS_RUN[@]}" "$json" <<'JS' 2>/dev/null || true
+# "<commit> <built-at epoch> <web id>" of the clean build an /api/config answer (arg 1) names, or
+# nothing. The web id names the web app it serves: its entry bundle (webAssets.bundle), then
+# "@<commit>" when a web-only deploy swapped it in (scripts/web-swap.mjs leaves that marker in the
+# served dir); "-" when the server names none.
+dq_config_line() {
+  "${JS_RUN[@]}" "$1" <<'JS' 2>/dev/null || true
+const fs = require('fs')
+const path = require('path')
 try {
-  const b = JSON.parse(process.argv[2] || '{}').build || {}
+  const c = JSON.parse(process.argv[2] || '{}')
+  const b = c.build || {}
   if (b.dirty === false && /^[0-9a-f]{7,40}$/.test(b.commit || '')) {
     const at = Date.parse(b.builtAt || '')
-    console.log(b.commit + ' ' + (Number.isFinite(at) ? Math.floor(at / 1000) : 0))
+    const w = c.webAssets || {}
+    let id = typeof w.bundle === 'string' && /^[A-Za-z0-9_-]+$/.test(w.bundle) ? w.bundle : '-'
+    if (id !== '-' && typeof w.staticDir === 'string') {
+      let m = ''
+      try { m = fs.readFileSync(path.join(w.staticDir, '.walnut-web-swap'), 'utf8').trim() } catch {}
+      if (/^[0-9a-f]{7,40}$/.test(m)) id += '@' + m
+    }
+    console.log(b.commit + ' ' + (Number.isFinite(at) ? Math.floor(at / 1000) : 0) + ' ' + id)
   }
 } catch {}
 JS
-)"
+}
+
+# "<full sha> <built-at epoch>" of the clean build production serves, or nothing. The sha is the
+# newest commit production runs the code of (dq_runtime_same), checked against the web app it
+# serves now.
+dq_served() {
+  local line sha at web
+  line="$(dq_config_line "$(curl -s -m 3 "$(dq_config_url)" 2>/dev/null || true)")"
   [[ -n "$line" ]] || return 0
-  sha="$(git -C "$SERVE_ROOT" rev-parse --verify --quiet "${line%% *}^{commit}" 2>/dev/null || true)"
-  [[ -n "$sha" ]] && printf '%s %s' "$(dq_runtime_same "$sha")" "${line##* }"
+  read -r sha at web <<< "$line"
+  [[ "$web" != "-" ]] || web=""
+  sha="$(git -C "$SERVE_ROOT" rev-parse --verify --quiet "${sha}^{commit}" 2>/dev/null || true)"
+  [[ -n "$sha" ]] && printf '%s %s' "$(dq_runtime_same "$sha" "$web")" "$at"
   return 0
 }
 
-# The newest commit production runs the code of while it serves `sha`: a deploy that changed nothing
-# production runs skipped its restart and wrote "<commit> <served>" to runtime-same
-# (deploy-committed.sh, 2026-11-25). Of the records for `sha`, the one that holds every other and
-# `sha` itself, on the checkout's HEAD (a record off main never stands for production); else `sha`.
+# The newest commit production runs the code of while it serves `sha` (arg 1) with the web app arg 2
+# names (its web id, dq_config_line; empty when unknown). A deploy that changed nothing production
+# runs skipped its restart and wrote "<commit> <served> [<web id>]" to runtime-same
+# (deploy-committed.sh, 2026-11-25); one that changed only the web app swapped it under the running
+# server and wrote "<commit> <served> <web id>" (2026-11-27). A record that names a web id stands
+# only while production serves that web app: a tree unpacked again from the file, or a rollback to
+# a copy of it, serves the file's own (no marker), and the commit is not live then.
+# Of the records for `sha`, the one that holds every other and `sha` itself, on the checkout's
+# HEAD (a record off main never stands for production); else `sha`.
 dq_runtime_same() {
-  local best="$1" c
+  local best="$1" c b
   [[ -n "$1" ]] || return 0
-  while read -r c; do
+  while read -r c b; do
     [[ "$c" =~ ^[0-9a-f]{40}$ ]] || continue
+    [[ -z "$b" || "$b" == "${2:-}" ]] || continue
     git -C "$SERVE_ROOT" merge-base --is-ancestor "$best" "$c" 2>/dev/null || continue
     git -C "$SERVE_ROOT" merge-base --is-ancestor "$c" HEAD 2>/dev/null || continue
     best="$c"
-  done < <(awk -v s="$1" '$2 == s { print $1 }' "$(dq_dir)/runtime-same" 2>/dev/null || true)
+  done < <(awk -v s="$1" '$2 == s { print $1, $3 }' "$(dq_dir)/runtime-same" 2>/dev/null || true)
   printf '%s' "$best"
 }
 
-# Record that production serving `served` (arg 2) runs the code of `commit` (arg 1). One writer at a
-# time (two lands' deploys skip at once, outside the queue's runner): a lock dir, waited for up to 10 s,
-# then taken over (its maker died). The last 200 records are kept.
+# Record that production serving `served` (arg 2) runs the code of `commit` (arg 1), while it
+# serves the web app arg 3 names (its web id: a web-only deploy's, or the one it served when the
+# record was made; empty: any). One writer at a time (two lands' deploys skip at once, outside the queue's runner):
+# a lock dir, waited for up to 10 s, then taken over (its maker died). The last 200 records are kept.
 dq_runtime_record() {
   local f lock i
   f="$(dq_dir)/runtime-same"; lock="$f.lock"
   mkdir -p "$(dirname "$f")" || return 1
   for (( i = 0; i < 100; i++ )); do mkdir "$lock" 2>/dev/null && break; sleep 0.1; done
   (( i < 100 )) || { rm -rf "$lock"; mkdir "$lock" 2>/dev/null || return 1; }
-  { tail -n 199 "$f" 2>/dev/null; printf '%s %s\n' "$1" "$2"; } > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
+  { tail -n 199 "$f" 2>/dev/null; printf '%s %s%s\n' "$1" "$2" "${3:+ $3}"; } > "$f.tmp.$$" && mv "$f.tmp.$$" "$f"
   rmdir "$lock" 2>/dev/null || true
+}
+
+# What a deploy of `sha` (arg 2) changes in production, which runs the code of `base` (arg 1,
+# dq_runtime_same's answer): "none" (tests, docs, the iOS app, CI, or no change at all: no
+# restart), "web" (the web app under web/ and nothing else production runs: swapped under the
+# running server, no restart, 2026-11-27: 22% of the deploys that restarted), or "full" (anything
+# else, src/ included: src/data ships inside the build). A path no rule names restarts, so a new
+# kind of file is safe until someone says otherwise (tests/scripts/deploy-change-kind.test.ts).
+DQ_NONRUNTIME_RE='^(tests/|docs/|ios-native/|\.github/|site/|infra/|[^/]+\.md$|([^/]+/)*AGENTS\.md$|vitest[^/]*\.config\.[^/]+$|playwright[^/]*\.config\.[^/]+$)'
+DQ_WEB_RE='^web/'
+dq_change_kind() {
+  local changed runtime
+  [[ -n "$1" && -n "$2" ]] || { printf 'full'; return 0; }
+  changed="$(git -C "$SERVE_ROOT" diff --name-only "$1" "$2" 2>/dev/null)" || { printf 'full'; return 0; }
+  runtime="$(printf '%s\n' "$changed" | { grep -v '^$' || true; } | { grep -vE "$DQ_NONRUNTIME_RE" || true; })"
+  if [[ -z "$runtime" ]]; then printf 'none'
+  elif [[ -z "$(printf '%s\n' "$runtime" | { grep -vE "$DQ_WEB_RE" || true; })" ]]; then printf 'web'
+  else printf 'full'; fi
 }
 
 dq_num() { local v; v="$(cat "$1" 2>/dev/null || true)"; [[ "$v" =~ ^[0-9]+$ ]] && printf '%s' "$v" || printf '0'; }
@@ -410,7 +455,7 @@ dq_runner() {
   rm -f "$q/disk"
   trap 'dq_unlock "'"$q"'"' EXIT
   dq_log "runner $$ started (gap ${DQ_GAP}s)"
-  local served served_sha built id sha pending last now at wait head target log code before refused ceiling carried moving lim low poll hold_since="" disk_since=""
+  local served served_sha built id sha pending last now at wait head target log code before refused ceiling carried moving lim low poll hold_since="" disk_since="" nogap web web_refused=""
   while :; do
     served="$(dq_served)"; served_sha="${served%% *}"; built="${served##* }"
     # Requests production already carries are answered.
@@ -430,6 +475,17 @@ dq_runner() {
       if [[ -n "$(ls "$q/requests" 2>/dev/null)" ]] && dq_lock "$q"; then continue; fi
       break
     fi
+    # A deploy that changes only the web app swaps it under the running server (deploy-web.sh): no
+    # restart, so none of the waits for one (the gap, a busy Mac, a move). Judged on the newest
+    # commit; once a swap is refused under a build, every target restarts until production serves
+    # another one.
+    nogap="${WALNUT_DEPLOY_NO_GAP:-0}"; web=0
+    if [[ "$nogap" != "1" ]]; then
+      head="$(dq_ceiling)"; [[ -n "$head" ]] || head="$(git -C "$SERVE_ROOT" rev-parse HEAD)"
+      if [[ "$head" != "-" && "$served_sha" != "$web_refused" && "$(dq_change_kind "$served_sha" "$head")" == web ]]; then
+        nogap=1; web=1
+      fi
+    fi
     # The gap since the last restart, and since the last attempt (dev-prod.sh's cooldown).
     last="$(dq_num "$q/last-restart")"
     at="$(dq_num "$(dq_devprod_tmp)/open-walnut-dev-prod.last-success")"; (( at > last )) && last=$at
@@ -438,12 +494,12 @@ dq_runner() {
     now="$(date +%s)"
     wait=$(( last + DQ_GAP - DQ_PREBUILD - now ))
     (( at + DQ_ATTEMPT_GAP - now > wait )) && wait=$(( at + DQ_ATTEMPT_GAP - now ))
-    if [[ "${WALNUT_DEPLOY_NO_GAP:-0}" != "1" ]] && (( wait > 0 )); then
+    if [[ "$nogap" != "1" ]] && (( wait > 0 )); then
       dq_put "$q/next-at" "$(( now + wait ))"
       sleep $(( wait < 10 ? wait : 10 ))
       continue
     fi
-    if [[ "${WALNUT_DEPLOY_NO_GAP:-0}" != "1" ]] && (( last + DQ_BUSY_GAP > now )); then
+    if [[ "$nogap" != "1" ]] && (( last + DQ_BUSY_GAP > now )); then
       busy="$(dq_busy_load)"; bwhy="load $busy, over $DQ_BUSY_LOAD per CPU"; [[ -z "$busy" ]] || busy="load $busy"
       lim=$DQ_BUSY_GAP
       if [[ -z "$busy" ]] && (( last + DQ_MEM_GAP > now )); then busy="$(dq_busy_mem)"; bwhy="$busy"; lim=$DQ_MEM_GAP; fi
@@ -459,7 +515,7 @@ dq_runner() {
     fi
     busy_said=; rm -f "$q/busy"
     # A move production runs now: the deploy waits for it, at most DQ_MOVE_HOLD from now.
-    if [[ "${WALNUT_DEPLOY_NO_GAP:-0}" != "1" ]]; then
+    if [[ "$nogap" != "1" ]]; then
       moving="$(dq_moving)"
       if [[ -n "$moving" ]]; then
         [[ -n "${hold_since:-}" ]] || { hold_since="$now"; dq_log "production runs a move ($moving): the deploy waits for it to end, until $(dq_clock "$(( now + DQ_MOVE_HOLD ))") at the latest"; }
@@ -499,10 +555,15 @@ dq_runner() {
       target="$sha"; break
     done
     (( refused == 0 )) || [[ -n "$ceiling" && $carried == 1 ]] || continue
+    # A target that goes alone (a commit the newest does not carry) is never swapped: it restarts,
+    # after the gap.
+    if (( web == 1 )) && [[ "$target" != "$head" ]]; then
+      web_refused="$served_sha"; continue
+    fi
     # A target whose dev-prod.sh does not hold its stop for the gap (a commit from before
     # dq_hold_gap) builds only once the gap is over, as before.
     now="$(date +%s)"
-    if [[ "${WALNUT_DEPLOY_NO_GAP:-0}" != "1" ]] && (( last + DQ_GAP > now )) \
+    if [[ "$nogap" != "1" ]] && (( last + DQ_GAP > now )) \
       && ! git -C "$SERVE_ROOT" grep -q -F dq_hold_gap "$target" -- scripts/dev-prod.sh 2>/dev/null; then
       dq_put "$q/next-at" "$(( last + DQ_GAP ))"
       wait=$(( last + DQ_GAP - now )); sleep $(( wait < 10 ? wait : 10 ))
@@ -529,13 +590,21 @@ dq_runner() {
     log="$q/logs/$(date +%Y%m%dT%H%M%S)-${target:0:12}.log"
     # The build goes now; the stop waits for the gap's end (dq_hold_gap).
     rm -f "$q/stop-at"
-    [[ "${WALNUT_DEPLOY_NO_GAP:-0}" == "1" ]] || (( last + DQ_GAP <= $(date +%s) )) || dq_put "$q/stop-at" "$(( last + DQ_GAP ))"
+    [[ "$nogap" == "1" ]] || (( last + DQ_GAP <= $(date +%s) )) || dq_put "$q/stop-at" "$(( last + DQ_GAP ))"
     dq_put "$q/current" "$target $(date +%s) $log"
-    dq_log "deploying ${target:0:12} for$pending (log $log)"
+    if (( web == 1 )); then dq_log "deploying ${target:0:12} for$pending: it changes only the web app, which is swapped under the running server, no restart (log $log)"
+    else dq_log "deploying ${target:0:12} for$pending (log $log)"; fi
     before="$built"
     code=0
-    WALNUT_DEPLOY_RUNNER=1 bash "$DQ_SCRIPT" "$target" > "$log" 2>&1 < /dev/null || code=$?
+    WALNUT_DEPLOY_RUNNER=1 WALNUT_DEPLOY_WEB="$web" bash "$DQ_SCRIPT" "$target" > "$log" 2>&1 < /dev/null || code=$?
     rm -f "$q/current" "$q/stop-at"
+    if (( code == 75 )); then
+      # The web app could not be swapped (deploy-web.sh says why): this target restarts, after the gap.
+      dq_log "the web app of ${target:0:12} could not be swapped under the running server ($(grep -m1 '^Web swap refused' "$log" 2>/dev/null || echo 'see its log')); it deploys with a restart, after the gap"
+      # No swap again under this build: the next goes out with the restart.
+      web_refused="$served_sha"
+      continue
+    fi
     if (( code == 0 )) && grep -q '^Deploy skipped: last deploy' "$log"; then
       # dev-prod.sh's own cooldown answered (a deploy outside this queue): nothing went out, ask again.
       dq_log "deploy of ${target:0:12} met dev-prod.sh's cooldown; trying again"

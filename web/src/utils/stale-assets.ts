@@ -270,7 +270,7 @@ export interface StaleBuildUpgradeDeps {
   served: () => Promise<string | null>;
   /** True while the tab is not on screen. */
   hidden: () => boolean;
-  /** Subscribe to reconnects; returns the unsubscribe. */
+  /** Subscribe to reconnects and the server's web:bundle push; returns the unsubscribe. */
   onReconnect: (cb: () => void) => () => void;
   /** Subscribe to visibility changes; returns the unsubscribe. */
   onVisibility: (cb: () => void) => () => void;
@@ -316,13 +316,17 @@ async function fetchServedBundle(): Promise<string | null> {
   return res?.webAssets?.bundle ?? null;
 }
 
+// A reconnect (a restart, a dropped link) and the server's `web:bundle` push (a deploy that
+// swapped only the web app under it, scripts/web-swap.mjs: no reconnect follows) both ask for a
+// check, so a hidden window learns of a swapped build too.
 function subscribeReconnect(cb: () => void): () => void {
   let off: (() => void) | null = null;
   let cancelled = false;
   void import('@/api/ws').then(({ wsClient }) => {
     if (cancelled) return;
     wsClient.onEvent('_ws:reconnected', cb);
-    off = () => wsClient.offEvent('_ws:reconnected', cb);
+    wsClient.onEvent('web:bundle', cb);
+    off = () => { wsClient.offEvent('_ws:reconnected', cb); wsClient.offEvent('web:bundle', cb); };
   });
   return () => { cancelled = true; off?.(); };
 }

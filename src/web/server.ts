@@ -3536,7 +3536,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         const mtime = fs.statSync(file).mtimeMs
         if (mtime === bundleMtime) return
         bundleMtime = mtime
+        const prev = bundle
         bundle = bundleIdInHtml(fs.readFileSync(file, 'utf-8'))
+        // A web-only deploy swapped the app under this server (scripts/web-swap.mjs): open
+        // windows hear it now instead of at their next reconnect or 10-minute check.
+        if (prev && bundle && bundle !== prev) broadcastEvent('web:bundle', { bundle })
       } catch { /* primary gone — keep the last known answer */ }
     }
     refreshBundle()

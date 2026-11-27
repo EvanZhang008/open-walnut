@@ -73,49 +73,56 @@ fi
 # and on 2026-10-28 prod restarted up to 76 times a day. WALNUT_DEVPROD_FORCE=1
 # deploys anyway; a dry run, a rehearsal or a server that does not answer always
 # goes on. WALNUT_DEPLOY_CONFIG_URL: the config to read (tests).
+change_kind=full; served_sha=""; served_bundle=""; runs_sha=""
 if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" && "${WALNUT_DEVPROD_DRY_RUN:-0}" != "1" && "${WALNUT_DEVPROD_REHEARSAL:-0}" != "1" ]]; then
   served_json="$(curl -s -m 3 "${WALNUT_DEPLOY_CONFIG_URL:-http://127.0.0.1:3456/api/config}" 2>/dev/null || true)"
-  served="$("${JS_RUN[@]}" "$served_json" <<'JS' 2>/dev/null || true
-try {
-  const b = JSON.parse(process.argv[2] || '{}').build || {}
-  if (b.dirty === false && /^[0-9a-f]{7,40}$/.test(b.commit || '')) console.log(b.commit)
-} catch {}
-JS
-)"
+  # "<commit> <built-at> <web id>" (dq_config_line): what production serves, and its web app.
+  served=""; served_bundle=""
+  if [[ -f "$DQ_LIB" ]]; then
+    # shellcheck source=lib/deploy-queue.sh
+    source "$DQ_LIB"
+    read -r served _ served_bundle <<< "$(dq_config_line "$served_json")" || true
+    [[ "$served_bundle" != "-" ]] || served_bundle=""
+  fi
   served_sha=""
   [[ -n "$served" ]] && served_sha="$(git -C "$SERVE_ROOT" rev-parse --verify --quiet "$served^{commit}" 2>/dev/null || true)"
   # What production runs the code of: the newest commit a skipped deploy recorded for what it serves.
   runs_sha="$served_sha"
   if [[ -n "$served_sha" && -f "$DQ_LIB" ]]; then
-    # shellcheck source=lib/deploy-queue.sh
-    source "$DQ_LIB"
-    runs_sha="$(dq_runtime_same "$served_sha")"
+    runs_sha="$(dq_runtime_same "$served_sha" "$served_bundle")"
   fi
   if [[ -n "$runs_sha" ]] && git -C "$SERVE_ROOT" merge-base --is-ancestor "$SHA" "$runs_sha"; then
     echo "Deploy skipped: production already serves ${runs_sha:0:12}, which contains ${SHA:0:12} (WALNUT_DEVPROD_FORCE=1 deploys anyway)."
     exit 0
   fi
-  # Nothing production runs changed since what it serves (tests, docs, the iOS app, CI, or no change
-  # at all, as a revert of such a commit): no restart (2026-11-25: 84 restarts in a day, 14 of them
-  # for such commits). The pair is recorded as "<commit> <served>" (dq_runtime_record), so a reader
-  # of what production holds (the queue, walnut-cloud live) counts the commit as live while
-  # production still serves <served>. Anything not on the list restarts, src/ (src/data ships inside
-  # the build) and web/ included. Only a commit on the checkout's HEAD, and inside the deploy
-  # ceiling when one is set.
+  # Nothing production runs changed since the code it runs (tests, docs, the iOS app, CI, or no
+  # change at all, as a revert of such a commit): no restart (2026-11-25: 84 restarts in a day, 14
+  # of them for such commits). Only the web app changed: the queue's runner swaps it under the
+  # running server (deploy-web.sh), no restart either (2026-11-27: 22% of the deploys that
+  # restarted). The pair is recorded as "<commit> <served> <bundle>" (dq_runtime_record), so a
+  # reader of what production holds (the queue, walnut-cloud live) counts the commit as live while
+  # production still serves <served> with that web bundle. Anything else restarts (dq_change_kind),
+  # src/ included (src/data ships inside the build). Only a commit on the checkout's HEAD, and
+  # inside the deploy ceiling when one is set.
   ceil_ref="$(git -C "$SERVE_ROOT" config --get walnut.deployCeiling 2>/dev/null || true)"
-  if [[ -n "$served_sha" && -f "$DQ_LIB" ]] && git -C "$SERVE_ROOT" merge-base --is-ancestor "$served_sha" "$SHA" \
+  if [[ -n "$runs_sha" && -f "$DQ_LIB" ]] && git -C "$SERVE_ROOT" merge-base --is-ancestor "$runs_sha" "$SHA" \
     && git -C "$SERVE_ROOT" merge-base --is-ancestor "$SHA" HEAD \
     && { [[ -z "$ceil_ref" ]] || git -C "$SERVE_ROOT" merge-base --is-ancestor "$SHA" "$ceil_ref" 2>/dev/null; }; then
-    nonruntime='^(tests/|docs/|ios-native/|\.github/|site/|infra/|[^/]+\.md$|([^/]+/)*AGENTS\.md$|vitest[^/]*\.config\.[^/]+$|playwright[^/]*\.config\.[^/]+$)'
-    changed="$(git -C "$SERVE_ROOT" diff --name-only "$served_sha" "$SHA" || true)"
-    runtime="$(printf '%s\n' "$changed" | { grep -v '^$' || true; } | { grep -vE "$nonruntime" || true; })"
-    shipped="$(printf '%s\n' "$changed" | { grep -E '^src/' || true; })"
-    if [[ -z "$runtime" && -z "$shipped" ]]; then
-      dq_runtime_record "$SHA" "$served_sha" || echo "Could not record that production runs ${SHA:0:12}'s code (in $(dq_dir)); it reads live with the next deploy." >&2
-      echo "Deploy skipped: ${SHA:0:12} changes nothing production runs since ${served_sha:0:12} ($(printf '%s\n' "$changed" | grep -c . || true) file(s): tests, docs or the like); no restart (WALNUT_DEVPROD_FORCE=1 deploys anyway)."
+    change_kind="$(dq_change_kind "$runs_sha" "$SHA")"
+    if [[ "$change_kind" == none ]]; then
+      changed_n="$(git -C "$SERVE_ROOT" diff --name-only "$runs_sha" "$SHA" | grep -c . || true)"
+      dq_runtime_record "$SHA" "$served_sha" "$served_bundle" || echo "Could not record that production runs ${SHA:0:12}'s code (in $(dq_dir)); it reads live with the next deploy." >&2
+      echo "Deploy skipped: ${SHA:0:12} changes nothing production runs since ${runs_sha:0:12} ($changed_n file(s): tests, docs or the like); no restart (WALNUT_DEVPROD_FORCE=1 deploys anyway)."
       exit 0
     fi
   fi
+fi
+# The queue's runner judged this target as one that changes only the web app (it skipped the gap):
+# when that no longer holds, it must not restart now. Exit 75 sends it back to the runner, which
+# deploys it with a restart after the gap.
+if [[ "$DQ_IS_RUNNER" == "1" && "${WALNUT_DEPLOY_WEB:-0}" == "1" && "$change_kind" != web ]]; then
+  echo "Web swap refused: ${SHA:0:12} changes more than the web app since what production runs (${runs_sha:0:12}); it deploys with a restart."
+  exit 75
 fi
 
 # The deploy ceiling (`git config walnut.deployCeiling <ref>`, set where a test of main gates
@@ -389,4 +396,29 @@ for dir in "${VENDOR_BUILT[@]}"; do
 done
 
 cd "$BUILD"
+# Only the web app changed, and the queue's runner sent it as such (or the queue is off): build it
+# and swap it under the running server (deploy-web.sh refuses with 75 when it cannot, and the runner
+# then deploys it with a restart after the gap, WALNUT_DEPLOY_WEB=0). Anyone else waited its turn
+# in the queue above.
+if [[ "$DQ_IS_RUNNER" == "1" && "${WALNUT_DEPLOY_WEB:-0}" == "1" && ! -f "$BUILD/scripts/deploy-web.sh" ]]; then
+  echo "Web swap refused: ${SHA:0:12} has no scripts/deploy-web.sh; it deploys with a restart."
+  exit 75
+fi
+if [[ "$change_kind" == web && -f "$BUILD/scripts/deploy-web.sh" ]] \
+  && { [[ "$DQ_IS_RUNNER" == "1" && "${WALNUT_DEPLOY_WEB:-0}" == "1" ]] \
+    || [[ "$DQ_IS_RUNNER" != "1" && "${WALNUT_DEPLOY_QUEUE:-1}" == "0" ]]; }; then
+  web_code=0
+  WALNUT_DEVPROD_SERVE_ROOT="$SERVE_ROOT" WALNUT_DEPLOY_SERVED_COMMIT="$served_sha" bash "$BUILD/scripts/deploy-web.sh" || web_code=$?
+  if (( web_code == 0 )); then
+    new_bundle="$(cat "$BUILD/.walnut-web-swap-bundle" 2>/dev/null || true)"
+    if [[ ! "$new_bundle" =~ ^[A-Za-z0-9_-]+(@[0-9a-f]{7,40})?$ ]] || ! dq_runtime_record "$SHA" "$served_sha" "$new_bundle"; then
+      echo "The web app of ${SHA:0:12} is live, but could not be recorded (in $(dq_dir)); it reads live with the next deploy." >&2
+    fi
+    echo "Deployed ${SHA:0:12}: production serves its web app (${new_bundle:-unknown}) on ${served_sha:0:12}'s server, no restart."
+    exit 0
+  fi
+  if (( web_code == 75 )) && [[ "$DQ_IS_RUNNER" == "1" ]]; then exit 75; fi
+  if (( web_code != 75 )); then exit "$web_code"; fi
+  echo "The web app could not be swapped; deploying with a restart." >&2
+fi
 WALNUT_DEVPROD_SERVE_ROOT="$SERVE_ROOT" bash "$BUILD/scripts/dev-prod.sh"

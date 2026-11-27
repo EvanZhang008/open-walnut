@@ -19,7 +19,18 @@ copied into this checkout's `dist/`, because the local `walnut` CLI runs the op 
 sessions read op text two deploys old). It skips the deploy (exit 0, no restart) when production
 already serves that commit or a later one containing it from a clean build, because every restart
 costs open windows seconds of timeouts (2026-10-28: up to 76 a day); `WALNUT_DEVPROD_FORCE=1`
-deploys anyway. Deploys are queued (`scripts/lib/deploy-queue.sh`, 2026-11-03: 31 restarts in a
+deploys anyway. A commit that changes nothing production runs since the code it runs (tests, docs,
+the iOS app, CI) restarts nothing, and one that changes only the web app (`web/`) restarts nothing
+either: the queue's runner builds it at once, outside the gap, and swaps it under the running server
+(`scripts/deploy-web.sh`, `scripts/web-swap.mjs`, 2026-11-27: 22% of the deploys that restarted).
+The swap copies the new build into the stage tree the server serves from, additively (an open window
+keeps its old chunks) and index.html last; the server names the new bundle within 60 s and pushes
+`web:bundle`, and each window moves to it as `stale-assets.ts` allows. Such a commit counts as live
+while production serves that web app: its bundle and the mark the swap leaves (`.walnut-web-swap`, the
+web id, `dq_config_line`, `dq_runtime_same`); a tree unpacked again or a rollback serves the file's own; one that cannot be swapped (no stage tree, a
+bundle that does not match) restarts after the gap. The host servers' Linux files keep the web app
+they were built with until the next full deploy. Which paths are which: `dq_change_kind`, ratchet
+`tests/scripts/deploy-change-kind.test.ts`. Deploys are queued (`scripts/lib/deploy-queue.sh`, 2026-11-03: 31 restarts in a
 day): production restarts at most once per 20 minutes (`WALNUT_DEPLOY_MIN_GAP_SECS`: 10 until 2026-11-23, when a deploy's stop fell under 5 s, then 5, which made every land its own restart, 104 in a day, each dropping every window's socket and every host's link for a moment; 20 since 2026-11-26, about half the restarts at a median 16 minutes from land to live; the next build starts up to 7 minutes before that, `WALNUT_DEPLOY_PREBUILD_SECS` less the 125 s attempt gap, and only its stop of the old server waits for the gap to pass), and on a Mac whose load is over 4 per CPU it waits for the load to ease, up to 20 minutes after the last restart (`WALNUT_DEPLOY_BUSY_GAP_SECS`, 2026-11-09: four deploys an hour with an iOS build took the load to 400) (critical memory pressure alone waits up to 10 minutes, `WALNUT_DEPLOY_MEM_GAP_SECS`; pressure at warn and a full swap hold nothing: 2026-11-24, the Mac sat at warn with its swap 96% used for hours, and every deploy that waited for it waited its whole bound), a call
 inside the gap waits and goes out with the newest commit of then, and it exits 0 only once
 production serves a build containing its commit (it says which); a host's daemon is replaced
