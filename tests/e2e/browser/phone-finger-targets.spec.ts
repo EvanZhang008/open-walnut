@@ -106,6 +106,16 @@ test('every page the router draws gives every control a 44 px target on a phone'
   await boot(page, '/apps')
   const pluginPages = await page.evaluate(() => [...new Set([...document.querySelectorAll('a[href^="/apps/"]')]
     .map((a) => a.getAttribute('href') || ''))].filter((h) => /^\/apps\/[^/]+/.test(h)))
+  // Every key of the phone's bar sits inside the bar: a key made relative keeps no desktop offset
+  // (2026-11-27 review: the Menu key moved 12 px right and down when it stopped being static).
+  const outside = await page.evaluate(() => {
+    const bar = document.querySelector('.phone-topbar')!.getBoundingClientRect()
+    return [...document.querySelectorAll<HTMLElement>('.phone-topbar button')].filter((b) => {
+      const r = b.getBoundingClientRect()
+      return r.width > 0 && (r.top < bar.top - 0.5 || r.bottom > bar.bottom + 0.5 || r.left < bar.left - 0.5 || r.right > bar.right + 0.5)
+    }).map((b) => b.getAttribute('aria-label') || b.textContent || '')
+  })
+  expect(outside, 'keys that leave the phone bar').toEqual([])
   const found: Record<string, string[]> = {}
   for (const url of [...pages, ...pluginPages, '/settings#usage', '/settings#hooks']) {
     await test.step(url, async () => {

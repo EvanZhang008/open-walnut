@@ -75,9 +75,11 @@
   }
 
   /* In the bar's row, not fixed as on a desktop; relative (never static), so its finger target
-     (buttons.css) stays on the key and never spreads over the bar. */
+     (buttons.css) stays on the key and never spreads over the bar; the desktop's 12 px offsets go,
+     or relative would move the key by them. */
   .app-shell-navigation .phone-topbar .sidebar-toggle {
     position: relative;
+    inset: auto;
     display: inline-flex;
   }
 
