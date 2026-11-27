@@ -128,7 +128,7 @@ test.describe('a short drop of the live read shows no banner', () => {
     const t0 = Date.now();
     const banner = page.locator('.session-history-stale-banner');
     await expect(banner).toBeVisible({ timeout: 15_000 });
-    await expect(banner).toHaveText('Showing cached history. Reconnecting to clouddev...');
+    await expect(banner.locator('.session-history-stale-text')).toHaveText('Showing cached history. Reconnecting to clouddev...');
     expect(Date.now() - t0).toBeGreaterThan(5_000);
   });
 });

@@ -364,6 +364,8 @@
 .tdp-start-queue-label { font-weight: 600; }
 .tdp-start-queue-text { flex: 1 1 240px; color: var(--fg-muted); }
 .tdp-start-queue-actions { display: inline-flex; gap: 6px; }
+/* Its × (NoticeClose) at the line's end, on its first line. */
+.tdp-start-queue-close { align-self: flex-start; margin: -4px -6px -4px auto; }
 /* Withdraw on an answer given for the user (AnsweredForLine.tsx), also on a Board Status row. */
 .answered-for-confirm { display: inline-flex; gap: 6px; }
 .answered-for-btn-compact { margin-left: 6px; }

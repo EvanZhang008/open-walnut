@@ -51,7 +51,7 @@ export function KanbanLeaderRow({ leader }: KanbanLeaderRowProps) {
       </div>
       {open && prompt && (
         <div className="kanban-card-prompt" onPointerDown={(e) => e.stopPropagation()}>
-          <OneCardFrame testId="kanban-card-ask"><KanbanCardPrompt request={prompt} onAnswered={() => undefined} /></OneCardFrame>
+          <OneCardFrame testId="kanban-card-ask" onClose={() => setOpen(false)} closeLabel="Fold it back to the leader's line: it still waits on you" closeTestId="kanban-card-ask-close"><KanbanCardPrompt request={prompt} onAnswered={() => undefined} /></OneCardFrame>
         </div>
       )}
     </div>

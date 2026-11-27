@@ -1,6 +1,7 @@
 import { Component, Fragment, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { log } from '@/utils/log';
 import { errorText } from '@/utils/error-text';
+import { NoticeClose } from './NoticeClose';
 import '@/styles/region-error.css';
 
 /**
@@ -64,6 +65,13 @@ interface RegionErrorBoundaryProps {
   compact?: boolean;
   /** More buttons beside Retry (a column's Close panel). */
   actions?: ReactNode;
+  /** The error's ×, where the owner has a close of its own (a column's Close panel). Without it,
+   *  the × of a small (compact) region folds the error to one line that keeps Retry (the composer's
+   *  error is the only way back to the composer: never an empty region); a whole panel's error is
+   *  the panel itself, closed only this way. */
+  onClose?: () => void;
+  /** What that × says (default "Close"). */
+  closeLabel?: string;
   children: ReactNode;
 }
 
@@ -76,16 +84,19 @@ interface RegionErrorBoundaryState {
   /** It crashed again right after a Retry: the same state brings the same crash, so the
    *  error also offers a reload, which starts every part of the page afresh. */
   again: boolean;
+  /** The person closed this error with its × (a compact region with no onClose): one line with Retry. */
+  folded: boolean;
 }
 
 /** A crash this soon after Retry is the same crash coming back. */
 const AGAIN_WINDOW_MS = 10_000;
 
 export class RegionErrorBoundary extends Component<RegionErrorBoundaryProps, RegionErrorBoundaryState> {
-  state: RegionErrorBoundaryState = { error: null, attempt: 0, retriedAt: 0, again: false };
+  state: RegionErrorBoundaryState = { error: null, attempt: 0, retriedAt: 0, again: false, folded: false };
 
   static getDerivedStateFromError(error: Error): Partial<RegionErrorBoundaryState> {
-    return { error };
+    // A new crash shows in full again, whatever was folded before.
+    return { error, folded: false };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
@@ -104,7 +115,7 @@ export class RegionErrorBoundary extends Component<RegionErrorBoundaryProps, Reg
   }
 
   componentDidUpdate(previous: RegionErrorBoundaryProps): void {
-    if (this.state.error && previous.resetKey !== this.props.resetKey) this.setState({ error: null, retriedAt: 0, again: false });
+    if (this.state.error && previous.resetKey !== this.props.resetKey) this.setState({ error: null, retriedAt: 0, again: false, folded: false });
   }
 
   private retry = () => {
@@ -112,9 +123,15 @@ export class RegionErrorBoundary extends Component<RegionErrorBoundaryProps, Reg
     this.setState((s) => ({ error: null, attempt: s.attempt + 1, retriedAt: Date.now(), again: false }));
   };
 
+  private close = () => {
+    log.info('react', `${this.props.region} error closed`, { region: this.props.region, ...this.props.ids });
+    if (this.props.onClose) this.props.onClose();
+    else this.setState({ folded: true });
+  };
+
   render() {
-    const { region, message, className, compact, actions, children } = this.props;
-    const { error, attempt, again } = this.state;
+    const { region, message, className, compact, actions, onClose, children } = this.props;
+    const { error, attempt, again, folded } = this.state;
     if (!error) {
       return (
         <Fragment key={attempt}>
@@ -123,30 +140,47 @@ export class RegionErrorBoundary extends Component<RegionErrorBoundaryProps, Reg
         </Fragment>
       );
     }
+    const title = message ?? `${ERROR_REGIONS[region]} hit an error${again ? ' again' : ''}.`;
+    const buttons = (
+      <>
+        <button type="button" className="btn btn-sm btn-primary" onClick={this.retry} title={error.message || undefined}>
+          Retry
+        </button>
+        {again && (
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => { log.info('react', `${region} reloaded the page after a repeated crash`, { region, ...this.props.ids }); window.location.reload(); }}
+            title="Load Walnut again: every part of the page starts afresh, your drafts are kept"
+          >
+            Reload
+          </button>
+        )}
+      </>
+    );
+    if (folded) {
+      // Folded by its ×: the words go, the buttons stay, so the region is never empty.
+      return (
+        <div role="status" className={`region-error region-error--compact region-error--folded${className ? ` ${className}` : ''}`}
+          data-error-region={region} data-folded="true">
+          <span className="region-error-title" title={title}>{ERROR_REGIONS[region]}: error</span>
+          <div className="region-error-actions">{buttons}{actions}</div>
+        </div>
+      );
+    }
     return (
       <div
         role="alert"
         className={`region-error${compact ? ' region-error--compact' : ''}${className ? ` ${className}` : ''}`}
         data-error-region={region}
       >
-        <p className="region-error-title">{message ?? `${ERROR_REGIONS[region]} hit an error${again ? ' again' : ''}.`}</p>
+        <p className="region-error-title">{title}</p>
         {!compact && error.message && <p className="region-error-detail">{error.message}</p>}
         <div className="region-error-actions">
-          <button type="button" className="btn btn-sm btn-primary" onClick={this.retry} title={error.message || undefined}>
-            Retry
-          </button>
-          {again && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => { log.info('react', `${region} reloaded the page after a repeated crash`, { region, ...this.props.ids }); window.location.reload(); }}
-              title="Load Walnut again: every part of the page starts afresh, your drafts are kept"
-            >
-              Reload
-            </button>
-          )}
+          {buttons}
           {actions}
         </div>
+        {(compact || onClose) && <NoticeClose onClose={this.close} label={onClose ? (this.props.closeLabel ?? 'Close') : 'Fold this error to one line'} className="region-error-close" />}
       </div>
     );
   }

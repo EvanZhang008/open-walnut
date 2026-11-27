@@ -128,6 +128,8 @@ export interface AskWalnutSlotProps {
    *  page load before the real list arrives. */
   tasksLoading?: boolean;
   setupReady?: boolean;
+  /** The welcome card, leading the slot while setup is needed. Undefined whenever it is not shown
+   *  (its × included: useFirstUseCard), so the slot falls back to its own view, never a blank box. */
   setup?: ReactNode;
   /** Rendered above the body while the inspector is open. */
   inspectorPanel?: ReactNode;

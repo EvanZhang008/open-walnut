@@ -163,6 +163,13 @@
 @keyframes hpb-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .hpb-spinner { animation: none; } }
 .hpb-receipt, .host-connect-retry-msg { color: var(--fg-muted); font-size: var(--font-size-xs); }
+/* A receipt's × (HostReceipt): on its line, after its words. */
+.hpb-receipt-close { margin: -4px 0 -4px 2px; vertical-align: middle; }
+/* A problem row's receipt with its × (HostProblemRows): the words shrink, the × stays at their end. */
+.hpb-receipt-line { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+.hpb-receipt-line > .hpb-receipt { min-width: 0; }
+.hpb-receipt-line > .hpb-receipt-close { flex: none; }
+.hpb-dense:not(.hpb-open) .hpb-receipt-line { flex: 1 1 0; }
 .hpb-ready-text { color: var(--success); font-weight: 500; }
 .hpb-ready .hpb-body { justify-content: center; min-height: 18px; }
 
@@ -183,6 +190,10 @@
    actions sit under the text and the text keeps the session-error font without the 120px scroll clip. */
 .host-gate-bar .session-error-banner-text { font-family: inherit; max-height: none; overflow: visible; }
 .host-gate-body { flex: 0 0 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--font-size-sm); }
+/* Its × (NoticeClose) in the top right corner, over the end of the first line, which leaves it room. */
+.host-gate-bar.has-corner-close { position: relative; }
+.host-gate-close { position: absolute; top: 6px; right: 6px; }
+.host-gate-bar.has-corner-close > .host-gate-close + * { padding-right: 24px; }
 .host-gate-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .session-host-error { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .session-host-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 2px; }

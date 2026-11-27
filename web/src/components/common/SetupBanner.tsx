@@ -27,6 +27,7 @@ import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { checkLocalClaude, fixLocalClaude } from '@/api/local-claude';
 import { claudeBannerView, localNoticeShows, providerDismissKey, providerLabel, type ClaudeBannerView, type LocalNoticeKind } from '@/utils/local-claude-banner';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { clearLocalDismissed, dismissLocal, useLocalDismissed } from '@/utils/host-banner-dismiss';
 import { recheckLocalClaudeNow } from '@/utils/local-claude-recheck';
 import { log } from '@/utils/log';
@@ -173,11 +174,11 @@ export function useLocalClaudeNotice({ health, loading, firstUse, onNavigateSett
     </div>
   );
   // At the card's top right, like every notice's x (2026-11-21 audit; it used to end the
-  // section's last line). The first-use install card has none: it is the page.
+  // section's last line). On first use the welcome card around it (FirstUseSetup) has the one x,
+  // which hides the card: this one would set a dismissal first use never reads.
   const dismissLabel = kind === 'provider' ? PROVIDER_DISMISS_LABEL : LOCAL_DISMISS_LABEL;
-  const dismiss = firstUse && kind === 'install' ? null : (
-    <button type="button" tabIndex={0} className="setup-banner-dismiss ab-local-x wn-notice-x" onClick={onDismiss}
-      aria-label={dismissLabel} title={dismissLabel}>&times;</button>
+  const dismiss = firstUse ? null : (
+    <NoticeClose onClose={onDismiss} label={dismissLabel} className="setup-banner-dismiss ab-local-x" />
   );
   const statusLine = summaryOf(kind, view, health);
   if (kind === 'provider') {

@@ -98,6 +98,8 @@ import { SELECTION_BAR_LAYERS } from './selection-bar-layers';
 import { Chip, ChipGroup, DisclosureButton } from '@/components/controls';
 import '@/styles/header-fit.css';
 import { hasActiveModalOverlay } from '@/hooks/useModalOverlay';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useLineClose } from '@/utils/notice-dismiss';
 
 interface SideQuestionDrawerProps {
   /** The PARENT Claude session id. Drawer is disabled until the session has one. */
@@ -189,6 +191,8 @@ function SideQuestionDrawerBody({
   const instanceId = useId();
   const getState = useCallback(() => getSideThreadsState(sessionId), [sessionId]);
   const state = useSyncExternalStore(subscribeSideThreads, getState, getState);
+  // "This engine can't start side chats": its × hides the line while this drawer is open.
+  const forkLine = useLineClose(state.forkUnsupported ? 'unsupported' : null);
   const openInstance = useSyncExternalStore(
     subscribeSideThreads, getOpenDrawerInstance, getOpenDrawerInstance,
   );
@@ -938,8 +942,11 @@ function SideQuestionDrawerBody({
             </div>
           )}
 
-          {state.forkUnsupported && (
-            <div className="side-question-notice">This engine can&apos;t start side chats</div>
+          {forkLine.shown && (
+            <div className="side-question-notice">
+              This engine can&apos;t start side chats
+              <NoticeClose onClose={forkLine.close} label="Hide this line" testId="side-question-notice-close" className="side-question-notice-close" />
+            </div>
           )}
           {state.error && <div className="side-question-error">{state.error}</div>}
 

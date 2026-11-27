@@ -6,9 +6,14 @@
  *   answers is a host server alone;
  * - `Not connected. Retrying...` with `Retry`, after 5 s without a socket.
  * Panes keep their last data underneath; nothing here reloads the page.
+ * Each has its × (NoticeClose): closed, that row stays hidden until the state changes (the
+ * server answers again), so the next time it happens it shows again.
  */
 import { useLayoutEffect, useRef } from 'react';
 import { useResyncState, runPhoneResync } from '@/hooks/usePhoneResync';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useNoticeDismiss } from '@/utils/notice-dismiss';
+import '@/styles/away-line.css';
 
 /**
  * The row's height joins the bar's in --phone-topbar-h (phone-layout.css), so the
@@ -35,7 +40,14 @@ export const QUICK_VIEW_HREF = '/';
 
 export function PhoneStatusRow() {
   const { offline, macAway, syncing } = useResyncState();
-  const ref = usePublishRowHeight(macAway || offline);
+  // A state that is over (null: connected again) forgets its close, so it shows again the next
+  // time. The other of the two showing is not that: one failed check flips away to offline for a
+  // moment (usePhoneResync probeMac), and that keeps the close (undefined).
+  const away = useNoticeDismiss('phone-status-mac-away', macAway ? 'away' : offline ? undefined : null);
+  const off = useNoticeDismiss('phone-status-offline', offline && !macAway ? 'offline' : macAway ? undefined : null);
+  const shown = macAway ? !away.hidden : offline && !off.hidden;
+  const ref = usePublishRowHeight(shown);
+  if (!shown) return null;
   if (macAway) {
     return (
       <div ref={ref} className="phone-status-row is-mac-away" role="status" data-testid="phone-status-mac-away">
@@ -43,10 +55,10 @@ export function PhoneStatusRow() {
         <a className="phone-status-row-btn" href={QUICK_VIEW_HREF} onClick={(e) => { e.preventDefault(); window.location.assign(QUICK_VIEW_HREF); }}>
           Open quick view
         </a>
+        <NoticeClose onClose={away.dismiss} label="Hide this line while the Mac is away" testId="phone-status-close" className="phone-status-row-close" />
       </div>
     );
   }
-  if (!offline) return null;
   return (
     <div ref={ref} className="phone-status-row is-offline" role="status" data-testid="phone-status-offline">
       <span className="phone-status-row-text">Not connected. Retrying...</span>
@@ -58,6 +70,7 @@ export function PhoneStatusRow() {
       >
         Retry
       </button>
+      <NoticeClose onClose={off.dismiss} label="Hide this line until the connection changes" testId="phone-status-close" className="phone-status-row-close" />
     </div>
   );
 }

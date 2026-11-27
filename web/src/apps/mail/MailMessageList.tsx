@@ -41,6 +41,7 @@ import { FolderIcon } from './mail-icons';
 import { MailGroupedList, MailGroupsFallback, useGroupedMode } from './MailGroupedList';
 import { MailViewMenu } from './MailGroupedHeader';
 import { SearchField } from '@/components/common/SearchField';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { Chip } from '@/components/controls';
 import { EmptyState, LoadingState } from '@/components/common/EmptyState';
 
@@ -363,7 +364,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
           triage pass cannot survive) but covered the last row of a full list: 50 rows loaded, an opaque
           card over one row's snippet, clickable and unreadable. In the flow at the foot, the space comes
           out of the scroller above, so no row moves and no row is hidden.
-          A success retires itself; a refusal waits (see `setMailRowNote`), so it gets a dismiss. */}
+          A success retires itself; a refusal waits (see `setMailRowNote`); either one closes now with its ×. */}
       {snapshot.rowNote && (
         <p className="mail-row-strip" data-testid="mail-row-toast" role="status">
           <span data-testid="mail-row-note">{snapshot.rowNote.text}</span>
@@ -380,18 +381,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
               Show the row
             </button>
           )}
-          {snapshot.rowNote.sticky && (
-            <button
-              type="button"
-              className="mail-pane-strip-close"
-              data-testid="mail-row-note-close"
-              title="Dismiss"
-              aria-label="Dismiss"
-              onClick={() => { clearMailRowNote(); }}
-            >
-              ×
-            </button>
-          )}
+          <NoticeClose onClose={() => { clearMailRowNote(); }} testId="mail-row-note-close" className="mail-row-strip-close" />
         </p>
       )}
     </section>

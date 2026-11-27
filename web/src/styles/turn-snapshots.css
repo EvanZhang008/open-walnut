@@ -21,16 +21,8 @@
 }
 .turns-strip-ok { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--fg); }
 .turns-strip > span { flex: 1 1 auto; min-width: 0; }
-.turns-strip-close {
-  border: none;
-  background: none;
-  color: var(--fg-muted);
-  font-size: var(--font-size-lg);
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 2px;
-}
-.turns-strip-close:hover { color: var(--fg); }
+/* Its × (NoticeClose, the family's look) at the end of the line. */
+.turns-strip > .turns-strip-close { flex: none; margin: -4px -4px -4px 0; }
 
 /* The turn list: a fixed share of the body, like the Files view's tree. */
 .session-diff-tree.turns-list {

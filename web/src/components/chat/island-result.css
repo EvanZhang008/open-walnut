@@ -22,6 +22,8 @@
 .island-result-title {
   font-weight: 600;
 }
+/* Its × at the end of the title row (NoticeClose). */
+.island-result-head > .island-result-close { margin: -4px -6px 0 auto; align-self: flex-start; }
 .island-result-note {
   color: var(--fg-muted);
   font-size: var(--font-size-sm);

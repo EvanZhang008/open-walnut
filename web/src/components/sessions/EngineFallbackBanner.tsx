@@ -21,6 +21,7 @@ import { log } from '@/utils/log';
 import { useEngineDefaultModel, withDefaultModel } from './engine-default-model';
 import { acpModelDisplayName } from './acp-model-id';
 import '@/styles/engine-fallback.css';
+import { NoticeClose } from '@/components/common/NoticeClose';
 
 /** The switched task's first message on the default engine. */
 export const SWITCH_BACK_TEXT = 'Continue the task from where you stopped.';
@@ -114,10 +115,8 @@ export function EngineFallbackBanner({ taskId, sessionId, note, runsOn, onGone }
         <div className="engine-fallback-detail" data-testid="engine-fallback-detail">{words.detail}</div>
         {failure && <div className="engine-fallback-failure" role="alert">{failure}</div>}
       </div>
-      <button type="button" className="engine-fallback-close" onClick={() => void dismiss()} disabled={busy !== null}
-        aria-label="Close" title="Close: the task stays on this engine" data-testid="engine-fallback-dismiss">
-        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-      </button>
+      <NoticeClose onClose={() => void dismiss()} disabled={busy !== null} label="Close: the task stays on this engine"
+        testId="engine-fallback-dismiss" className="engine-fallback-close" />
       {(!sameEngine || note.from === 'claude') && <div className="engine-fallback-actions">
         <button type="button" className="btn btn-sm" onClick={() => void switchBack()} disabled={busy !== null} data-testid="engine-fallback-switch">
           {busy === 'switch' ? 'Switching…' : words.action}

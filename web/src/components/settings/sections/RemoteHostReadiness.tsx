@@ -30,6 +30,8 @@ import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { HostCommands } from '@/components/hosts/HostCommands';
 import { demoHostMessage, demoSignInCopy, DEMO_HOST_SIGN_IN_UNCONFIRMED } from '@/utils/demo-generation';
 import { SetupProgress } from '@/components/common/SetupProgress';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useLineClose } from '@/utils/notice-dismiss';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { DisclosureButton } from '@/components/controls';
 import '@/styles/host-picker-settings.css';
@@ -175,6 +177,8 @@ export function RemoteHostReadiness({ alias, label, status, actions, rowFixes = 
   const unknownSignIn = !!status?.connected && readinessAnsweredThisConnection(status)
     && status.readiness?.claude?.found === true && status.readiness.claude.auth === 'unknown' && !problems.some(p => BLOCKING_READINESS_KINDS.includes(p.kind)) && !status.readiness?.fixing && !actions.fixing;
   const showLastChecked = typeof checkedAt === 'number' && (problems.length > 0 || unknownSignIn || !!unknownProbe || !!checkError || actions.lastTriedAt !== null);
+  // The receipt's × takes it away now; "Last checked" stands in its place, as after its 5 s.
+  const receipt = useLineClose(actions.receipt);
 
   if (problems.length === 0 && info.length === 0 && fixNotes.length === 0 && !unknownSignIn && !unknownProbe && !checkError && !ready && !actions.receipt && actions.failed !== 'check') {
     return null;
@@ -206,8 +210,13 @@ export function RemoteHostReadiness({ alias, label, status, actions, rowFixes = 
         </div>
       )}
       {actions.failed === 'check' && <span className="rh-action-failed" role="status">{CHECK_FAILED_TEXT}</span>}
-      {actions.receipt && <span className="rh-receipt" role="status">{actions.receipt}</span>}
-      {showLastChecked && !actions.receipt && (
+      {receipt.shown && (
+        <span className="rh-receipt-line">
+          <span className="rh-receipt" role="status">{actions.receipt}</span>
+          <NoticeClose onClose={receipt.close} label="Hide this line" testId="rh-receipt-close" className="rh-receipt-close" />
+        </span>
+      )}
+      {showLastChecked && !receipt.shown && (
         <span className="rh-last-checked">{`Last checked ${agoText(minute - (checkedAt as number))}`}</span>
       )}
       {info.map((text) => (

@@ -30,6 +30,8 @@ const SOURCES = listed([':(glob)web/src/**/*.ts', ':(glob)web/src/**/*.tsx', ':(
 /** What each notice-named file is: a popup drawn by the system, or not a popup at all. */
 const KNOWN: Record<string, string> = {
   'web/src/components/common/NoticeCard.tsx': 'the card itself: every notice is drawn as it',
+  'web/src/components/common/NoticeClose.tsx': 'the one × every card and notice closes with, no frame of its own',
+  'web/src/utils/notice-dismiss.ts': 'model: what a notice\'s × closed, kept until its words change, no UI',
   'web/src/contexts/notifications/notice-face.ts': 'model: who a pushed toast is from, its status and where a click goes',
   'web/src/components/common/NotificationToaster.tsx': 'corner: every pushed toast, as NoticeCards',
   'web/src/components/board/kanban/KanbanToasts.tsx': 'corner: a board move\'s toast, as NoticeCards',
@@ -45,6 +47,7 @@ const KNOWN: Record<string, string> = {
   'web/src/components/common/update-notice-dock.ts': 'model: where the update notice docks (the sidebar), no UI',
   'web/src/components/common/update-notice-snooze.ts': 'model: the update notice\'s snooze, no UI',
   'web/src/components/inbox/item-receipt-model.ts': 'model: an inbox letter\'s read receipt, no UI',
+  'web/src/components/common/ClosableNotice.tsx': 'model: a session notice\'s close state (its ×), draws nothing of its own',
   'web/src/components/sessions/ContextFullBanner.tsx': 'inline: a row inside a session\'s chat',
   'web/src/components/sessions/DraftFallbackNotice.tsx': 'inline: a row inside a draft session',
   'web/src/components/sessions/EngineFallbackBanner.tsx': 'inline: a row inside a session\'s chat',

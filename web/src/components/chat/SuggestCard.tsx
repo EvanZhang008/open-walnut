@@ -20,6 +20,7 @@ import { useStableHtml } from '@/hooks/useStableHtml';
 import { invokeAction } from '@/api/actions';
 import { readCardRecord, recordCardAction, terminalVerdict, type ActionVerdict } from '@/utils/suggest-card-state';
 import type { SuggestAction, SuggestCardSpec } from '@/utils/suggest-parse';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import '@/styles/suggest-cards.css';
 
 type Phase = 'idle' | 'confirming' | 'running' | 'done' | 'failed' | 'blocked';
@@ -49,6 +50,9 @@ function staticBlock(action: SuggestAction): string | null {
   if (action.argsError) return action.argsError;
   return null;
 }
+
+/** The record's key for the card's own ×, never an action id a card names (those are its buttons'). */
+const CLOSE_ACTION_ID = '__close';
 
 /**
  * What the click will actually run. The label is free text the model chose, and
@@ -143,6 +147,13 @@ export function SuggestCard({ card, onContentClick }: {
     void fire(action, Boolean(action.confirm) || states[action.id]?.phase === 'confirming');
   }, [card.id, fire, setState, states]);
 
+  /** The card's ×: the same as a Dismiss button of its own, kept (a reload shows it dismissed). */
+  const close = () => {
+    recordCardAction(card.id, CLOSE_ACTION_ID, 'dismissed', 'Closed');
+    log.info('chat', 'suggest card closed', { cardId: card.id });
+    setDismissed(true);
+  };
+
   if (dismissed) {
     return <div className="sug-card sug-card-dismissed">Suggestion dismissed</div>;
   }
@@ -158,7 +169,11 @@ export function SuggestCard({ card, onContentClick }: {
 
   return (
     <div className={`sug-card${cardSettled ? ' sug-card-settled' : ''}`}>
-      {card.title && <div className="sug-card-title">{card.title}</div>}
+      {/* The × ends the title's line; with no title it sits at the top right over the body. */}
+      <div className={`sug-card-head${card.title ? '' : ' is-bare'}`}>
+        {card.title && <div className="sug-card-title">{card.title}</div>}
+        <NoticeClose onClose={close} label="Dismiss this suggestion" testId="sug-card-close" />
+      </div>
       {bodyHtml && (
         <div
           className="sug-card-body markdown-body"

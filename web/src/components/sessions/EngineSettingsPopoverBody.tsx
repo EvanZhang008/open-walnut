@@ -23,6 +23,7 @@ import { EngineSettingRow } from '@/components/settings/sections/EngineSettingRo
 import { log } from '@/utils/log';
 import { SearchField } from '@/components/common/SearchField';
 import { Breakable } from '@/components/common/Breakable';
+import { NoticeClose } from '@/components/common/NoticeClose';
 
 const SLOW_LOAD_MS = 2000;
 const SKELETON_ROWS = 6;
@@ -392,11 +393,7 @@ function StatusSlot({ banner, onDismissBanner, saved }: {
       <div className={`${cls} is-alert`}>
         <div className="engine-settings-popover-alert" role="alert" data-testid="engine-settings-banner">
           <span>{banner}</span>
-          <button type="button" aria-label="Dismiss" onClick={onDismissBanner}>
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
-              <path d="M4 4l8 8M12 4l-8 8" />
-            </svg>
-          </button>
+          <NoticeClose onClose={onDismissBanner} testId="engine-settings-banner-close" />
         </div>
       </div>
     );

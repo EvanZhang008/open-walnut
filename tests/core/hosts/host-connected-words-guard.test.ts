@@ -32,7 +32,6 @@ const NOT_A_HOST_LINK: Record<string, string> = {
   'web/src/components/settings/sections/cloud/ways-model.ts': "the phone's ways in",
   'web/src/components/settings/sections/cloud/device-rows-copy.ts': 'paired devices (a comment)',
   'web/src/components/settings/sections/cloud/browser-access-status.ts': 'browser access through a relay',
-  'web/src/components/settings/inputs/SectionCard.tsx': 'a generic card banner (a comment)',
   'web/src/pages/ConnectExtensionPage.tsx': 'the browser extension',
   'src/web/routes/devices.ts': 'paired devices (a comment)',
   'web/src/components/settings/sections/HostFleetVitals.tsx': 'the uptime lane of the last 12 hours (FleetHistory: the card and the detail), not the link now',

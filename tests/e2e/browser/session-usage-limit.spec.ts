@@ -230,7 +230,7 @@ test('a limited session: the banner, the Limited row, and its three buttons', as
   await expect(col.getByText('The user asked to continue now. Continue the task from where you stopped.').first()).toBeVisible({ timeout: 30_000 })
   // A lasting line says it went on, and that it was the user's Continue now.
   // Before the reset: Walnut's own continue at the reset is off, and the line says so.
-  await expect(col.getByTestId('usage-limit-continued')).toContainText(/^You continued this session at .+\.$/, { timeout: 30_000 })
+  await expect(col.getByTestId('usage-limit-continued').locator('.usage-limit-banner-body')).toContainText(/^You continued this session at .+\.$/, { timeout: 30_000 })
   await expect(col.locator('.session-error-banner:not(.usage-limit-note)')).toHaveCount(0)
   await shot(page, col, '4-continued', 0)
 })
@@ -375,7 +375,7 @@ test('in a half-width column the banner stays compact; your own message ends the
   await expect(page.locator(`[data-task-id="${a.taskId}"] [data-testid="status-card-reason"]`).filter({ hasText: /^Limited/ }))
     .toHaveCount(0, { timeout: 15_000 })
   // The panel says their message took it on, not only that the banner went.
-  await expect(col.getByTestId('usage-limit-continued')).toHaveText(/^Your message continued this session at .+\.$/, { timeout: 15_000 })
+  await expect(col.getByTestId('usage-limit-continued').locator('.usage-limit-banner-body')).toHaveText(/^Your message continued this session at .+\.$/, { timeout: 15_000 })
   // The other session still waits.
   await expect(columnFor(page, b.sid).getByTestId('usage-limit-banner')).toHaveAttribute('data-state', 'waiting')
 })

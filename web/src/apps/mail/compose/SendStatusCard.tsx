@@ -7,6 +7,7 @@
  * the Sent folder can settle it, so a Try again here is an invitation to send the same mail twice.
  * The server refuses that retry with a 409; this is the half that never offers it.
  */
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { AlertCircleIcon, CheckCircleIcon, ClockIcon, DraftsIcon } from '../mail-icons';
 import { selectMailbox } from '../mail-actions';
 import type { MailComposer } from '../mail-store';
@@ -18,6 +19,21 @@ import {
 } from './send-status';
 import { closeMailComposer, editMailComposerDraft } from './compose-actions';
 import { retryMailComposerSend } from './compose-send';
+import { setComposerNotice } from './compose-autosave';
+
+/**
+ * The composer's one sentence about the last thing it did (a refusal, a send that settled), in the
+ * editor and on this card. Its × takes it away now; the next one shows again.
+ */
+export function ComposerNotice({ notice, testId }: { notice: string | null; testId: string }) {
+  if (!notice) return null;
+  return (
+    <p className="mail-compose-notice" data-testid={testId}>
+      <span className="mail-compose-notice-text">{notice}</span>
+      <NoticeClose onClose={() => setComposerNotice(null)} label="Hide this line" testId={`${testId}-close`} className="mail-compose-notice-close" />
+    </p>
+  );
+}
 
 interface Props {
   composer: MailComposer;
@@ -75,7 +91,7 @@ export function SendStatusCard({ composer, inboxMailboxId, onDiscard }: Props) {
         )}
       </dl>
 
-      {composer.notice && <p className="mail-compose-notice" data-testid="mail-send-notice">{composer.notice}</p>}
+      <ComposerNotice notice={composer.notice} testId="mail-send-notice" />
 
       <div className="mail-send-status-actions">
         {status.phase === 'waiting' && (

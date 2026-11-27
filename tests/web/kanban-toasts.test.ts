@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  TOASTS_MAX, TOAST_TTL_MS, dismissToastItem, expiredToasts, foldToasts, nextDeadline, pauseClocks, pushToastItem,
+  TOASTS_MAX, TOAST_TTL_MS, dismissToastItem, expiredToasts, foldToasts, foldedToDismiss, nextDeadline, pauseClocks, pushToastItem,
   resumeClocks, syncClocks, type KanbanToastItem,
 } from '../../web/src/components/board/kanban/kanban-toasts';
 
@@ -47,6 +47,17 @@ describe('kanban toast queue', () => {
     expect(list).toHaveLength(TOASTS_MAX);
     expect(list[0].id).toBe(`t${TOASTS_MAX + 4}`);
     expect(list.some((t) => t.id === 't0')).toBe(false);
+  });
+
+  it('the fold line\'s x dismisses the older moves but keeps a folded failed save with Retry', () => {
+    const failed: KanbanToastItem = { id: 'f', text: 'Not saved', tone: 'error', actions: [{ label: 'Retry', run: () => undefined }] }
+    const bare: KanbanToastItem = { id: 'g', text: 'Not saved', tone: 'error' }
+    let list = [failed, bare, ...['a', 'b'].map((id) => toast(id))].reduceRight<KanbanToastItem[]>((l, t) => pushToastItem(l, t), [])
+    list = ['c', 'd', 'e'].reduce((l, id) => pushToastItem(l, toast(id)), list)
+    const { shown } = foldToasts(list, false)
+    expect(shown.map((t) => t.id)).toEqual(['e', 'd', 'c'])
+    expect(foldedToDismiss(list, shown).sort()).toEqual(['a', 'b', 'g'])
+    expect(foldedToDismiss([failed], [])).toEqual([])
   });
 
   it('shows three and folds the older ones into "+N more moves"', () => {

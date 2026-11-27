@@ -61,6 +61,7 @@ import { taskPath } from '@/utils/task-path';
 import type { Approval } from '@/api/approvals';
 import { ApprovalRows } from '@/components/approvals/ApprovalRow';
 import { AskCardFrame } from '@/components/actions/AskCard';
+import { AskFoldLine, FOLD_WORDS, useAskFold } from '@/components/actions/AskFold';
 import type { ImageAttachment } from '@/api/chat';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
@@ -201,6 +202,15 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
     if (!failedFor) { setFailedFor(askKey); return; }
     if (failedFor !== askKey) { setFailedFor(''); answers.seen(a.taskId); }
   }, [failure, failedFor, askKey, answers, a.taskId]);
+  // Its × folds it to one line in this list, kept per task until it asks something new (AskFold.tsx):
+  // it never answers or snoozes it.
+  const fold = useAskFold('org-alert', a.taskId, askKey);
+  if (fold.folded) {
+    return (
+      <AskFoldLine testId="org-alert-folded" showTestId="org-alert-show" onShow={fold.show} lead={isAsk(a) ? 'Waits on you' : 'To look at'} className="org-alert-folded"
+        words={<span className={FOLD_WORDS}>{a.title}<span aria-hidden="true">{' · '}</span><AgentText compact inline {...askSource} text={summary} shortLinks /></span>} />
+    );
+  }
   // The one ask card (AskCard.tsx): which task, what it asks, a line of why, the box to type in, its
   // buttons and the card's tools (2026-11-20, the user: "this is too complcaited, just thread").
   const link = (
@@ -216,6 +226,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers }: {
     <AskCardFrame
       testId="org-alert"
       className={`org-alert org-ask${own ? ' is-own' : ''}`}
+      onClose={fold.fold} closeLabel="Fold it to one line: it still waits on you" closeTestId="org-alert-close"
       data={{ 'data-task-id': a.taskId, 'data-kind': a.kind, 'data-own': own ? '1' : undefined, 'data-source': a.source, 'data-category': a.category, 'data-vp': vp }}
       title={<><span className="org-ask-mark" data-tone="error" aria-hidden="true"><span className="wn-dot" /></span>{a.via ? (<>
         {/* The top-level task itself, opened as a task: the subtask's letter or Board choice is not its. */}

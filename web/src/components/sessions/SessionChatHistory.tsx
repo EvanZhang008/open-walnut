@@ -12,6 +12,8 @@ import { useHostStatusOf } from '@/hooks/useHostStatus';
 import type { HostStatus } from '@/api/hosts';
 import { draftHash, draftKey, writeDraft, type DraftOrigin } from '@/utils/drafts';
 import { staleBannerText } from './stale-banner-text';
+import { ClosableNotice } from '@/components/common/ClosableNotice';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
 import { sendUuidsOfRow } from '@/utils/send-uuids';
 import { startFlashProbe } from '@/utils/flash-probe';
@@ -29,7 +31,7 @@ import { EMPTY_TOOL_SOURCE } from '@/stream/command-view';
 import { ChatEarlierBlock, useChatEarlier } from './ChatEarlierBlock';
 import { TaskEarlierSessions } from './TaskEarlierSessions';
 import { DeliveryMetaLine } from './DeliveryMetaLine';
-import { HeldSince, LeftQueueNote, QueuedWaitNote } from './QueuedRowNotes';
+import { HeldSince, LeftQueueNote, QueueNote, QueuedWaitNote } from './QueuedRowNotes';
 import { latestTurnStartTop, READER_SCROLL_EVENT } from './phone-session-layer';
 import { downInputResumesAtEnd, followResumes, READER_DOWN_MS, type FollowLeave } from './follow-resume';
 import { liveOutputSize, phoneTurnStartStep, PHONE_TURN_START_WINDOW_MS, type TimelineContent } from './phone-turn-start';
@@ -6241,7 +6243,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {turnLabelFor(optimisticRowId, 'user')}
         <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         {queuedBehind && (
-          <div className="thread-queue-note" role="status">Waits for “{answeringTitle}” to finish.</div>
+          <QueueNote closeKey={`${m.queueId}|${answeringTitle}`}>Waits for “{answeringTitle}” to finish.</QueueNote>
         )}
         {(heldIds.has(m.queueId) || !!m.heldReason) && (m.status === 'pending' || m.status === 'received') && (() => {
           const reason = heldIds.get(m.queueId) ?? m.heldReason ?? HELD_DEFAULT_REASON;
@@ -6250,7 +6252,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           // itself, and Send now does it at once (the same row, no copy).
           const clocked = !!retryAt || isSlowHostReason(reason);
           return (
-            <div className="thread-queue-note session-msg-held-note" role="status">
+            <QueueNote className="session-msg-held-note" closeKey={`${m.queueId}|${reason}`}>
               {reason}{retryAt ? ` ${nextTryLabel(retryAt)}` : ''}
               {/* Past the bound, the server's reason also says how long (queued-wait.ts). */}
               <HeldSince m={{ status: m.status, timestamp: m.timestamp, heldReason: reason }} />
@@ -6261,7 +6263,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 }}>Send now</button>
               )}
               {clocked && sentNow.has(m.queueId) && <span className="session-msg-send-now-sent"> Sending…</span>}
-            </div>
+            </QueueNote>
           );
         })()}
         {/* A bubble that has waited past the bound with no reason from the server says why
@@ -6288,7 +6290,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           />
         )}
         {m.queueNotice && (
-          <div className="thread-queue-note session-msg-queue-notice" role="status">{m.queueNotice}</div>
+          <QueueNote className="session-msg-queue-notice" closeKey={`${m.queueId}|${m.queueNotice}`}>{m.queueNotice}</QueueNote>
         )}
         <OptimisticImagePreviews images={m.images} />
         <QueuedImageThumbs urls={m.images?.length ? undefined : m.imageUrls} />
@@ -7017,11 +7019,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {loadingFrom && !error && (
           <LoadingState size="row" className="session-history-loading-line" testId="session-history-loading-line" title={`Still loading this conversation from ${loadingFrom}…`} />
         )}
-        {stale && !error && !loadingFrom && (
-          <div className="session-history-stale-banner" role="status">
-            {staleBannerText(stale)}
-          </div>
-        )}
+        {/* Its × hides it until its sentence changes; a healthy read (stale null) forgets it. */}
+        <ClosableNotice scope={`session-history-stale:${sessionId}`} signature={stale ? staleBannerText(stale) : loading ? undefined : null}>
+          {(close) => stale && !error && !loadingFrom && (
+            <div className="session-history-stale-banner" role="status">
+              <NoticeClose onClose={close} label="Hide this banner until it says something new" testId="session-history-stale-close" className="session-history-stale-close" />
+              <span className="session-history-stale-text">{staleBannerText(stale)}</span>
+            </div>
+          )}
+        </ClosableNotice>
         {/* A session an engine switch started idle shows its task's earlier sessions instead. */}
         {showsEmpty && (
           emptyHistory === undefined || typeof emptyHistory === 'string' ? (

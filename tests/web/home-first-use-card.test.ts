@@ -27,6 +27,9 @@ describe('where Home shows the welcome card', () => {
     expect(renders).toHaveLength(2);
     expect(renders.some((l) => l.includes("welcomeIn === 'tasks'"))).toBe(true);
     expect(renders.some((l) => l.includes("welcomeIn === 'slot'"))).toBe(true);
-    expect(main).toMatch(/const welcomeIn = firstUseCardPlace\(needsFirstSetup, chatVisible, todoShown\);/);
+    // The place comes from the rule through the card's × (a closed card is no card in either place).
+    expect(main).toMatch(/const \{ place: welcomeIn, close: closeWelcome \} = useFirstUseCard\(needsFirstSetup, chatVisible, todoShown, /);
+    const card = fs.readFileSync(path.join(__dirname, '../../web/src/components/common/FirstUseSetup.tsx'), 'utf8');
+    expect(card).toMatch(/place: hidden \? null : firstUseCardPlace\(needsSetup, chatVisible, taskPanelShown\)/);
   });
 });

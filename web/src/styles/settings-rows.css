@@ -451,3 +451,8 @@ html .settings-group .wn-notice.wn-notice.settings-notice {
 .settings-nowrap {
   white-space: nowrap;
 }
+
+/* Its close (NoticeClose) at the end of the row, on the first line of its words. */
+.settings-notice-with-action { align-items: flex-start; }
+.settings-notice-with-action .settings-notice-action { align-self: center; }
+.settings-notice-close { flex: none; margin: -4px -6px -4px 0; }

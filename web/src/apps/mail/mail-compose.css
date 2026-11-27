@@ -325,6 +325,9 @@
 
 .mail-compose-notice {
   flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   margin: 0 16px 14px;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
@@ -333,6 +336,9 @@
   font-size: var(--font-size-sm);
   line-height: 1.45;
 }
+.mail-compose-notice-text { flex: 1; min-width: 0; }
+/* The sentence's × (NoticeClose), at the end of its first line. */
+.mail-compose-notice-close { flex: none; margin: -4px -4px -4px 0; }
 
 /* ── the footer: the card's own edge, so a long mail cannot hide the send buttons ── */
 

@@ -53,10 +53,12 @@ export function ContinueInNewFolderButton({ sessionId, history, onDone, classNam
   );
 }
 
-export function FolderGoneBanner({ sessionId, cwdGone, onDone }: {
+export function FolderGoneBanner({ sessionId, cwdGone, onDone, onClose }: {
   sessionId: string;
   cwdGone: CwdGone;
   onDone?: (result: ContinueInNewFolderResult) => void;
+  /** Its × (hides it until the folder it names changes; the parked message keeps the button). */
+  onClose?: () => void;
 }) {
   const where = cwdGone.newCwd ? `this task's own folder, ${cwdGone.newCwd}` : "this task's own folder";
   const text = cwdGone.history === 'missing'
@@ -70,6 +72,9 @@ export function FolderGoneBanner({ sessionId, cwdGone, onDone }: {
       testId="folder-gone-banner"
       icon={<WarningTriangleIcon size={14} />}
       actions={<ContinueInNewFolderButton sessionId={sessionId} history={cwdGone.history} onDone={onDone} />}
+      onClose={onClose}
+      closeLabel="Hide this banner"
+      closeTestId="folder-gone-close"
     >
       <div className="session-error-banner-text"><strong>This session's folder is gone:</strong> <NoticeToken text={cwdGone.cwd} code /></div>
       <div className="session-error-banner-text folder-gone-detail">{text}</div>

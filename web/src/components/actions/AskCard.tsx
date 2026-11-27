@@ -11,17 +11,32 @@
 import type { ReactNode } from 'react';
 import { FoldToggle, useTextFold } from '@/components/common/TextFold';
 import { useExperimental } from '@/hooks/useExperimental';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import './ask-card.css';
 
 /**
  * A part that answers (a Board card's live prompt) in the one card, with threads_one_card on
- * (core/org/one-card.ts); off, the part alone, as before it.
+ * (core/org/one-card.ts); off, the part alone, as before it. With `onClose` either way has the ×
+ * at its top right (off, over the part's first line), which folds it, never answers it.
  */
-export function OneCardFrame({ testId, children }: { testId: string; children: ReactNode }) {
-  return useExperimental('threads_one_card') ? <AskCardFrame testId={testId} answer={children} /> : <>{children}</>;
+export function OneCardFrame({ testId, children, onClose, closeLabel, closeTestId }: {
+  testId: string; children: ReactNode; onClose?: () => void; closeLabel?: string; closeTestId?: string;
+}) {
+  const close = onClose ? { onClose, closeLabel, closeTestId } : {};
+  const on = useExperimental('threads_one_card');
+  if (on) return <AskCardFrame testId={testId} answer={children} {...close} />;
+  if (!onClose) return <>{children}</>;
+  return (
+    <div className="one-card-plain has-close">
+      <NoticeClose onClose={onClose} label={closeLabel ?? CLOSE_LABEL} testId={closeTestId} className="ask-card-close" />
+      {children}
+    </div>
+  );
 }
 
-export function AskCardFrame({ title, question, detail, status, answer, tools, className = '', testId, data }: {
+const CLOSE_LABEL = 'Hide this card: it stays the task\'s question';
+
+export function AskCardFrame({ title, question, detail, status, answer, tools, className = '', testId, data, onClose, closeLabel, closeTestId }: {
   /** The task it is from, where the list holds several tasks' asks (a link to open it). */
   title?: ReactNode;
   /** What it asks; absent when its own card below says it (a live prompt). */
@@ -37,6 +52,11 @@ export function AskCardFrame({ title, question, detail, status, answer, tools, c
   className?: string;
   testId: string;
   data?: Record<`data-${string}`, string | undefined>;
+  /** The card's × at its top right (every card can be closed: NoticeClose). Closing an ask never
+   *  answers it: the caller folds it to one line or hides it here, and it stays the task's ask. */
+  onClose?: () => void;
+  closeLabel?: string;
+  closeTestId?: string;
 }) {
   // Its question and why are cut to a few lines; when they are, Show more under them shows them
   // whole in the card (2026-11-21, UI audit: a Yes / No card's why ended in an ellipsis with no way
@@ -46,7 +66,8 @@ export function AskCardFrame({ title, question, detail, status, answer, tools, c
     // A card with a box to type in (utils/truncation-peek-row.ts growsDown): hovering opens nothing,
     // its cut text shows as a tooltip and Show more shows it whole (2026-11-24, the user: only a
     // task's title in the task panel widens; truncation-peek-find.ts peekAllowed).
-    <div className={`ask-card${text.whole ? ' is-whole' : ''} ${className}`.trim()} ref={text.ref} data-testid={testId} data-peek-row="" data-peek-grow="down" {...data}>
+    <div className={`ask-card${text.whole ? ' is-whole' : ''}${onClose ? ' has-close' : ''} ${className}`.trim()} ref={text.ref} data-testid={testId} data-peek-row="" data-peek-grow="down" {...data}>
+      {onClose && <NoticeClose onClose={onClose} label={closeLabel ?? CLOSE_LABEL} testId={closeTestId} className="ask-card-close" />}
       {title ? <div className="ask-card-title">{title}</div> : null}
       {question ? <div className="ask-card-question">{question}</div> : null}
       {detail ? <div className="ask-card-detail">{detail}</div> : null}

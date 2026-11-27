@@ -147,21 +147,7 @@
 
 /* Dismiss. A refusal now waits to be read rather than retiring on a timer, so there has to be a way to
    say "read it" that is not waiting or changing folder. */
-.mail-pane-strip-close {
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  color: var(--fg-muted);
-  font-size: var(--font-size-md);
-  line-height: 1;
-  cursor: pointer;
-}
-
-.mail-pane-strip-close:hover { background: var(--bg-hover); color: var(--fg); }
+.mail-pane-strip > .mail-pane-strip-close { flex: 0 0 auto; }
 
 /* `relative` is kept for the pane's own overlays; the row answer is no longer one of them (see
    `.mail-row-strip`, which is a footer the list gives up rather than a card over a row). */
@@ -1147,6 +1133,8 @@
 }
 
 .mail-row-strip > span { flex: 1; min-width: 0; }
+/* The strip's × (NoticeClose): the line's own height, so the strip does not grow for it. */
+.mail-row-strip-close { flex: none; margin: -4px -4px -4px 0; }
 
 .mail-list-note {
   display: flex;

@@ -10,7 +10,7 @@
  * next one by itself: his reply makes it the node's or the task's move at once, a card of a task
  * below included while his reply is still on its way there (2026-11-21, the user: "i send it, but
  * the thread don't go away ... I have to manually click next"); the Threads view keeps it in Working
- * with his words. Hidden, it is one line that counts them, with Show; that choice is kept
+ * with his words. Its × hides it to one line that counts them, with Show; that choice is kept
  * (usePageView), for every chat alike. With threads_each_question on, the bar and the line also say
  * how many of the chat's threads are being worked on ("· 2 working"), and with none for him the line
  * shows alone and opens the Threads view (2026-11-25: his question in Working read as no thread).
@@ -38,6 +38,7 @@ import { useOpenThread } from './open-thread';
 import type { ActionItem } from '@open-walnut/user-status';
 import type { OrgThread } from '@/api/org-threads';
 import { ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import '@/styles/top-thread.css';
 
 /** The card's blocks of words that scroll inside themselves in the top (top-thread.css). */
@@ -202,12 +203,12 @@ export function TopThread({ task, sessionId, threads, list, at, cursor, decision
           <button type="button" className="top-thread-whole" data-testid="top-thread-whole" onClick={readWhole}
             title="Its words are cut off here: open it whole in the Threads view">Show all</button>
         )}
-        <button type="button" className="top-thread-hide" data-testid="top-thread-hide" aria-expanded={true} onClick={() => setHidden(true)}
-          title="Hide it to one line that counts the threads">Hide <span aria-hidden="true">{'˄'}</span></button>
+        {/* Its × folds the top to one line that counts the threads (the Show line), never closes one. */}
+        <NoticeClose onClose={() => setHidden(true)} label="Fold it to one line that counts the threads" testId="top-thread-hide" className="top-thread-close" />
       </div>
       <ul className="org-thread-list top-thread-list" data-testid="top-thread-list">
         <ThreadItem key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} state={threads} onFollowUp={followUp}
-          name={orgDisplayTitle(task)} now={at} snoozed={false} owner={task} focused={focused === t.id} {...(readWhole ? { onReadWhole: readWhole } : {})} />
+          name={orgDisplayTitle(task)} now={at} snoozed={false} owner={task} focused={focused === t.id} foldable={false} {...(readWhole ? { onReadWhole: readWhole } : {})} />
       </ul>
     </div>
   );

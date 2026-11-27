@@ -15,7 +15,8 @@
  * right"): each ask is its own page, with its own words, options and box, and "‹ 1/3 ›" pages
  * through them. An answered page stays, marked with what was said, and opens again with the reason
  * when the server says no; a snoozed page greys out with its time and an Unsnooze, and comes back
- * by itself then.
+ * by itself then. Its × never answers: on a row it folds the ask on show to one line that says it
+ * waits, with Show, kept per item (AskFold.tsx); in the strip it folds the strip (onHide).
  *
  * The same block is drawn in two places, from the one list, so an item answered or snoozed in one
  * goes from both (2026-11-19, the user: "我点进去之后，如果它有 needs you，它直接就能显示在……
@@ -41,6 +42,7 @@ import { log } from '@/utils/log';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { AskCardFrame } from './AskCard';
+import { AskFoldLine, FOLD_WORDS, asksNothingNew, foldIds, useAskFold } from './AskFold';
 import { AskPager, usePageGestures } from './AskPager';
 import { anyOpen, useAskPages, type AnsweredAsk } from './ask-pages';
 import './action-needed.css';
@@ -130,14 +132,16 @@ const settled: AnswerSettle = () => {};
 /** One thing a task asks of the user, as the one ask card (AskCard.tsx): what it asks, a line of
  *  why, the box to type in and its buttons, Snooze last. `onAnswer` marks it answered the moment an
  *  answer goes (the block's own pages); alone it waits for the status to drop it. */
-export const AskCard = memo(function AskCard({ task, item, onAnswer = () => settled, failure, below, threadId, answered, pager, hide }: {
+export const AskCard = memo(function AskCard({ task, item, onAnswer = () => settled, failure, below, threadId, answered, pager, onClose, closeLabel, closeTestId }: {
   task: Task; item: ActionItem; onAnswer?: (id: string, said?: string) => AnswerSettle; failure?: AnswerFailure;
   /** Answered from here: its words stay, its answer is the line that says what was said. */
   answered?: AnsweredAsk;
   /** The block's "‹ 1/3 ›", beside Snooze. */
   pager?: ReactNode;
-  /** The strip's Hide, beside Snooze: it folds the strip to one line (SessionActionStrip.tsx). */
-  hide?: ReactNode;
+  /** The card's × (AskCardFrame): it folds the card to one line where it is, never answers it. */
+  onClose?: () => void;
+  closeLabel?: string;
+  closeTestId?: string;
   /** Its own card is in the chat below (a session's strip, its own live prompt): point at it. */
   below?: boolean;
   /** Drawn on the thread that holds this ask (core/org/thread-report-ask.ts): the answer is filed under it. */
@@ -209,7 +213,8 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
         {note ? <div className="org-answer-error" role="alert" data-testid="action-snooze-note">{note}</div> : null}
       </>}
       answer={answer}
-      tools={snooze || pager || hide ? <>{pager}{hide}{snooze}</> : undefined}
+      tools={snooze || pager ? <>{pager}{snooze}</> : undefined}
+      {...(onClose ? { onClose, closeLabel, closeTestId } : {})}
     />
   );
 });
@@ -220,8 +225,8 @@ export const AskCard = memo(function AskCard({ task, item, onAnswer = () => sett
  *  variant shows one ask at a time, the same pages. */
 export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', sessionId, accepts, onHide }: {
   task: Task; variant?: 'row' | 'strip' | 'card'; sessionId?: string;
-  /** The strip only: its Hide, which folds it to one line above the chat (2026-11-23, the user, on a
-   *  question card that took half his small screen: asking for a way to collapse it). */
+  /** The strip only: its card's ×, which folds it to one line above the chat (2026-11-23, the user,
+   *  on a question card that took half his small screen: asking for a way to collapse it). */
   onHide?: () => void;
   /** Only the task's items this place shows (the strip above a top thread leaves out the ones that
    *  are threads); answered pages kept from another place obey it too. */
@@ -265,9 +270,13 @@ export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', 
       ?? el.querySelector<HTMLElement>('button:not(:disabled), textarea');
     want?.focus({ preventScroll: true });
   });
+  const strip = variant === 'strip';
+  // On a row the × folds the task's asks to one line, kept per task while it asks nothing new
+  // (AskFold.tsx): paging from the line stays folded, a new ask opens it. The strip's × folds the
+  // whole strip instead (onHide, SessionActionStrip.tsx).
+  const fold = useAskFold('action-asks', strip ? '' : task.id, foldIds(pages.filter((p) => !book.answered[p.id]).map((p) => p.id)), asksNothingNew);
   if (!count || !anyOpen(pages, book.answered) || task.phase === 'COMPLETE') return null;
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
-  const strip = variant === 'strip';
   const item = pages[index]!;
   // A send that failed on a page he left: the place says so until he goes back to it.
   const unsent = pages.filter((p) => p.id !== item.id && failures[p.id] && !book.answered[p.id]).length;
@@ -285,13 +294,19 @@ export const ActionNeeded = memo(function ActionNeeded({ task, variant = 'row', 
       <div ref={holder} className="ask-pages" data-testid="action-pages" {...gestures}
         onFocus={() => { focusInside.current = true; }}
         onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) focusInside.current = false; }}>
-        <AskCard key={item.id} task={task} item={item} onAnswer={onAnswer} failure={failures[item.id]} pager={pager}
-          {...(strip && onHide ? { hide: (
-            <button type="button" className="btn btn-sm action-strip-hide" data-testid="action-strip-hide"
-              onClick={onHide} title="Fold it to one line above the chat">Hide <span aria-hidden="true">{'˄'}</span></button>
-          ) } : {})}
-          {...(book.answered[item.id] ? { answered: book.answered[item.id] } : {})}
-          below={strip && !!sessionId && item.sessionId === sessionId && ANSWERS[item.kind] === 'prompt'} />
+        {fold.folded ? (
+          // The page it is on: one answered here reads so, never "Waits on you".
+          <AskFoldLine testId="action-fold-line" showTestId="action-fold-show" onShow={fold.show} extra={pager}
+            {...(book.answered[item.id] ? { lead: 'Answered', mark: <i className="top-thread-dot" aria-hidden="true" /> } : { lead: 'Waits on you' })}
+            words={<AgentText compact inline {...taskTextSource(task, 'needs')} className={FOLD_WORDS} text={item.summary} shortLinks testId="action-fold-title" />} />
+        ) : (
+          <AskCard key={item.id} task={task} item={item} onAnswer={onAnswer} failure={failures[item.id]} pager={pager}
+            {...(strip
+              ? onHide ? { onClose: onHide, closeLabel: 'Fold it to one line above the chat', closeTestId: 'action-strip-hide' } : {}
+              : { onClose: fold.fold, closeLabel: 'Fold it to one line: it still waits on you', closeTestId: 'action-item-close' })}
+            {...(book.answered[item.id] ? { answered: book.answered[item.id] } : {})}
+            below={strip && !!sessionId && item.sessionId === sessionId && ANSWERS[item.kind] === 'prompt'} />
+        )}
       </div>
     </div>
   );

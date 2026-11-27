@@ -25,10 +25,13 @@ import { DRAFT_FLUSH_EVENT } from '@/utils/unsaved-work';
 import { timeAgo } from '@/utils/time';
 import { isBoolean, usePageView, usePageViewOf } from '@/utils/view-memory';
 import { EmptyState, LoadingState, UnavailableState } from '@/components/common/EmptyState';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useNoticeDismiss } from '@/utils/notice-dismiss';
 import { DrawingConflictError, drawingApi, drawingErrorMessage, requestDiagram, type DrawingApi } from './drawing-api';
 import { exportFileName, otherDrawings, sceneElementCount, sceneHasContent, sceneText, type DrawingListItem, type DrawingScene } from './drawing-scene';
 import { DrawingSync, NOT_SAVED_YET, hasUnsavedSketch, newSketchKey, sketchDraftKey, type DrawingSnapshot, type DrawingSource } from './drawing-sync';
 import { tabDrawingStore } from './drawing-store';
+import { drawingErrorWords } from './drawing-error-line';
 import { addCatalogLibrary, tabLibrary } from './drawing-library';
 import { isFullscreenShortcut, liftFixedAncestors } from './drawing-overlay';
 import { LibraryBrowser } from './LibraryBrowser';
@@ -673,6 +676,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const assistantShown = canAssist && assistantKept;
   // A closed panel takes no ask: one left from before never lands on the next drawing it opens on.
   useEffect(() => { if (!assistantShown) setAssistantRequest(null); }, [assistantShown]);
+  // The notice line: an answer to what the person just did (`notice`, its × takes it away now), else
+  // the drawing's own error (its × hides it until the error says something else; a good save forgets it).
+  const errorWords = drawingErrorWords(shown);
+  const errorClose = useNoticeDismiss(`drawing-error:${id}`, errorWords);
+  const noticeLine = notice ?? (errorWords && !errorClose.hidden ? errorWords : null);
 
   return (
     <div ref={root} className="drawing-workspace" data-files-shown={filesShown ? 'true' : 'false'} data-theme-resolved={theme}
@@ -763,7 +771,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         )}
         {/* A notice answers what the person just did, so it shows over a conflict too (a refusal
             hidden behind it read as a button that does nothing, 2026-11-20). */}
-        {(notice || (snap?.error && !conflict && !((state === 'missing' || state === 'error') && snap?.unsaved))) && <p className="drawing-workspace-notice" role="alert">{notice ?? snap?.error}</p>}
+        {noticeLine && (
+          <p className="drawing-workspace-notice" role="alert">
+            <span className="drawing-workspace-notice-text">{noticeLine}</span>
+            <NoticeClose onClose={notice ? () => setNotice(null) : errorClose.dismiss} label="Hide this line" testId="drawing-notice-close" className="drawing-workspace-notice-close" />
+          </p>
+        )}
         {snap?.warning && (
           <div className="drawing-workspace-warning" role="status">
             <span>{snap.warning}</span>

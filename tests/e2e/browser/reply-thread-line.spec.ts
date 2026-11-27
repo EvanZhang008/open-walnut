@@ -297,7 +297,7 @@ test('top_thread on: a line about a thread the top lists steps the top to it', a
   await lineUnder(page, words).getByTestId('msg-reply-thread-open').click()
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
   await expect(page.locator(`[data-testid="org-threads"] [data-testid="org-thread"][data-thread-id="${other}"]`)).toHaveAttribute('data-focused', 'true')
-  // The Threads beside it: the top's line is gone too. The top's Hide is kept for every chat: put it back.
+  // The Threads beside it: the top's line is gone too. The top's fold (its ×) is kept for every chat: put it back.
   await expect(top).toHaveCount(0)
   await showTasks(page.getByTestId('org-detail'))
   await top.getByTestId('top-thread-show').click()

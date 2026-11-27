@@ -16,6 +16,8 @@ import { usageLimitAction, type UsageLimitAction } from '@/api/sessions';
 import { limitName, limitTimeWords } from '@open-walnut/user-status';
 import { log } from '@/utils/log';
 import { badge } from '@/components/common/badge';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useNoticeDismiss } from '@/utils/notice-dismiss';
 import '@/styles/usage-limit.css';
 
 /** "3:00 PM", or "Thu 3:00 PM" when it is not today: the task row's words too (limitedLine). */
@@ -148,6 +150,9 @@ export function UsageLimitBanner({ sessionId, usageLimit, onChange }: {
   // Continue now before the reset may meet the limit again: the banner says what happens then.
   const early = !!usageLimit.resetsAt && Date.parse(usageLimit.resetsAt) > now;
   const resumed = usageLimit.state === 'resumed';
+  // Its × hides it until its state moves (waiting, off, gave up) or a new limit stops the session.
+  const closed = useNoticeDismiss(`session-usage-limit:${sessionId}`, `${usageLimit.since}|${usageLimit.state}`);
+  if (closed.hidden) return null;
   return (
     // session-error-banner: the base of every banner between the panel's glass header and the chat
     // (the rules that push it below the header key on it); usage-limit.css gives it its own look.
@@ -161,6 +166,7 @@ export function UsageLimitBanner({ sessionId, usageLimit, onChange }: {
         <div className="usage-limit-banner-detail">{detail}</div>
         {failure && <div className="usage-limit-banner-failure" role="alert">{failure}</div>}
       </div>
+      <NoticeClose onClose={closed.dismiss} label="Hide this banner until it says something new" testId="usage-limit-close" className="usage-limit-close" />
       {!resumed && (
         <div className="usage-limit-banner-actions">
           {/* Before the reset it is a try (the limit may refuse it again), so not the primary button;
@@ -245,9 +251,7 @@ export function UsageLimitContinuedNote({ sessionId, note, onDismiss }: {
         <svg viewBox="0 0 16 16" width="16" height="16"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
       </span>
       <div className="usage-limit-banner-body">{usageLimitContinuedText(note, Date.now())}</div>
-      <button type="button" className="usage-limit-note-close" onClick={dismiss} aria-label="Dismiss" title="Dismiss">
-        <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-      </button>
+      <NoticeClose onClose={dismiss} testId="usage-limit-continued-close" className="usage-limit-close" />
     </div>
   );
 }

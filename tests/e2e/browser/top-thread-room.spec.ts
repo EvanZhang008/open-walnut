@@ -12,7 +12,7 @@
  *      Snooze are inside the window and inside the top block (never pushed out or covered).
  *   2. The long summary scrolls inside the card (its own scroll, not the page's).
  *   3. A shorter window: still a third of the new height (a share of the body, never a fixed size).
- *   4. Hide makes the top one line; Show brings the card back, held to the same third.
+ *   4. The × makes the top one line; Show brings the card back, held to the same third.
  *   6. A 1280 x 800 window (2026-11-20, the proof recording: the stepper, head, box and buttons
  *      filled the third and the summary got 0 px): the summary keeps at least two lines, the top
  *      growing to at most a half for it; "Conversation" opens a list that shows and scrolls inside
@@ -198,8 +198,8 @@ test('the top keeps to a third of the panel: the long summary scrolls in its car
   await video.hold(1000)
   await page.setViewportSize({ width: 1280, height: 1550 })
 
-  // 4. Hide: one line. Show: the card again, held to the same third.
-  await video.caption('Hide makes it one line; Show brings it back')
+  // 4. The ×: one line. Show: the card again, held to the same third.
+  await video.caption('The × makes it one line; Show brings it back')
   await card.getByTestId('top-thread-hide').click()
   await expect(card).toHaveAttribute('data-hidden', 'true')
   const hiddenTop = await box(panel.getByTestId('session-top'))

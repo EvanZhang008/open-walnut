@@ -12,6 +12,7 @@ import { log } from '@/utils/log';
 import { copyTextRobust } from '@/utils/clipboard';
 import { ISLAND_RESULT_MAX, isCommandLike } from './island-runtime';
 import { dismissIslandResult, markIslandResultSent, readIsland, type IslandResult } from './island-store';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import './island-result.css';
 
 type SendState = 'idle' | 'sending' | 'failed';
@@ -86,6 +87,8 @@ export function IslandResultCard({ storeKey, result, onChange, sendResult }: {
       <div className="island-result-head">
         <span className="island-result-title">{result.sent ? 'Sent to the AI' : 'Result for the AI'}</span>
         {!result.sent && <span className="island-result-note">Nothing is sent until you press Send.</span>}{/* empty-state-ok: a help line beside the result's title */}
+        {/* Its × (the card's one close) dismisses the result: nothing is sent. */}
+        <NoticeClose onClose={dismiss} label="Dismiss result" testId="island-result-dismiss" className="island-result-close" />
       </div>
       <pre className="island-result-text">{result.text}</pre>
       <div className="island-result-actions">
@@ -113,9 +116,6 @@ export function IslandResultCard({ storeKey, result, onChange, sendResult }: {
         )}
         <button type="button" className="island-result-secondary" onClick={() => { void copy(); }}>
           {copied ? 'Copied' : 'Copy'}
-        </button>
-        <button type="button" className="island-result-secondary" onClick={dismiss} aria-label="Dismiss result">
-          Dismiss
         </button>
       </div>
     </div>

@@ -11,8 +11,9 @@
 import { memo, type PointerEvent, type MouseEvent } from 'react';
 import type { FilterDim } from './filter-bar-types';
 import { hiddenByText, type HiddenReason } from './filter-predicate';
-import { ICON_CLOSE } from '../common/Icons';
 import { EmptyState } from '../common/EmptyState';
+import { NoticeClose } from '../common/NoticeClose';
+import { useLineClose } from '@/utils/notice-dismiss';
 
 export interface TodoFilterEmptyProps {
   onClear(): void;
@@ -45,12 +46,21 @@ export interface FilterOverrideReasonsProps {
 
 const stop = (e: PointerEvent | MouseEvent) => e.stopPropagation();
 
+/** The line and the pill go with their × at once (the row stays where it is); a new override, or
+ *  other words, shows again. */
 export const FilterOverrideReasons = memo(function FilterOverrideReasons({ reasons, created, onShow }: FilterOverrideReasonsProps) {
   const title = hiddenByText(reasons);
+  const line = useLineClose(`${created ? 'created' : 'hidden'}|${title}`);
+  if (!line.shown) return null;
+  // A press on it never reaches the row (its open or its drag), as the Show links.
+  const close = (testId: string) => (
+    <span onPointerDown={stop}><NoticeClose onClose={line.close} label="Hide this line: the task stays in the list" testId={testId} className="task-filter-override-close" /></span>
+  );
   if (created) {
     return (
       <div className="task-filter-override-row">
         <span className="badge task-filter-outside-pill" data-testid="filter-outside-pill" title={title}>Outside filters</span>
+        {close('filter-outside-close')}
       </div>
     );
   }
@@ -72,6 +82,7 @@ export const FilterOverrideReasons = memo(function FilterOverrideReasons({ reaso
           </button>
         </span>
       ))}
+      {close('filter-override-close')}
     </div>
   );
 });
@@ -99,9 +110,7 @@ export const OffViewNote = memo(function OffViewNote({ title, here, there, onSho
         <button type="button" className="btn btn-sm todo-offview-show" data-testid="todo-offview-show" onPointerDown={stop} onClick={(e) => { stop(e); onShow(); }}>
           Show in {there}
         </button>
-        <button type="button" className="btn btn-icon btn-sm todo-offview-dismiss" aria-label="Dismiss" title="Dismiss" onPointerDown={stop} onClick={(e) => { stop(e); onDismiss(); }}>
-          {ICON_CLOSE}
-        </button>
+        <span className="todo-offview-dismiss" onPointerDown={stop}><NoticeClose onClose={onDismiss} testId="todo-offview-dismiss" /></span>
       </span>
     </div>
   );

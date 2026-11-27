@@ -1,11 +1,13 @@
 import { MarkdownEditorPanel } from './MarkdownEditorPanel';
 import { CONFLICT_WORDS } from './locked-note-saves';
 import { useLockedNoteEditor } from './useLockedNoteEditor';
+import { useState } from 'react';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { ICON_LOCK, ICON_UNLOCK } from '@/components/common/Icons';
 import { EmptyState } from '@/components/common/EmptyState';
 import { NoticeCard } from '@/components/common/NoticeCard';
+import { AskFoldLine, FOLD_WORDS } from '@/components/actions/AskFold';
 import { CoverButton } from './HiddenNoteCover';
 import { LockedNoteKeyRestore } from './LockedNoteKeyRestore';
 import { noteName } from './locked-note';
@@ -18,6 +20,9 @@ import { noteName } from './locked-note';
  * attachment: saves go sealed, and the editor has no Ask, raw view or images. The text, its saves
  * and merges live in useLockedNoteEditor.ts; this is the view.
  */
+
+/** What the page's unsaved-work check (utils/unsaved-work.ts) says of an unsettled conflict. */
+const UNSAVED_WORDS = 'A change to a locked note, not saved';
 
 export interface LockedNotePanelProps {
   notePath: string;
@@ -33,6 +38,10 @@ export function LockedNotePanel({ notePath, onNavigate, onLocate, onBreadcrumbNa
   const confirm = useConfirm();
   const note = useLockedNoteEditor(notePath);
   const { editorDoc, error, conflict } = note;
+  // The conflict card's ×: folds it to one line ("Not saved · a conflict waits for your pick", Show)
+  // for this conflict only (another one opens in full). It picks no version: saves still wait for
+  // Keep mine or Use the other version, and the page still counts it as unsaved work.
+  const [foldedConflict, setFoldedConflict] = useState<typeof conflict>(null);
 
   const hideNow = useLeanCallback(async () => {
     if (await note.hideIfSaved()) return;
@@ -87,13 +96,22 @@ export function LockedNotePanel({ notePath, onNavigate, onLocate, onBreadcrumbNa
 
   return (
     <>
-      {conflict && (
+      {conflict && foldedConflict === conflict && (
+        <div className="notes-fold notes-fold--locked" data-walnut-unsaved={UNSAVED_WORDS}>
+          <AskFoldLine testId="locked-note-conflict-folded" showTestId="locked-note-conflict-show" lead="Not saved"
+            words={<span className={FOLD_WORDS}>a conflict waits for your pick</span>} onShow={() => setFoldedConflict(null)} />
+        </div>
+      )}
+      {conflict && foldedConflict !== conflict && (
         <NoticeCard
           className="notes-locked-notice"
           role="alert"
           line={CONFLICT_WORDS}
           testId="locked-note-conflict"
-          data={{ 'walnut-unsaved': 'A change to a locked note, not saved' }}
+          data={{ 'walnut-unsaved': UNSAVED_WORDS }}
+          onClose={() => setFoldedConflict(conflict)}
+          closeLabel="Fold to one line: nothing is picked, your version stays unsaved"
+          closeTestId="locked-note-conflict-close"
         >
           <div className="notes-reload-banner-actions">
             <button type="button" className="btn btn-sm btn-primary" onClick={note.keepMine} data-testid="locked-note-keep-mine">Keep mine</button>

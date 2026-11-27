@@ -10,6 +10,8 @@ import { useNavigate } from 'react-router-dom';
 import { parseNotSignedIn, type NotSignedIn } from '../../../../src/core/agents/engine-sign-in-words';
 import { openEngineSignIn } from '@/components/settings/sections/engine-sign-in-model';
 import { log } from '@/utils/log';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useLineClose } from '@/utils/notice-dismiss';
 
 export { parseNotSignedIn };
 
@@ -33,9 +35,15 @@ export function EngineSignInNote({ signIn, host, sessionId, waits, onRetry, onDi
   onDiscard: () => void;
 }) {
   const open = useOpenSignIn(signIn, host, sessionId);
+  // Its × folds the words to "Waiting for a sign-in": the message keeps waiting, and the actions
+  // row (Open Settings to sign in, Retry, Discard) stays, the only place they are.
+  const words = useLineClose(`${signIn.engine}|${signIn.line}|${waits ? 'waits' : ''}`);
+  const line = `${signIn.line}${waits ? ' Sign in and this message goes out by itself.' : ''}`;
   return (
     <div className="thread-queue-note session-msg-held-note session-msg-agent-wait" role="status" data-engine-sign-in={signIn.engine}>
-      <div>{signIn.line}{waits ? ' Sign in and this message goes out by itself.' : ''}</div>
+      {words.shown
+        ? <div>{line}<NoticeClose onClose={words.close} label="Hide the words: the message still waits for the sign-in, its buttons stay" testId="engine-sign-in-close" className="queue-note-close" /></div>
+        : <div className="session-msg-agent-wait-folded" title={line} data-testid="engine-sign-in-folded">Waiting for a sign-in</div>}
       {/* The button family (styles/buttons.css): the way on is the one action key, Retry and Discard the quiet ones. */}
       <div className="session-msg-queued-actions">
         <button type="button" className="btn btn-sm" onClick={open} data-testid="engine-sign-in-open-settings">Open Settings to sign in</button>

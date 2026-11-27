@@ -205,6 +205,8 @@
   pointer-events: none;
 }
 .session-servers-notice svg { flex-shrink: 0; color: var(--success); }
+/* Its × (NoticeClose): the one part of the toast that takes the pointer. */
+.session-servers-notice-close { pointer-events: auto; flex: none; margin: -4px -8px -4px 0; }
 /* The usual "stop" mark: a square in a ring. */
 .session-server-stop-glyph { display: block; }
 

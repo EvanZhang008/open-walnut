@@ -9,6 +9,8 @@ import {
   subscribeSessionSupervision, type SupervisionSnapshot,
 } from '@/stores/session-supervision-store';
 import { ToggleSwitch } from '@/components/controls';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useNoticeDismiss } from '@/utils/notice-dismiss';
 import '@/styles/session-supervision.css';
 
 const STATE_LABELS = {
@@ -97,13 +99,8 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
   const forced = stopPending || stopping || !!failedStop || !!error || supervision?.state === 'blocked'
     || supervision?.reason === 'launch-failed' || (supervision && (unavailable || value?.available === false))
     || (recovering && !activeCron);
-  if (!forced) return null;
   const enabled = requestedEnabled ?? supervision?.enabled ?? false;
   const stale = unavailable || value?.available === false;
-  // A phone shows no card that only says the recovery status cannot be read
-  // (N29): it has no action, and for a session that is gone the timeline's
-  // one sentence already says so. A stop in flight or an error still shows.
-  if (stale && !stopping && !stopPending && (!error || /not found/i.test(error)) && isPhoneLayout()) return null;
   const title = stopping ? 'Requesting stop'
     : stopPending ? 'Stop pending host confirmation'
     : failedStop ? 'Stop not confirmed'
@@ -114,18 +111,30 @@ export function SessionSupervisionBar({ sid, snapshot, onRetryStop, archived }: 
     ? 'The session may still run until its host confirms the stop. Automatic recovery will also be disabled.'
     : failedStop ? failedStop.error ?? 'The host never confirmed the stop; the session may still be running.'
     : supervision?.reason ? REASONS[supervision.reason] ?? supervision.reason : '';
+  // Its × hides it until what it says changes; once recovery needs nobody (or the read is still
+  // loading: kept) a later trouble shows again.
+  const closed = useNoticeDismiss(`session-supervision:${sid}`,
+    forced ? `${title}|${detail}|${error ?? ''}` : snapshot.loading ? undefined : null);
+  if (!forced || closed.hidden) return null;
+  // A phone shows no card that only says the recovery status cannot be read
+  // (N29): it has no action, and for a session that is gone the timeline's
+  // one sentence already says so. A stop in flight or an error still shows.
+  if (stale && !stopping && !stopPending && (!error || /not found/i.test(error)) && isPhoneLayout()) return null;
   const change = (next: boolean) => { void changeSessionSupervision(sid, next); };
   return (
     <section className="session-supervision" aria-label="Cron recovery" data-state={stopPending ? 'stop-pending' : failedStop ? 'stop-failed' : supervision?.state ?? 'unknown'}>
       <div className="session-supervision-heading">
         <strong role="status">{title}</strong>
-        {supervision && !archived && (
-          <label className="session-supervision-toggle" title="Only changes automatic recovery; it does not stop a running session">
-            <ToggleSwitch size="sm" aria-label="Automatic cron recovery" checked={enabled}
-              disabled={writing || stopPending || stale} onChange={change} />
-            Auto-recover
-          </label>
-        )}
+        <span className="session-supervision-end">
+          {supervision && !archived && (
+            <label className="session-supervision-toggle" title="Only changes automatic recovery; it does not stop a running session">
+              <ToggleSwitch size="sm" aria-label="Automatic cron recovery" checked={enabled}
+                disabled={writing || stopPending || stale} onChange={change} />
+              Auto-recover
+            </label>
+          )}
+          <NoticeClose onClose={closed.dismiss} label="Hide this until it says something new" testId="session-supervision-close" />
+        </span>
       </div>
       {detail && <p>{detail}</p>}
       {error && <p role={unreachable ? 'status' : 'alert'}>{error}</p>}

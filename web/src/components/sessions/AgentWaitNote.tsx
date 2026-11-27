@@ -15,6 +15,8 @@ import { agentCannotRun, claudeBannerView } from '@/utils/local-claude-banner';
 import { ClaudeSignIn } from '@/components/common/SetupBanner';
 import { SetupProgress } from '@/components/common/SetupProgress';
 import { log } from '@/utils/log';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useLineClose } from '@/utils/notice-dismiss';
 
 export const AGENT_READY_SENDING = 'Claude Code is ready. Sending…';
 /** The server's words name the cause the send met; once this computer reads signed out instead, say that
@@ -42,6 +44,11 @@ export function AgentWaitNote({ reason, waitsFor, local, onRetry, onDiscard }: {
   const known = local && !loading && (health.localClaude !== undefined || health.claudeCliAvailable !== undefined);
   const ready = known && !agentCannotRun(health);
   const view = local && known && !ready ? claudeBannerView(health) : null;
+  const line = agentWaitLine(ready, view?.kind, reason);
+  // Its × folds the words to "Waiting to send": the message still waits and goes out by itself,
+  // and the sign-in command and the actions row (Install, Retry or Send now, Discard) stay, the only
+  // place they are.
+  const words = useLineClose(`${waitsFor}|${line ?? ''}`);
 
   const install = () => {
     const kind = view?.problem?.kind ?? waitsFor;
@@ -57,7 +64,9 @@ export function AgentWaitNote({ reason, waitsFor, local, onRetry, onDiscard }: {
 
   return (
     <div className="thread-queue-note session-msg-held-note session-msg-agent-wait" role="status" data-agent-wait={ready ? 'ready' : waitsFor}>
-      <div>{agentWaitLine(ready, view?.kind, reason)}</div>
+      {words.shown
+        ? <div>{line}<NoticeClose onClose={words.close} label="Hide the words: the message still goes by itself, Retry and Discard stay" testId="agent-wait-close" className="queue-note-close" /></div>
+        : <div className="session-msg-agent-wait-folded" title={line} data-testid="agent-wait-folded">Waiting to send</div>}
       {/* Its own row: the Demo's sign-in command is a long path, and in the actions row it ran out of the column. */}
       {view?.kind === 'sign-in' && (
         <div className="session-msg-agent-wait-sign-in"><ClaudeSignIn command={view.problem?.commands[0] ?? 'claude'} /></div>

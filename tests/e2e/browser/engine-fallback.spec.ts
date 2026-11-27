@@ -328,7 +328,9 @@ test("a new task's draft says where it starts while the default engine is out of
   await page.goto('/')
   const panel = await openDraft(page)
   const notice = panel.getByTestId('draft-fallback-notice')
-  await expect(notice).toHaveText(/^The Claude 5-hour limit is reached here \(resets (\w{3}\s)?\d{1,2}:\d{2}\s[AP]M\): this task starts on Codex \(.+\)\.$/, { timeout: 15_000 })
+  // Its words (the line also holds its action and its ×).
+  const words = notice.locator('.draft-fallback-words')
+  await expect(words).toHaveText(/^The Claude 5-hour limit is reached here \(resets (\w{3}\s)?\d{1,2}:\d{2}\s[AP]M\): this task starts on Codex \(.+\)\.$/, { timeout: 15_000 })
   // The model pill says so too, instead of "Auto", and so does the picker's Auto row.
   await expect(panel.locator('.draft-model-select')).toHaveText('Codex (fallback)')
   await shot(page, notice, '3-draft-notice', 8)
@@ -345,11 +347,12 @@ test("a new task's draft says where it starts while the default engine is out of
   await expect(panel.locator('.draft-model-select')).toHaveText('Codex (fallback)')
   // A Claude model picked by hand waits for the reset: the line says so, with the way back.
   await picker.locator('.model-picker-row', { hasText: /^\s*Sonnet/ }).first().click()
-  await expect(notice).toHaveText(/: on Sonnet this task waits for the reset\.\s*Start on Codex \(.+\) instead$/)
+  await expect(words).toHaveText(/: on Sonnet this task waits for the reset\.$/)
+  await expect(notice.getByTestId('draft-fallback-use')).toHaveText(/^Start on Codex \(.+\) instead$/)
   await expect(panel.locator('.draft-model-select')).not.toHaveText(/fallback/)
   await shot(page, notice, '4-draft-named-waits', 8)
   await notice.getByTestId('draft-fallback-use').click()
-  await expect(notice).toHaveText(/this task starts on Codex \(.+\)\.$/)
+  await expect(words).toHaveText(/this task starts on Codex \(.+\)\.$/)
   await expect(panel.locator('.draft-model-select')).toHaveText('Codex (fallback)')
   // The answer changes while the draft is open (Settings saved another fallback, in another tab):
   // the page coming back reads it at once, not at the next minute's read.
@@ -359,7 +362,7 @@ test("a new task's draft says where it starts while the default engine is out of
     limit: { window: 'five_hour', resetsAt: resetsAt, resetsFrom: 'event' },
   } }))
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await expect(notice).toHaveText(/, and it covers every Claude model: this task waits for the reset/, { timeout: 5_000 })
+  await expect(words).toHaveText(/, and it covers every Claude model: this task waits for the reset/, { timeout: 5_000 })
   await expect(panel.locator('.draft-model-select')).not.toHaveText(/fallback/)
   // A config save (Settings in this same page) reads it at once too: the server's config:changed.
   await page.unroute('**/api/engines/fallback*')
@@ -370,7 +373,7 @@ test("a new task's draft says where it starts while the default engine is out of
   // An empty write changes nothing (the fixture is shared) and still broadcasts config:changed.
   const write = await page.request.put('/api/config', { data: {} })
   expect(write.ok(), await write.text()).toBe(true)
-  await expect(notice).toHaveText(/this task starts on Codex \(.+\)\.$/, { timeout: 5_000 })
+  await expect(words).toHaveText(/this task starts on Codex \(.+\)\.$/, { timeout: 5_000 })
   // No fallback for this host now (none set, or nothing limited): no line.
   await page.unroute('**/api/engines/fallback*')
   await page.route('**/api/engines/fallback*', (route) => route.fulfill({ json: { host: '__local__', fallback: null } }))

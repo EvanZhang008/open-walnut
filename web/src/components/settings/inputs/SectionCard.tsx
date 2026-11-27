@@ -24,8 +24,6 @@ interface SectionCardProps {
   saveIsMain?: boolean
   /** Attention style for unconfigured sections. */
   attention?: boolean
-  /** Persistent state banner text (e.g. "Connected"). */
-  banner?: string
   /** Header-right pane actions. */
   actions?: ReactNode
 }
@@ -39,7 +37,6 @@ export function SectionCard({
   showSave,
   saveIsMain = true,
   attention,
-  banner,
   actions,
 }: SectionCardProps) {
   const [saving, setSaving] = useState(false)
@@ -74,9 +71,6 @@ export function SectionCard({
       actions={actions}
       onSubmit={handleSubmit}
       {...(attention ? { className: 'settings-card-attention' } : {})}
-      {...(banner
-        ? { banner: <div className="settings-banner settings-banner-success">{banner}</div> }
-        : {})}
       footer={
         <>
           {error && (

@@ -5,7 +5,7 @@
  * transcript: utils/thread-toast-place.ts), never in the global NotificationToaster
  * (that queue is shared with permission and cron toasts and sits over the third
  * column). One toast per panel: a newer one replaces it (the old action counts
- * as committed). Hover pauses the timer. It never takes focus and binds no
+ * as committed). Hover pauses the timer; its × ends it now. It never takes focus and binds no
  * Cmd+Z (the composer's own undo keeps working).
  */
 import {
@@ -19,6 +19,7 @@ import { log } from '@/utils/log';
 import { placeToast, type PlaceBox, type ToastPlace } from '@/utils/thread-toast-place';
 import { visibleTopOf } from '@/hooks/useThreadLanding';
 import { NoticeCard } from '@/components/common/NoticeCard';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import '@/styles/thread-stack.css';
 
 const NOOP_API: ThreadToastApi = {
@@ -225,6 +226,8 @@ function ThreadToastView({ toast, panelRef, composerRef, onDone }: {
           {action.label}
         </button>
       )}
+      {/* Gone now, as when its time runs out (the action it reports stays done). */}
+      <NoticeClose onClose={() => onDoneRef.current()} testId="thread-toast-close" />
     </NoticeCard>,
     host,
   );

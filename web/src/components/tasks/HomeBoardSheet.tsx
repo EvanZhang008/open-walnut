@@ -13,6 +13,8 @@ import { useOpenTask } from '@/hooks/useOpenTask';
 import { usePageView } from '@/utils/view-memory';
 import { taskStatusLabel, taskUserState } from '@/utils/session-status';
 import { ICON_CLOSE } from '@/components/common/Icons';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useNoticeDismiss } from '@/utils/notice-dismiss';
 import { OptionPickerFlyout, useCursorFlyout } from './CursorFlyout';
 import { QuickSortView } from './QuickSortView';
 import { SnoozeDateFlyout, SnoozeFlyout, SnoozeRows } from './SnoozeChoices';
@@ -117,6 +119,10 @@ export function HomeBoardSheet() {
   const datePicker = useCursorFlyout<Task>();
   const snoozePicker = useCursorFlyout<Task>();
   const [lastDone, setLastDone] = useState<{ id: string; label: string; phase: string; write: Promise<boolean> } | null>(null);
+  // The hint line's ×: an error hides until its words change (Retry stays one click away when it
+  // does), the "Marked done" note goes at once (its Undo with it).
+  const errorWords = error || moveError || null;
+  const errorNotice = useNoticeDismiss('home-board-error', errorWords);
   const sheetRef = useRef<HTMLElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const keepGrabVisible = useCallback<Modifier>(({ activatorEvent, activeNodeRect, transform }) => {
@@ -333,11 +339,11 @@ export function HomeBoardSheet() {
         <button type="button" className="btn btn-icon home-board-close wn-dialog-close" aria-label="Close board" title="Close board" onClick={fullscreen.exitFullscreen}>{ICON_CLOSE}</button>
       </div>
     </header>
-    <div className="home-board-hint">{(error || moveError) ? <div className="home-board-error" role="alert"><span title={error || moveError || undefined}>{error || moveError}</span><button type="button" disabled={moving} onClick={() => {
+    <div className="home-board-hint">{errorWords && !errorNotice.hidden ? <div className="home-board-error" role="alert"><span title={error || moveError || undefined}>{error || moveError}</span><button type="button" disabled={moving} onClick={() => {
       const retry = retryMove.current;
       if (moveError && retry && mode === 'pin') sendMove(retry.ids, retry.tier);
       else refetch();
-    }}>Retry</button></div> : lastDone && mode !== 'sort' ? <div className="home-board-done-note" role="status"><span>Marked "{lastDone.label}" done.</span><button type="button" onClick={() => { const { id, phase, write } = lastDone; setLastDone(null); void write.then(ok => { if (ok) void setPhase(id, phase); }); }}>Undo</button></div> : moving ? 'Saving pin tier…' : mode === 'pin' ? 'Grouped by project. Drag or use Move to change pin tier, snooze or mark done. Subtasks in the same tier move with their leader, across projects.' : mode === 'sort' ? 'Decide each card in one tap. Keys: 1 to 9 pin tier, R reply, S snooze, D done, X skip, ← → pick a card, ⌘Z undo.' : 'Grouped by project. Status follows each task’s live state.'}</div>
+    }}>Retry</button><NoticeClose onClose={errorNotice.dismiss} label="Hide this error until it changes" testId="home-board-error-close" /></div> : lastDone && mode !== 'sort' ? <div className="home-board-done-note" role="status"><span>Marked "{lastDone.label}" done.</span><button type="button" onClick={() => { const { id, phase, write } = lastDone; setLastDone(null); void write.then(ok => { if (ok) void setPhase(id, phase); }); }}>Undo</button><NoticeClose onClose={() => setLastDone(null)} label="Dismiss" testId="home-board-done-close" /></div> : moving ? 'Saving pin tier…' : mode === 'pin' ? 'Grouped by project. Drag or use Move to change pin tier, snooze or mark done. Subtasks in the same tier move with their leader, across projects.' : mode === 'sort' ? 'Decide each card in one tap. Keys: 1 to 9 pin tier, R reply, S snooze, D done, X skip, ← → pick a card, ⌘Z undo.' : 'Grouped by project. Status follows each task’s live state.'}</div>
     {loading ? <LoadingState title="Loading your tasks…" /> : mode === 'sort' ? <QuickSortView query={query} tiers={sortTiers} onOpen={onOpen} active={shown} /> : <DndContext sensors={sensors} collisionDetection={boardCollision} autoScroll={autoScroll} onDragStart={e => { dragCancelled.current = false; setDragging(e.active.data.current?.family ?? null); }} onDragEnd={onDrop} onDragCancel={() => setDragging(null)}>
       <div className="home-board-columns">{columns.map(column => <BoardColumn key={column.id} column={column.id === 'done' ? { ...column, count: column.count + (query.trim() ? 0 : completedHidden) } : column} mode={boardMode} onOpen={onOpen} onMove={onMove} onSnooze={onSnoozeCard} onDone={onDoneCard} folded={visibleFolds} onFold={onFold} tierLabel={tierLabel} moving={moving} snoozed={snoozedNow} doneLimit={doneLimit} onMoreDone={() => { ensureAllTasks(); setDoneLimit(v => v + 30); }} />)}</div>
       <DragOverlay dropAnimation={null} modifiers={previewModifiers} style={{ pointerEvents: 'none' }}>{dragging && <div ref={previewRef} className="home-board-card home-board-drag-preview">{orgDisplayTitle(dragging.task)}</div>}</DragOverlay>

@@ -8,7 +8,6 @@ import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
 import { NumberInput } from '@/components/settings/inputs/NumberInput';
 import { couldntSave } from '@/components/settings/inputs/useOptimisticSetting';
 import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
-import { CloseGlyph } from '../settings-glyphs';
 import { DisclosureChevron } from '@/components/controls';
 import { hookDescription, hookHelp, hookNames } from './hook-text';
 import { HOOK_COPY } from './hook-copy';
@@ -277,15 +276,8 @@ export function HooksSection() {
       id="hooks"
       title="Hooks"
       banner={banner ? (
-        <div className="hook-banner" role="status">
-          <SettingsNotice
-            kind="info"
-            action={
-              <button type="button" className="hook-banner-dismiss" aria-label="Dismiss" onClick={() => setBanner(null)}>
-                <CloseGlyph size={12} />
-              </button>
-            }
-          >
+        <div className="hook-banner">
+          <SettingsNotice kind="info" role="status" onClose={() => setBanner(null)}>
             {banner}
           </SettingsNotice>
         </div>

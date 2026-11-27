@@ -178,3 +178,15 @@
   /* Its keys and box share one height there too: a finger's 44 px (the box's from input-box.css). */
   .app-shell-navigation .ask-card .ask-card-answer :is(.btn, .approval-btn, .org-answer-check):not(:is(.org-answer-words, .kanban-prompt, .permission-request-card, .ask-card-tools) *) { min-height: 44px; }
 }
+
+/* The card's × (NoticeClose) at its top right, over the end of its first line, which leaves it room.
+   A framed card keeps it inside its padding; a card inside another card's frame at that frame's
+   corner. */
+.ask-card.has-close { position: relative; }
+.ask-card-close { position: absolute; top: -4px; right: -6px; z-index: 1; }
+.action-needed .ask-card.has-close > .ask-card-close,
+.ask-card.org-ask.has-close > .ask-card-close { top: 6px; right: 6px; }
+.ask-card.has-close > .ask-card-close + :is(.ask-card-title, .ask-card-question) { padding-right: 26px; }
+/* The same × on a part drawn with no card around it (OneCardFrame with threads_one_card off). */
+.one-card-plain { position: relative; }
+.one-card-plain > .ask-card-close { top: 0; right: 0; }

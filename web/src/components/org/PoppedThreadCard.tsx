@@ -38,8 +38,9 @@ import { ThreadState } from './ThreadState';
 import { ThreadLetterAnswer, answersLetter } from './ThreadLetterAnswer';
 import { ThreadOptions } from './OrgInlineAnswer';
 import { ThreadSentWords } from './ThreadSentWords';
+import { THREAD_CLOSE_LABEL, ThreadFoldedItem, useThreadFold } from './thread-fold';
 
-export function PoppedThreadCard({ node, name, t, state, now, snoozed, listed }: {
+export function PoppedThreadCard({ node, name, t, state, now, snoozed, listed, foldable = true }: {
   node: string;
   /** The name of the node whose Threads list it (the hover of its origin line). */
   name: string;
@@ -48,6 +49,8 @@ export function PoppedThreadCard({ node, name, t, state, now, snoozed, listed }:
   snoozed: boolean;
   /** His view lists it now (listedForHim): its group. */
   listed: boolean;
+  /** Its × folds it to one line in its list (thread-fold.tsx); off at the top of a chat, which folds as a whole. */
+  foldable?: boolean;
 }) {
   const openTask = useOpenTask();
   const [failed, setFailed] = useState<string | null>(null);
@@ -87,11 +90,15 @@ export function PoppedThreadCard({ node, name, t, state, now, snoozed, listed }:
       return false;
     }
   };
+  // Its ×: one line in this list, the thread as it is (it never acknowledges, snoozes or closes it).
+  const fold = useThreadFold(t, group, foldable);
+  if (fold.folded) return <ThreadFoldedItem t={t} badge={badge} onShow={fold.show} />;
   return (
     <li className="org-thread is-popped" data-testid="org-thread" data-thread-id={t.id} data-state={t.state} data-group={group} data-owner={owner.task_id} data-snoozed={until ? 'true' : undefined}>
       <AskCardFrame
         testId="org-thread-popped"
         data={{ 'data-can-answer': t.can_answer_now === false ? 'false' : 'true' }}
+        {...(foldable ? { onClose: fold.fold, closeLabel: THREAD_CLOSE_LABEL, closeTestId: 'org-thread-close' } : {})}
         title={(<>
           <ThreadState badge={badge} />
           {/* The task below it came from, by name, which opens it (thread-origin.ts): at the right of

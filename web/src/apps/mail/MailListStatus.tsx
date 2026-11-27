@@ -2,7 +2,9 @@
  * The list status strip (spec 9.0): one line per job of THIS view (a rule save, an unsubscribe
  * batch, a bulk result whose own row is off screen), newest first, at most three. In the middle
  * column under the header, so it is visible at every width (the pane note is not, at narrow width).
+ * Every line has its × (NoticeClose): it goes now, a sticky one as much as one that would go by itself.
  */
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { dismissMailListStatus, useMailListStatus } from './mail-groups-bus';
 
 export function MailListStatus({ viewKey }: { viewKey: string }) {
@@ -23,16 +25,7 @@ export function MailListStatus({ viewKey }: { viewKey: string }) {
               {action.label}
             </button>
           ))}
-          {note.sticky && (
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost mail-text-btn mail-list-status-close"
-              aria-label="Dismiss"
-              onClick={() => { dismissMailListStatus(note.id); }}
-            >
-              Dismiss
-            </button>
-          )}
+          <NoticeClose onClose={() => { dismissMailListStatus(note.id); }} testId="mail-list-status-close" className="mail-list-status-close" />
         </p>
       ))}
     </div>

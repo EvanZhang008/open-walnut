@@ -238,6 +238,30 @@ test('fresh install shows one setup action, restores progress and retries a fail
   expect(fixes).toEqual([{ kind: 'claude_missing' }, { kind: 'claude_missing' }]);
 });
 
+test('closing the welcome card gives the Ask slot its own view, stays closed after a reload, and a new setup step shows it again', async ({ page, baseURL }) => {
+  // 2026-11-27 review: the card's × used to draw nothing inside the slot, which then never fell
+  // back to its own view: a blank Ask slot (the 2026-11-11 F4 white page again).
+  let health = setupHealth();
+  await page.route('**/api/system/health', route => route.fulfill({ json: health }));
+  await page.route('**/api/system/local-claude/check', route => route.fulfill({ json: { localClaude: health.localClaude } }));
+  const events = await openFresh(page, baseURL!);
+  const setup = page.getByTestId('first-use-setup');
+  await expect(setup).toBeVisible({ timeout: 30_000 });
+  await setup.getByTestId('first-use-close').click();
+  await expect(setup).toHaveCount(0);
+  const slot = page.getByTestId('ask-walnut-slot');
+  await expect(slot).toBeVisible();
+  // Its own view: a box to type in, never an empty slot.
+  await expect(slot.getByRole('textbox').first()).toBeVisible({ timeout: 30_000 });
+  await events.reload();
+  await expect(page.getByTestId('ask-walnut-slot').getByRole('textbox').first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('first-use-setup')).toHaveCount(0);
+  // Another setup step (a provider connected, Claude Code still missing): the card is back.
+  health = { ...setupHealth(), hasReadyProvider: true };
+  events.push('system:health', health);
+  await expect(page.getByTestId('first-use-setup')).toBeVisible({ timeout: 30_000 });
+});
+
 test('Home keeps 20 long-label hosts unanswered and answering one leaves every other question intact', async ({ page, baseURL }) => {
   const fixture = await mockFoundHosts(page, { count: 20 });
   await openFresh(page, baseURL!);

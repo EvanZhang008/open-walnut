@@ -171,6 +171,11 @@ export function NotificationProblems({ hosts, health, healthLoading, renderHostC
           avatar={{ glyph: <WarningTriangleIcon size={13} />, tone: 'warn' }}
           who="Remote hosts"
           status={{ tone: 'warn', text: hosts.length === 1 ? '1 needs you' : `${hosts.length} need you` }}
+          // Every row's own x at once: each host leaves until its problem changes (a row with no
+          // key has no x of its own either, so with none the card has none).
+          onClose={hosts.some(({ row }) => row.dismissKeys.length > 0) ? () => dismissHostKeys(hosts.flatMap(({ row }) => row.dismissKeys)) : undefined}
+          closeLabel={hosts.length === 1 ? 'Dismiss this host until its problem changes' : 'Dismiss these hosts until their problems change'}
+          closeTestId="nfc-problem-hosts-close"
           bodyFlush
         >
           <ul className="notification-card-details nfc-host-list">

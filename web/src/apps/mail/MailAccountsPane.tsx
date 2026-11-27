@@ -61,6 +61,7 @@ import { MailAccountFolders } from './MailAccountFolders';
 import { ComposeIcon, RefreshIcon } from './mail-icons';
 import { NewKey } from '@/components/common/PageHeader';
 import { ICON_PLUS } from '@/components/common/Icons';
+import { NoticeClose } from '@/components/common/NoticeClose';
 
 interface Props {
   accounts: MailAccountDto[];
@@ -599,16 +600,7 @@ export function MailAccountsPane({
               </p>
             )}
           </div>
-          <button
-            type="button"
-            className="mail-pane-strip-close"
-            data-testid="mail-pane-strip-close"
-            title="Dismiss"
-            aria-label="Dismiss"
-            onClick={() => { fetchNotes.dismiss(); clearMailPaneNote(); }}
-          >
-            ×
-          </button>
+          <NoticeClose onClose={() => { fetchNotes.dismiss(); clearMailPaneNote(); }} testId="mail-pane-strip-close" className="mail-pane-strip-close" />
         </div>
       )}
     </aside>

@@ -36,6 +36,8 @@
   padding: 8px 10px;
   margin-bottom: 10px;
 }
+/* Its × (NoticeClose) floated to the end of its first line. */
+.scd-banner-close { float: right; margin: -4px -6px 0 6px; }
 
 .scd-repo { padding: 8px 0 14px; border-bottom: 1px solid var(--border); }
 .scd-repo:last-child { border-bottom: none; }

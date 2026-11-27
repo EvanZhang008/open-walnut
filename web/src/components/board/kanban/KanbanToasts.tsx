@@ -17,7 +17,7 @@ import { log } from '@/utils/log';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
 import type { KanbanToast, KanbanToastAction, KanbanToastsProps, UseKanbanToasts } from './kanban-contract';
 import {
-  KANBAN_PANE_SELECTOR, KANBAN_TOAST_EVENT, dismissToastItem, expiredToasts, foldToasts, nextDeadline, pauseClocks, pushToastItem, resumeClocks, syncClocks,
+  KANBAN_PANE_SELECTOR, KANBAN_TOAST_EVENT, dismissToastItem, expiredToasts, foldToasts, foldedToDismiss, nextDeadline, pauseClocks, pushToastItem, resumeClocks, syncClocks,
   type KanbanToastItem, type ToastClocks,
 } from './kanban-toasts';
 
@@ -104,6 +104,8 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
   if (toasts.length === 0) return <span ref={anchorRef} className="kanban-toasts-anchor" hidden />;
   // Over a chat the corner keeps every kind short: the newest move, the rest on its "+N" line.
   const { shown, folded, foldText } = foldToasts(toasts, expanded, compact ? 1 : undefined);
+  // The fold's × takes the older moves only: a folded "Not saved" with Retry stays (foldedToDismiss).
+  const older = foldedToDismiss(toasts, shown);
   return (
     <>
     <span ref={anchorRef} className="kanban-toasts-anchor" hidden />
@@ -131,16 +133,8 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
           avatar={{ glyph: t.tone === 'error' ? ICON_CLOSE : ICON_INFO, tone: t.tone === 'error' ? 'error' : 'muted' }}
           who="Board"
           status={t.tone === 'error' ? { tone: 'error', text: 'Not saved' } : undefined}
-          end={(
-            <button
-              type="button"
-              className="kanban-toast-close wn-notice-x"
-              data-testid="kanban-toast-dismiss"
-              aria-label="Dismiss"
-              title="Dismiss"
-              onClick={() => onDismiss(t.id)}
-            >{ICON_CLOSE}</button>
-          )}
+          onClose={() => onDismiss(t.id)}
+          closeTestId="kanban-toast-dismiss"
         >
           {/* R3-18: text and actions wrap among themselves. */}
           <div className="kanban-toast-main">
@@ -158,7 +152,15 @@ export function KanbanToasts({ toasts: fromProps, onDismiss: dismissProp }: Kanb
         </NoticeCard>
       ))}
       {folded > 0 && (
-        <NoticeCard className="kanban-toasts-more corner-more" testId="kanban-toasts-more" line={foldText} onOpen={() => setExpanded(true)} />
+        <NoticeCard
+          className="kanban-toasts-more corner-more"
+          testId="kanban-toasts-more"
+          line={foldText}
+          onOpen={() => setExpanded(true)}
+          // The folded older moves go now (board toasts are news, kept nowhere else); with only
+          // failed saves folded there is nothing it may take, so it draws no ×.
+          {...(older.length > 0 ? { onClose: () => older.forEach((id) => onDismiss(id)), closeLabel: 'Dismiss the older moves: a failed save with Retry stays', closeTestId: 'kanban-toasts-more-close' } : {})}
+        />
       )}
     </div>
     </CornerSlot>

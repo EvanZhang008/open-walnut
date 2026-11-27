@@ -4,6 +4,7 @@
  * in org thread or anywhere ... should be able to copy pictures"). Same types, same limit, same read,
  * same paste rule, so a picture that the chat takes is taken everywhere and nowhere else differs.
  */
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { ImageAttachment } from '@/api/chat';
 import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
@@ -55,6 +56,8 @@ export interface ImageAttachments {
   full: boolean;
   /** What the last add left out and why, shown beside the box (PictureStrip); null when it took everything. */
   notice: string | null;
+  /** The notice's × (PictureStrip): it goes now, and the next add that leaves something out, the same thing too, says so again. */
+  closeNotice: () => void;
 }
 
 /**
@@ -103,6 +106,7 @@ export function useImageAttachments(): ImageAttachments {
     setNotice(null);
   }, []);
   const clear = useCallback(() => { generation.current++; setImages([]); held.current = 0; setNotice(null); }, []);
+  const closeNotice = useLeanCallback(() => setNotice(null), []);
   const set = useCallback((next: ImageAttachment[]) => {
     // A restore after a failed send puts back what it took: never more than the box ever held.
     const kept = next.slice(0, MAX_IMAGES);
@@ -111,5 +115,5 @@ export function useImageAttachments(): ImageAttachments {
     held.current = kept.length;
     setNotice(next.length > MAX_IMAGES ? leftOutNotice({ over: next.length - MAX_IMAGES, notPictures: [], unreadable: [] }) : null);
   }, []);
-  return useMemo(() => ({ images, add, remove, clear, set, full: images.length >= MAX_IMAGES, notice }), [images, add, remove, clear, set, notice]);
+  return useMemo(() => ({ images, add, remove, clear, set, full: images.length >= MAX_IMAGES, notice, closeNotice }), [images, add, remove, clear, set, notice, closeNotice]);
 }

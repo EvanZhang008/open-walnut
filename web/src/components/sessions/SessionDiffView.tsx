@@ -48,6 +48,7 @@ import {
   DomSearchController, collectTextMatches,
   wordAtPoint, claimSearchOwner, onSearchOwnerLost, SYMBOL_RE,
 } from '@/utils/dom-text-search';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 import { pointerOwnedElsewhere } from '@/utils/find-scope';
@@ -3096,7 +3097,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       {notice && (
         <div className="session-diff-notice" role="status">
           <span>{notice}</span>
-          <button type="button" className="btn btn-sm" onClick={() => setNotice(null)}>Dismiss</button>
+          <NoticeClose onClose={() => setNotice(null)} testId="session-diff-notice-close" className="session-diff-notice-close" />
         </div>
       )}
 
@@ -3204,6 +3205,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                     >Open in Files</button>
                   )}
                   <button className="btn btn-sm" onClick={closeGhost} title="Back to the diff (⌘[)">Back to diff</button>
+                  <NoticeClose onClose={closeGhost} label="Close this file: back to the diff" testId="session-diff-ghost-close" className="session-diff-ghost-close" />
                 </div>
                 <div className="session-diff-ghost-body">
                   <FileContentView

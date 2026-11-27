@@ -106,3 +106,10 @@
 
 .sug-error { font-size: var(--font-size-sm); color: var(--error); }
 .sug-note-ok { font-size: var(--font-size-sm); color: var(--success); }
+
+/* The card's × (NoticeClose) at the end of the title's line. Without a title the head takes no
+   line of its own: the × floats at the top right and the body's words run beside it. */
+.sug-card-head { display: flex; align-items: flex-start; gap: 8px; }
+.sug-card-head .sug-card-title { flex: 1; min-width: 0; }
+.sug-card-head > .wn-notice-close { flex: none; margin: -4px -6px 0 auto; }
+.sug-card-head.is-bare { float: right; margin-left: 8px; }

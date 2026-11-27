@@ -26,6 +26,7 @@ import { KanbanCardMenu } from './KanbanCardMenu';
 import { KanbanCardPrompt } from './KanbanCardPrompt';
 // The one ask card's frame (actions/AskCard.tsx): a prompt here reads as it does everywhere.
 import { OneCardFrame } from '@/components/actions/AskCard';
+import { AskFoldLine, FOLD_WORDS, useAskFold } from '@/components/actions/AskFold';
 import { KanbanDetailTask } from './KanbanDetailTask';
 import { MenuCaret } from '@/components/controls';
 
@@ -52,6 +53,9 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
   const [sent, setSent] = useState(false);
   const [menu, setMenu] = useState(false);
   const [editor, setEditor] = useState<{ field: 'summary' | 'waiting_on'; openedAt: string } | null>(null);
+  // The prompt's ×: one line under the status that says it still waits, with Show, kept per request (AskFold.tsx).
+  const prompt = card.status.prompt;
+  const promptFold = useAskFold('kanban-prompt', prompt ? prompt.sessionId : '', prompt?.requestId ?? prompt?.toolName ?? '');
   const openEditor = (field: 'summary' | 'waiting_on') => {
     const raw = ctx?.getCard(card.taskId);
     setEditor({ field, openedAt: (field === 'summary' ? raw?.summary_at : raw?.waiting_on_at) ?? '' });
@@ -94,7 +98,10 @@ export function KanbanCardDetail({ card, laneName, readOnly, onBack, onOpenSessi
         <div className={`kanban-card-status kanban-tone-${card.status.tone} kanban-detail-status`} data-tone={card.status.tone} title={card.status.tooltip}>
           <span className="kanban-card-dot" aria-hidden="true" /><AgentText compact inline {...(card.status.textSource ?? { unknownSource: true })} className="kanban-card-status-text" text={card.status.text} />
         </div>
-        {card.status.prompt && <div className="kanban-card-prompt"><OneCardFrame testId="kanban-card-ask"><KanbanCardPrompt request={card.status.prompt} onAnswered={() => onSeen(card.taskId)} /></OneCardFrame></div>}
+        {prompt && <div className="kanban-card-prompt">{promptFold.folded
+          ? <AskFoldLine testId="kanban-card-ask-folded" showTestId="kanban-card-ask-show" onShow={promptFold.show} lead="Waits on you"
+              words={<span className={FOLD_WORDS}>{prompt.fromTitle ? `${prompt.fromTitle}: ` : ''}{prompt.toolName === 'AskUserQuestion' ? 'Question' : `Allow ${prompt.toolName}`}</span>} />
+          : <OneCardFrame testId="kanban-card-ask" onClose={promptFold.fold} closeLabel="Fold it to one line: it still waits on you" closeTestId="kanban-card-ask-close"><KanbanCardPrompt request={prompt} onAnswered={() => onSeen(card.taskId)} /></OneCardFrame>}</div>}
         {editor ? (
           <div className="kanban-card-editor">
             <KanbanCardEditor field={editor.field} card={card} openedAt={editor.openedAt} api={ctx!.api} onClose={() => { setEditor(null); moreRef.current?.focus(); }} />

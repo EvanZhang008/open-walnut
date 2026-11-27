@@ -292,6 +292,15 @@ round controls: "什么鬼东西都要是圆形的呀？所有东西都应该统
 - Anything that waits on the user is an `AskCardFrame` card (frosted glass, one decision per page:
   `needs-card-unified-ratchet.test.ts`).
 - A notice is a `NoticeCard` (`wn-glass-frost`).
+- **Every card and notice has a visible close: the one ×, `NoticeClose`** (2026-11-22, the user: "why there is
+  no x so that i cna close"; 2026-11-23, of a question card over a chat: "能不能有办法把它 collapse"). `NoticeCard`,
+  `PanelNotice` and `AskCardFrame` draw it from their `onClose`; a notice of its own markup puts `NoticeClose` at
+  the end of its first line. Closing never answers: a state banner hides until its words change
+  (`useNoticeDismiss`, `web/src/utils/notice-dismiss.ts`), a toast or receipt goes now, a card that waits on an
+  answer hides or folds to one line and stays the task's (the notification center and Needs you keep it). Only a
+  full-screen gate (sign-in) has none. A new card or notice is drawn by one of those parts, or its root class ends
+  in `-banner`, `-notice`, `-toast`, `-alert`, `-callout` or `-receipt`, so the guard finds it:
+  `tests/web/notice-close-guard.test.ts`.
 - A card's text never hides what it asks: a question or why cut to its lines gets Show more /
   Show less under it, the one fold (`components/common/TextFold.tsx`); a thread card's own words are
   shown whole, never cut (`CardWords`); and a bare URL or path in it reads as a short label with the

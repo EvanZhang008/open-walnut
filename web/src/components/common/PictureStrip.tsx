@@ -5,11 +5,14 @@
  */
 import { useRef, useState, type ClipboardEvent, type DragEvent } from 'react';
 import { IMAGE_ACCEPT, pastedImageFiles, type ImageAttachments } from './image-attachments';
+import { NoticeClose } from './NoticeClose';
 import '@/styles/picture-strip.css';
 
 /**
  * The pictures waiting to be sent, each with its ×, and the line saying what the last add left
- * out (image-attachments.ts `notice`); nothing when there is neither.
+ * out (image-attachments.ts `notice`); nothing when there is neither. The line's × clears the notice
+ * where it is kept (`closeNotice`; what was left out stays out), so the next add that leaves
+ * something out says so again, the same thing too.
  */
 export function PictureStrip({ pictures, className, testId, readOnly }: {
   pictures: ImageAttachments;
@@ -19,7 +22,12 @@ export function PictureStrip({ pictures, className, testId, readOnly }: {
 }) {
   const id = testId ?? 'picture-strip';
   const notice = !readOnly && pictures.notice
-    ? <div className="picture-strip-notice" role="status" data-testid={`${id}-notice`}>{pictures.notice}</div>
+    ? (
+      <div className="picture-strip-notice-line">
+        <div className="picture-strip-notice" role="status" data-testid={`${id}-notice`}>{pictures.notice}</div>
+        <NoticeClose onClose={pictures.closeNotice} label="Hide this line" testId={`${id}-notice-close`} className="picture-strip-notice-close" />
+      </div>
+    )
     : null;
   if (pictures.images.length === 0) return notice;
   return (

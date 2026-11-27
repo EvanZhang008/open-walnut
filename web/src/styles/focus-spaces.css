@@ -74,6 +74,8 @@
 /* A caption sits as close to its list as to its input (the rows bring their own 4 px). */
 .focus-panel-caption + .focus-form-projects { margin-top: -4px; }
 .focus-banner-actions { margin-block: 0; flex: none; }
+/* The line's × (NoticeClose), at its end. */
+.focus-banner-close { flex: none; margin-right: -6px; }
 .focus-banner-error { color: var(--error); font-size: var(--font-size-sm); }
 /* Right after leaving: what waited outside, in the banner's place, until Done. */
 .focus-banner.focus-banner-summary { display: block; padding: 12px; }

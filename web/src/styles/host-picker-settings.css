@@ -132,6 +132,9 @@
 .rh-readiness-note { color: var(--fg-muted); overflow-wrap: anywhere; }
 .rh-last-checked,
 .rh-receipt { color: var(--fg-muted); font-size: var(--font-size-xs); }
+/* The receipt's × (NoticeClose) at its end, inside the line's own height. */
+.rh-receipt-line { display: inline-flex; align-items: center; gap: 2px; }
+.rh-receipt-close { margin-block: -4px; }
 .rh-action-failed { color: var(--error); font-size: var(--font-size-xs); }
 .rh-host-detail:empty { display: none; }
 

@@ -209,6 +209,7 @@ import { SessionHeaderMoreMenu, SessionHeaderToolRow } from './SessionHeaderMore
 import { SessionHeaderLabels, type LabelsInMenu, type LabelsOpener } from './SessionHeaderLabels';
 import { titleRowBandProps, useTitleRowTight } from './useTitleRowTight';
 import { NoticeToken, PanelNotice } from './PanelNotice';
+import { useSessionPanelCloses } from './session-panel-closes';
 import '@/styles/session-header-fit.css';
 import '@/styles/session-plain-chat.css';
 import '@/styles/session-scroll-glass.css';
@@ -291,18 +292,14 @@ function SessionPanelErrorBoundary({ sessionId, onClose, clearsColumnLayout, chi
       resetKey={sessionId}
       className="session-panel"
       message="Something went wrong loading this session."
-      actions={onClose && (
-        <button
-          className="btn btn-sm"
-          onClick={() => {
-            // Only this column leaves the saved strip; the other columns and the pins stay.
-            if (clearsColumnLayout) { dropSavedColumn('homeColumns', sessionId); dropSavedColumn('phoneColumns', sessionId); }
-            onClose(sessionId);
-          }}
-        >
-          Close panel
-        </button>
-      )}
+      // The column's × (NoticeClose): only this column leaves the saved strip; the other columns and the pins stay.
+      {...(onClose ? {
+        closeLabel: 'Close panel',
+        onClose: () => {
+          if (clearsColumnLayout) { dropSavedColumn('homeColumns', sessionId); dropSavedColumn('phoneColumns', sessionId); }
+          onClose(sessionId);
+        },
+      } : {})}
     >
       {children}
     </RegionErrorBoundary>
@@ -2721,6 +2718,20 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
   const ps = session?.process_status;
   // A continue after the usage limit just went in: its turn is starting, not ended.
   const continuingAfterLimit = useContinuingAfterLimit(session?.usageLimitContinued, ps, session?.errorMessage);
+  // Each notice of this panel closes with its × until what it says changes (session-panel-closes.ts).
+  // Only read for an ended session: a walk of the whole history on every render costs.
+  const returnedEmpty = (ps === 'stopped' || ps === 'error')
+    && historyMessages.some(m => m.role === 'user')
+    && !historyMessages.some(m => m.role === 'assistant')
+    // A turn whose only output is an error row (a failed native command) is not
+    // empty: its error is already on screen, and a restart would not fix it.
+    && !historyMessages.some(m => m.role === 'system' && m.systemVariant === 'error');
+  const closes = useSessionPanelCloses(sessionId, {
+    session,
+    provedReachable: recheck.for === sessionId && recheck.phase === 'done' && recheck.reachable === true && recheck.infraClaim === true,
+    historyLoading,
+    returnedEmpty,
+  });
   // Phase is forwarded to SessionChatHistory for resume detection logic,
   // not for UI display in this panel.
   const taskPhase = (sessionTask?.phase ?? 'TODO') as TaskPhase;
@@ -3760,8 +3771,8 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
             />
           </div>
         )}
-        {session?.cwdGone && !session.archived && (
-          <FolderGoneBanner sessionId={sessionId} cwdGone={session.cwdGone} onDone={handleFolderMoved} />
+        {session?.cwdGone && !session.archived && !closes.folderGone.hidden && (
+          <FolderGoneBanner sessionId={sessionId} cwdGone={session.cwdGone} onDone={handleFolderMoved} onClose={closes.folderGone.dismiss} />
         )}
         {sessionTask?.engine_fallback && fallbackGone !== sessionTask.engine_fallback.at && session?.taskId === sessionTask.id
           && !session.lane && !session.archive_reason?.startsWith('engine_switched:')
@@ -3828,6 +3839,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           // stopped or of the check itself: its composer resumes it, and the words are Walnut's
           // internals there (review 2026-11-06). A real error still shows, with Retry.
           if (plainChat && (checking || provedReachable)) return null;
+          if (closes.error.hidden) return null;
           const reachableText = (
             <>
               {isRemote && <><NoticeToken text={hostLabel} /> is reachable, and </>}
@@ -3839,6 +3851,9 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
               className={`session-error-banner${spinning ? ' session-error-banner--reconnecting' : provedReachable ? ' session-error-banner--idle' : ''}`}
               icon={spinning ? '\u21BB' : provedReachable ? '\u2139\uFE0E' : <WarningTriangleIcon size={14} />}
               actions={provedReachable ? null : <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} onFolderGone={rereadRecord} />}
+              onClose={closes.error.dismiss}
+              closeLabel="Hide this banner until it says something new"
+              closeTestId="session-error-close"
             >
               {isRemote && session?.host && !checking && !provedReachable
                 ? <SessionHostErrorText host={session.host} label={hostLabel} reconnecting={isReconnecting} fallback={bannerText} />
@@ -3859,10 +3874,11 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           // conversation resumes losslessly via --resume. Showing it as a red Error
           // banner scared users into thinking the session broke (2026-08-10).
           const idle = session.errorMessage.match(/^No output for (\d+) min$/i);
-          if (!idle) return null;
+          if (!idle || closes.idle.hidden) return null;
           // Routine, and the way on is the composer: no button beside it to say otherwise.
           return (
-            <PanelNotice className="session-error-banner session-error-banner--idle" icon={<PauseGlyphIcon size={14} />}>
+            <PanelNotice className="session-error-banner session-error-banner--idle" icon={<PauseGlyphIcon size={14} />}
+              onClose={closes.idle.dismiss} closeTestId="session-idle-close">
               <span className="session-error-banner-text">
                 Auto-stopped after {idle[1]} min idle. The conversation is kept: send a message to resume it.
               </span>
@@ -3874,11 +3890,7 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
           );
         })()}
         {!historyLoading && (ps === 'stopped' || ps === 'error') && !session?.archived
-          && historyMessages.filter(m => m.role === 'assistant').length === 0
-          && historyMessages.some(m => m.role === 'user')
-          // A turn whose only output is an error row (a failed native command) is not
-          // empty: its error is already on screen, and a restart would not fix it.
-          && !historyMessages.some(m => m.role === 'system' && m.systemVariant === 'error') && (
+          && returnedEmpty && !closes.empty.hidden && (
           <PanelNotice
             className="session-error-banner session-error-banner--warning"
             icon={<WarningTriangleIcon size={14} />}
@@ -3887,12 +3899,15 @@ const SessionPanelBody = memo(function SessionPanelBody({ sessionId, viewPlace, 
                 {restartBusy ? 'Restarting...' : 'Restart'}
               </button>
             )}
+            onClose={closes.empty.dismiss}
+            closeTestId="session-empty-close"
           >
             <span className="session-error-banner-text panel-notice-prose">Session returned empty: Claude may have run into a problem.</span>
           </PanelNotice>
         )}
-        {session?.mode === 'auto' && session.autoPermissionDenial && (
+        {session?.mode === 'auto' && session.autoPermissionDenial && !closes.denial.hidden && (
           <PanelNotice className="session-error-banner session-error-banner--warning" icon={<WarningTriangleIcon size={14} />}
+            onClose={closes.denial.dismiss} closeTestId="auto-permission-denial-close"
             actions={<button className="btn btn-sm btn-primary session-retry-btn" onClick={() => void askAfterAutoDenial()} disabled={modeSwitchBusy}>
               {modeSwitchBusy ? 'Switching...' : 'Switch to asking'}
             </button>}>

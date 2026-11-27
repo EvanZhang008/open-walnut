@@ -19,6 +19,8 @@ import { fallbackEngineName, fallbackModelName, limitName, limitTimeWords } from
 import { fetchEngineFallbackNow, type EngineFallbackNow } from '@/api/engine-fallback';
 import { useEngineDefaultModel, withDefaultModel } from './engine-default-model';
 import { useEvent } from '@/hooks/useWebSocket';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useNoticeDismiss } from '@/utils/notice-dismiss';
 
 const REFRESH_MS = 60_000;
 
@@ -120,13 +122,16 @@ export function DraftFallbackNotice({ now, named, onUseFallback }: {
   const defaultModel = useEngineDefaultModel(now?.fallback && !now.fallback.note.model ? now.fallback.engine : undefined);
   const shown = now?.fallback ? { ...now, fallback: { ...now.fallback, note: withDefaultModel(now.fallback.note, defaultModel) } } : now;
   const line = draftFallbackLine(shown, Date.now(), named);
-  if (!line) return null;
+  // Its × hides it until its sentence changes (another model picked, another limit or reset).
+  const closed = useNoticeDismiss('draft-fallback', line ? `${line.before}${line.strong ?? ''}${line.after ?? ''}` : now ? null : undefined);
+  if (!line || closed.hidden) return null;
   return (
     <div className={`draft-fallback-notice${line.waits ? ' is-wait' : ''}`} role="status" data-testid="draft-fallback-notice">
-      <span>{line.before}{line.strong && <strong>{line.strong}</strong>}{line.after}</span>
+      <span className="draft-fallback-words">{line.before}{line.strong && <strong>{line.strong}</strong>}{line.after}</span>
       {line.action && onUseFallback && (
         <button type="button" className="draft-fallback-use" data-testid="draft-fallback-use" onClick={onUseFallback}>{line.action}</button>
       )}
+      <NoticeClose onClose={closed.dismiss} label="Hide this line until it says something new" testId="draft-fallback-close" className="draft-fallback-close" />
     </div>
   );
 }

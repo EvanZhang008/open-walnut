@@ -280,13 +280,19 @@ test('the chat says the host is not signed in, and its link lands on that host w
   await video.caption('Antigravity is not signed in there: it says so, and the message waits for the sign-in')
   await expect(note).toContainText('Antigravity is not signed in on this computer. Sign in and this message goes out by itself.')
   await expect(note).not.toContainText('Open Settings to sign in.')
-  await expect(note.getByRole('button')).toHaveText(['Open Settings to sign in', 'Retry', 'Discard'])
+  await expect(note.locator('.session-msg-queued-actions').getByRole('button')).toHaveText(['Open Settings to sign in', 'Retry', 'Discard'])
+  await expect(note.getByTestId('engine-sign-in-close')).toBeVisible()
   // Said once, on the message: no second red line above the composer, and no fixture banner.
   await expect(page.getByText(words)).toHaveCount(0)
   await expect(page.getByText('Recovery status unavailable')).toHaveCount(0)
   await page.locator('.session-history').screenshot({ path: shot('chat-note') })
   await video.hold(HOLD * 1.5)
 
+  // Its × folds the words only: the message still waits, and its buttons stay (the only ones it has).
+  await note.getByTestId('engine-sign-in-close').click()
+  await expect(note.getByTestId('engine-sign-in-folded')).toHaveText('Waiting for a sign-in')
+  await expect(note).not.toContainText('Antigravity is not signed in on this computer.')
+  await expect(note.locator('.session-msg-queued-actions').getByRole('button')).toHaveText(['Open Settings to sign in', 'Retry', 'Discard'])
   await video.caption('Open Settings to sign in lands on that host, its sign-in open')
   await note.getByTestId('engine-sign-in-open-settings').click()
   await expect(page).toHaveURL(/\/settings#engine-sign-in-antigravity-__local__$/)

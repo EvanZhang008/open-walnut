@@ -6,7 +6,7 @@
  *
  *   1. A task with Threads off asks him (its turn-end report): above its chat the question card shows,
  *      within a third of the panel's body plus its buttons, never half of it.
- *   2. Hide folds it to one line that names the question; kept over a reload.
+ *   2. Its × folds it to one line that names the question; kept over a reload.
  *   3. A new question while folded: the line names the new one, still one line.
  *   4. Show brings the card back.
  * Real: the fixture server, a mock CLI session, the report route, the status sync.
@@ -116,8 +116,8 @@ test('the question card above the chat stays within a third of it, folds to one 
   await video.hold(1500)
   await shot(page, '1-card')
 
-  // ── 2. Hide: one line naming the question; kept over a reload ──
-  await video.caption(DATA ? '点 Hide，收成一行' : 'Hide folds it to one line')
+  // ── 2. The ×: one line naming the question; kept over a reload ──
+  await video.caption(DATA ? '点 ×，收成一行' : 'The × folds it to one line')
   await strip.getByTestId('action-strip-hide').hover()
   await video.hold(600)
   await strip.getByTestId('action-strip-hide').click()

@@ -1,0 +1,4 @@
+/* A card folded by its × to one line (AskFold.tsx): the top thread's folded line (top-thread.css
+   .top-thread-line), its lead in the muted words, Show right after its words. */
+.ask-fold-line { cursor: pointer; }
+.ask-fold-lead { color: var(--fg-muted); white-space: nowrap; }

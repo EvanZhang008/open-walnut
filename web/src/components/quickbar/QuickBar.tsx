@@ -12,6 +12,7 @@
  * the bar closes lands in the words kept for the next open, never nowhere.
  */
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { useLineClose } from '@/utils/notice-dismiss';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { useBoxDictation } from '@/hooks/useBoxDictation';
@@ -130,6 +131,11 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
 
   const dictation = useBoxDictation(boxRef, text, setText);
   const stt = useSpeechToText({ onDraft: dictation.onDraft, onTranscribe: dictation.onTranscribe, onRefine: dictation.onRefine });
+  // The microphone's own line (its failure, a silent mic, a stalled live draft) is the STT hook's to
+  // keep: its × hides those words, and the next take that says something shows again.
+  const sttWords = stt.error ?? stt.silenceWarning ?? (stt.isRecording ? stt.draftNotice : null) ?? null;
+  const sttNote = useLineClose(sttWords);
+  const sttLine = sttNote.shown ? sttWords : null;
   const sttStatus = useSttStatus();
   const voiceOff = !stt.isSupported || sttBlocksMic(sttStatus, stt.isRecording || stt.isTranscribing);
   const recording = stt.isRecording || stt.micOpening;
@@ -558,7 +564,8 @@ export const QuickBar = forwardRef<QuickBarHandle, QuickBarProps>(function Quick
       micLive={stt.micLive}
       counting={countdownAt !== null}
       to={shown}
-      note={notice ?? stt.error ?? stt.silenceWarning ?? (stt.isRecording ? stt.draftNotice : null) ?? null}
+      note={notice ?? sttLine}
+      onCloseNote={notice ? () => setNotice(null) : sttNote.close}
       peopleFailed={peopleFailed}
       onRetryPeople={loadPeople}
       switchTo={switchTo}

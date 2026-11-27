@@ -81,6 +81,8 @@ import { ThreadChoiceAnswer, answersChoice } from './ThreadChoiceAnswer';
 import { askThreadFocus, useFocusedThread } from './thread-focus';
 import { AskCard } from '@/components/actions/ActionNeeded';
 import { AskCardFrame } from '@/components/actions/AskCard';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { THREAD_CLOSE_LABEL, ThreadFoldedItem, useThreadFold } from './thread-fold';
 import { Answer, CardWords, Words } from './thread-card-text';
 import { AskedIn, FollowUp, NeedsAnswer, ThreadTools, type OnFollowUp } from './thread-card-answer';
 import { FOLDED_GROUPS, THREAD_GROUPS, THREAD_GROUP_LABELS, ackCardLine, backFromKnown, groupThreads, inAcknowledged, isKnown, type ThreadGroup } from '@open-walnut/thread-groups';
@@ -185,7 +187,7 @@ function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThr
   );
 }
 
-function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused, listed, onReadWhole, copy }: {
+function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused, listed, onReadWhole, copy, foldable }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined;
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
@@ -199,6 +201,8 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   onReadWhole?: () => void;
   /** Drawn in Watching, beside its own group's card. */
   copy?: WatchingCopy;
+  /** Its × folds it to one line in this list (thread-fold.tsx); off where its room folds as a whole (the top of a chat). */
+  foldable: boolean;
 }) {
   /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
@@ -256,14 +260,20 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
   const count = onCard.length + (t.opener ? 1 : 0);
   const quote = (x: ThreadExchange<OrgThreadMessage>) => `\u201c${oneLine(x.messages.map((m) => m.text || 'A picture').join(' / '), QUOTE_WORDS)}\u201d`;
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
+  // Its × (a Watching copy's folds it back to its line): the card stays as it is, one line here.
+  // Opened from a chat's thread link (focused), a folded card opens so its focus mark shows.
+  const fold = useThreadFold(t, badge.group, foldable && !copy, focused);
+  if (fold.folded) return <ThreadFoldedItem t={t} badge={badge} onShow={fold.show} />;
+  const close = copy ? (copyOpen ? () => setCopyOpen(false) : undefined) : foldable ? fold.fold : undefined;
   return (
-    <li ref={copy?.setNodeRef} style={copy?.style} className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${watched ? ' is-watched' : ''}${copy?.dragging ? ' is-dragging' : ''}${focused ? ' is-focused' : ''}${known ? ' is-known' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : t.state} data-group={badge.group} data-acked-at-work={known ? 'true' : undefined} data-back-from-known={back ? 'true' : undefined} data-snoozed={snoozed ? 'true' : undefined} data-watched={watched ? 'true' : undefined} data-copy={copy ? 'watching' : undefined} data-folded={folded ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined} data-held-ask={held ? held.id : undefined}>
+    <li ref={copy?.setNodeRef} style={copy?.style} className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}${watched ? ' is-watched' : ''}${copy?.dragging ? ' is-dragging' : ''}${focused ? ' is-focused' : ''}${known ? ' is-known' : ''}${close ? ' has-close' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-focused={focused ? 'true' : undefined} data-state={closed ? 'closed' : t.state} data-group={badge.group} data-acked-at-work={known ? 'true' : undefined} data-back-from-known={back ? 'true' : undefined} data-snoozed={snoozed ? 'true' : undefined} data-watched={watched ? 'true' : undefined} data-copy={copy ? 'watching' : undefined} data-folded={folded ? 'true' : undefined} data-asked-in={asked ? t.askedIn!.task : undefined} data-held-ask={held ? held.id : undefined}>
       {copy && (
         // A handle, not a button of the family: dnd-kit gives it its role and keyboard focus.
         <span className="org-thread-grip" data-testid="org-thread-watch-grip" aria-label={`Drag "${t.title}" to reorder Watching`} title="Drag to reorder" {...copy.grip}>
           <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.2" /><circle cx="7" cy="3" r="1.2" /><circle cx="3" cy="7" r="1.2" /><circle cx="7" cy="7" r="1.2" /><circle cx="3" cy="11" r="1.2" /><circle cx="7" cy="11" r="1.2" /></svg>
         </span>
       )}
+      {close && <NoticeClose onClose={close} label={THREAD_CLOSE_LABEL} testId="org-thread-close" className="org-thread-close" />}
       <button type="button" className="org-thread-head" data-peek-row="" aria-expanded={copy ? copyOpen : open} aria-controls={copy ? undefined : `${domId}-conversation`} data-testid="org-thread-head" onClick={onHead}>
         <ThreadState badge={badge} />
         <span className="org-thread-meta">
@@ -386,7 +396,7 @@ function ThreadCard({ t, all, shared, tasks, state, onFollowUp, name, now, snooz
 /** One thread of his list as every surface draws it: a thread of a task below is the ask card
  *  (PoppedThreadCard), the node's own the thread card. The Threads view and the top of the chat
  *  (TopThread) both draw through this, so one thread reads the same in both. */
-export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused = false, listed = true, onReadWhole, copy }: {
+export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now, snoozed, owner, focused = false, listed = true, onReadWhole, copy, foldable = true }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[];
   owner: Task | undefined; state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number; snoozed: boolean;
   /** A chat message's thread line just opened it (thread-focus.ts). */
@@ -397,10 +407,12 @@ export function ThreadItem({ t, all, shared, tasks, state, onFollowUp, name, now
   onReadWhole?: () => void;
   /** Drawn again in Watching (OrgThreadsWatching). */
   copy?: WatchingCopy;
+  /** Its × folds the card to one line in its list; false where the room around it folds instead (TopThread). */
+  foldable?: boolean;
 }) {
   return t.owner && owner
-    ? <PoppedThreadCard node={owner.id} name={name} t={t} state={state} now={now} snoozed={snoozed} listed={listed} />
-    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} listed={listed} {...(onReadWhole ? { onReadWhole } : {})} {...(copy ? { copy } : {})} />;
+    ? <PoppedThreadCard node={owner.id} name={name} t={t} state={state} now={now} snoozed={snoozed} listed={listed} foldable={foldable} />
+    : <ThreadCard t={t} all={all} shared={shared} tasks={tasks} state={state} onFollowUp={onFollowUp} name={name} now={now} snoozed={snoozed} owner={owner} focused={focused} listed={listed} foldable={foldable} {...(onReadWhole ? { onReadWhole } : {})} {...(copy ? { copy } : {})} />;
 }
 
 export function OrgThreads({ name, owner, state, tasks, onFollowUp, now: nowGiven, byState = false }: Props) {

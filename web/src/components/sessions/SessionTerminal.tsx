@@ -35,6 +35,8 @@ import { log } from '@/utils/log';
 import { ICON_CLOSE, ICON_EXPAND, ICON_PANEL_BOTTOM, ICON_PLUS, ICON_SPLIT_DOWN, ICON_SPLIT_RIGHT, ICON_STOP } from '../common/Icons';
 import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
 import { TerminalStatusPill } from './TerminalModeNotices';
+import { useLineClose } from '@/utils/notice-dismiss';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { SessionTerminalPane, type TerminalPaneHandle, type TerminalPaneState } from './SessionTerminalPane';
 import type { TerminalPathLink } from './terminal-links';
 import { Tab, TabList } from '@/components/controls';
@@ -548,6 +550,8 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
     return () => clearTimeout(t);
   }, [notice]);
   const shownNotice = notice ?? pathNotice ?? null;
+  // The folder-gone line's ×: hidden while this terminal is open; a folder removed again says it again.
+  const folderGoneLine = useLineClose(folderGone ? 'gone' : null);
   const dismissNotice = notice ? () => setNotice(null) : onDismissPathNotice;
 
   // Docked, the shown tab asks for the height its stacked panes need.
@@ -572,15 +576,16 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
     >
       {header}
       {tabStrip}
-      {folderGone && (
+      {folderGoneLine.shown && (
         <div className="session-terminal-gone-notice" role="status" data-testid="terminal-folder-gone">
+          <NoticeClose onClose={folderGoneLine.close} label="Hide this notice" testId="terminal-folder-gone-close" />
           Its folder was removed with the task's workspace (the task completed). A shell that was already open stays in the removed folder; a new one starts in your home folder.
         </div>
       )}
       {shownNotice && (
         <div className="session-terminal-path-notice" role="status" data-testid="terminal-path-notice">
           <span>{shownNotice.text}</span>
-          <button type="button" className="session-terminal-pane-close" onClick={dismissNotice} aria-label="Dismiss">{ICON_CLOSE}</button>
+          {dismissNotice && <NoticeClose onClose={dismissNotice} testId="terminal-path-notice-close" />}
         </div>
       )}
       {body}

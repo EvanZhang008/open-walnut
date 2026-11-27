@@ -26,6 +26,7 @@ import '@/styles/session-commit.css';
 import { FitButton, HeaderFitMore, useHeaderFit } from '@/components/common/HeaderFit';
 import { ICON_REFRESH } from '@/components/common/Icons';
 import { ICON_CLOSE } from '../common/Icons';
+import { NoticeClose } from '@/components/common/NoticeClose';
 
 
 export interface CommitConfirm { repoRoot: string; kind: 'push' | 'pr' }
@@ -40,6 +41,8 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<CommitConfirm | null>(null);
+  // "Nothing is preselected" is a note, not the dialog's error: its × hides it while the dialog is open.
+  const [attributionNoteClosed, setAttributionNoteClosed] = useState(false);
   const loadSeq = useRef(0);
   const headRef = useHeaderFit();
 
@@ -96,8 +99,11 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
     }
     return (
       <>
-        {!plan.attributed && (
-          <div className="scd-banner">Walnut could not read this session's edits on its host, so nothing is preselected. Check what to commit.</div>
+        {!plan.attributed && !attributionNoteClosed && (
+          <div className="scd-banner">
+            <NoticeClose onClose={() => setAttributionNoteClosed(true)} label="Hide this note" testId="scd-banner-close" className="scd-banner-close" />
+            Walnut could not read this session's edits on its host, so nothing is preselected. Check what to commit.
+          </div>
         )}
         {plan.repos.map((repo) => (
           <SessionCommitRepo

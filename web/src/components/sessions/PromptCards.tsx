@@ -11,6 +11,7 @@
  * shows the first 3, an ellipsis and the last 3, with `Show all (N lines)`.
  */
 import { ICON_WARNING } from '@/components/common/Icons';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useRowDisclosure } from './row-disclosure';
 import { createPortal } from 'react-dom';
@@ -74,10 +75,13 @@ function AskOtherInput({ placeholder, value, disabled, onChange, onEnter, draftK
  * renders the real options and submits the chosen labels as `answers`
  * (question text to label / free text). Option pills reuse the Personal AI's
  * QuestionPopover `qp-*` styles; the frame keeps the permission-card classes. */
-function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, answered }: {
+function AskUserQuestionCard({ questions, onSubmit, onDismiss, onFold, status, busy, answered }: {
   questions: AskQuestion[];
   onSubmit: (answers: Record<string, string>, images?: ImageAttachment[]) => void;
+  /** Its Dismiss button: answers the CLI that the user dismissed the questions. */
   onDismiss: () => void;
+  /** Its close (NoticeClose): folds the card to one line, as the permission card's does; never answers. */
+  onFold: () => void;
   status: PermissionRequestStatus;
   /** A response is in flight: the controls lock, but the card already shows the
    *  optimistic outcome (the store settles on click, not on the round-trip). */
@@ -202,6 +206,8 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
       <div className="permission-request-header">
         <span className="permission-request-icon" aria-hidden="true"><QuestionCircleIcon size={14} /></span>
         <span className="permission-request-title">Agent has a question</span>
+        <NoticeClose onClose={onFold} label="Hide: the question stays open, nothing is answered"
+          testId="permission-request-close" className="permission-request-close" />
       </div>
       {questions.map((q, qi) => {
         const picked = selections[q.question] ?? [];
@@ -344,6 +350,10 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
     ?? (initialStatus && initialStatus !== 'pending' ? initialStatus : 'pending');
   const busy = stored?.inFlight ?? false;
   const [inputExpanded, setInputExpanded] = useRowDisclosure(`perm-input-${requestId}`, false);
+  // Its close folds the waiting card to one line ("Waiting for your answer", then Show); it never answers.
+  // The bell's notification center and the toast still hold the request. The agent's questions
+  // (AskUserQuestionCard) fold the same way; their own Dismiss is the one that answers.
+  const [folded, setFolded] = useRowDisclosure(`perm-fold-${requestId}`, false);
   const phone = usePhoneLayout();
   const settled = isSettledPermission(status);
   // Phone: the answered card keeps its pending face (buttons off) for 300 ms.
@@ -471,23 +481,47 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
       send(choices[picked]);
       return true;
     },
-  }, pending && !askQuestions && !phone);
+  }, pending && !askQuestions && !phone && !folded);
   const keyFocus = usePromptKeyFocus(cardRef, keysOn);
   const keyTarget = usePromptKeyTarget(cardRef, keysOn);
   const keysState = usePromptKeysState(cardRef);
 
+  // Still pending (data-prompt-pending: the bar and the strip find it), with no answer keys.
+  // The same fold for a permission and for the agent's questions (2026-11-23, the user, of a
+  // question card hanging over his chat: a way to collapse it that does not answer it).
+  const foldedLine = pending && folded ? (
+    <div className="permission-request-card is-pending is-folded" data-prompt-pending="true" data-prompt-tool={toolName}
+      data-request-id={requestId} data-testid="permission-request-folded">
+      <div className="permission-request-header">
+        <span className="permission-request-icon" aria-hidden="true">{askQuestions ? <QuestionCircleIcon size={14} /> : ICON_WARNING}</span>
+        <span className="permission-request-tool">{askQuestions ? 'Agent has a question' : toolName}</span>
+        <span className="permission-request-reason">Waiting for your answer</span>
+        <button type="button" className="btn btn-ghost btn-sm permission-request-show" onClick={() => setFolded(false)} data-testid="permission-request-show">Show</button>
+      </div>
+    </div>
+  ) : null;
+
   if (askQuestions) {
+    // Folded, the question card stays mounted and only hidden: the options picked and the pictures
+    // added are its own state, and Show brings them back as they were.
     return (
-      <AskUserQuestionCard
-        questions={askQuestions}
-        status={face}
-        busy={busy || holding}
-        {...(stored?.answers ? { answered: stored.answers } : {})}
-        onSubmit={(answers, images) => handleResponse(true, undefined, undefined, answers, images)}
-        onDismiss={() => handleResponse(false, undefined, 'User dismissed the questions')}
-      />
+      <>
+        {foldedLine}
+        <div hidden={!!foldedLine} className="permission-request-fold-keep">
+          <AskUserQuestionCard
+            questions={askQuestions}
+            status={face}
+            busy={busy || holding}
+            {...(stored?.answers ? { answered: stored.answers } : {})}
+            onSubmit={(answers, images) => handleResponse(true, undefined, undefined, answers, images)}
+            onDismiss={() => handleResponse(false, undefined, 'User dismissed the questions')}
+            onFold={() => setFolded(true)}
+          />
+        </div>
+      </>
     );
   }
+  if (foldedLine) return foldedLine;
 
   // On a desktop every set reads as one numbered list (a solid green Allow beside a lone
   // Deny looked chosen before anything was); a phone keeps its big pair unless rules ride along.
@@ -520,6 +554,10 @@ export function PermissionRequestCard({ sessionId, requestId, toolName, input, r
         <span className="permission-request-tool">{toolName}</span>
         {/* Once answered, "requires approval" is no longer true: the outcome below says what happened. */}
         {reason && pending && <span className="permission-request-reason">{reason}</span>}
+        {pending && (
+          <NoticeClose onClose={() => setFolded(true)} label="Hide: the request stays in the notification center"
+            testId="permission-request-close" className="permission-request-close" />
+        )}
       </div>
       {/* The agent's own words for what the call does, as the toast and the panel show them. */}
       {description && <div className="permission-request-description">{description}</div>}

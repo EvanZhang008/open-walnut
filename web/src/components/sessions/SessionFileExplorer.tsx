@@ -65,6 +65,8 @@ import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 import { folderNameIn, homeFolderWords, HOME_FOLDER_LABEL, knownHomeOf, pathCrumbs, rememberHostHome, tildePath, untildePath } from '@/utils/home-folder';
 import '@/styles/header-fit.css';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useKeyedLineClose, useLineClose } from '@/utils/notice-dismiss';
 
 interface SessionFileExplorerProps {
   cwd?: string;
@@ -279,6 +281,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
   stalePathsRef.current = stalePaths;
   // "Showing the last known contents — couldn't reach the host." Muted, keeps rows.
   const [staleErrors, setStaleErrors] = useState<Map<string, string>>(new Map());
+  // The stale notes' ×: a folder whose failure clears (a good refresh) or changes forgets its close,
+  // so the next failed refresh says it again.
+  const staleClose = useKeyedLineClose(staleErrors);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const selectedFileRef = useRef(selectedFile);
   const selectionRevisionRef = useRef(0);
@@ -1311,6 +1316,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     setExpanded, setChildrenMap, setOpenRoots, setHistory, commitSelection, selectFile,
     onDirPathsChanged: forgetCachedSubtrees,
   });
+  // A pending delete or duplicate's line: its × takes it away now (the tree re-lists on its own).
+  const pendingLine = useLineClose(pendingNotice);
 
   // WHERE the edit row renders. A dir can be visible in more than one open root
   // section (a changed-repo section overlapping the cwd tree), and rendering the
@@ -1754,15 +1761,19 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           {rootError && <div className="sfe-error">{rootError}</div>}
           {/* A delete/duplicate the server answered 202 for: still running on the
               host. Muted, not red — nothing failed, the tree re-lists on its own. */}
-          {pendingNotice && (
-            <div className="sfe-notice sfe-notice-pending" role="status">{pendingNotice}</div>
+          {pendingLine.shown && (
+            <div className="sfe-notice sfe-notice-pending" role="status">
+              {pendingNotice}
+              <NoticeClose onClose={pendingLine.close} label="Hide this line" testId="sfe-pending-close" className="sfe-notice-close" />
+            </div>
           )}
           {/* Cached rows are on screen and the refetch failed. Muted, not red, and
               NOT in place of the tree: a listing from two minutes ago is far more
               useful than an error pane where the files used to be. */}
-          {staleErrors.has(root) && (
+          {staleClose.shown(root) && (
             <div className="sfe-notice" title={staleErrors.get(root)}>
               Showing the last known contents — the refresh didn't get through.
+              <NoticeClose onClose={() => staleClose.close(root)} label="Hide this note until the next failed refresh" testId="sfe-stale-close" className="sfe-notice-close" />
             </div>
           )}
           {/* Only a GENUINE miss gets a note (the errno-replacement contract).
@@ -1772,29 +1783,13 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
           {missingShown && (
             <div className="sfe-notice" data-testid="sfe-missing-note">
               {missingShown}
-              <button
-                type="button"
-                className="sfe-notice-dismiss"
-                onClick={() => setMissingShown(null)}
-                title="Dismiss"
-                aria-label="Dismiss path notice"
-              >
-                ✕
-              </button>
+              <NoticeClose onClose={() => setMissingShown(null)} label="Dismiss path notice" testId="sfe-missing-close" className="sfe-notice-close" />
             </div>
           )}
           {notFound && (
             <div className="sfe-notice" title={notFound}>
               Couldn't find <code>{notFound}</code> — showing the nearest folder.
-              <button
-                type="button"
-                className="sfe-notice-dismiss"
-                onClick={() => setNotFound(null)}
-                title="Dismiss"
-                aria-label="Dismiss path notice"
-              >
-                ✕
-              </button>
+              <NoticeClose onClose={() => setNotFound(null)} label="Dismiss path notice" testId="sfe-not-found-close" className="sfe-notice-close" />
             </div>
           )}
           {rootSections.map((section) => {
@@ -1890,13 +1885,14 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
                       {err && (
                         <div className="sfe-error" style={{ paddingLeft: `${8 + (node.depth + 1) * 14}px` }}>{err}</div>
                       )}
-                      {staleNote && isExpanded && (
+                      {staleNote && isExpanded && staleClose.shown(node.path) && (
                         <div
                           className="sfe-notice"
                           style={{ paddingLeft: `${8 + (node.depth + 1) * 14}px` }}
                           title={staleNote}
                         >
                           Showing the last known contents.
+                          <NoticeClose onClose={() => staleClose.close(node.path)} label="Hide this note until the next failed refresh" testId="sfe-stale-close" className="sfe-notice-close" />
                         </div>
                       )}
                     </div>

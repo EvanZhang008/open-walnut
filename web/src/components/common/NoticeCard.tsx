@@ -15,6 +15,7 @@ import { PersonAvatar } from '@/components/quickbar/PersonAvatar';
 import type { Notification, NotificationSeverity } from '@/contexts/notifications/types';
 import { avatarName, noticeTone } from '@/contexts/notifications/notice-face';
 import { ICON_CHECK, ICON_CLOSE, ICON_INFO, ICON_WARNING } from './Icons';
+import { NoticeClose } from './NoticeClose';
 import '@/styles/notice-card.css';
 
 /** What a status says by its colour: live (on its way), ok (done), warn, error, ask (waits on you), muted. */
@@ -91,6 +92,7 @@ export interface NoticeCardProps {
   onClose?: () => void;
   /** What the × says to a screen reader (default "Dismiss"). */
   closeLabel?: string;
+  closeTestId?: string;
   /** A click on the head (the avatar, title, status and preview): open what it is about. */
   onOpen?: () => void;
   openTitle?: string;
@@ -144,12 +146,7 @@ export function NoticeCard(p: NoticeCardProps) {
     </>
   );
   const hasHead = !!(p.avatar || p.who !== undefined || p.status || p.meta || p.line || p.end || p.onClose);
-  const close = p.onClose && (
-    <button type="button" className="btn btn-ghost btn-icon btn-sm wn-notice-close" aria-label={p.closeLabel ?? 'Dismiss'} title={p.closeLabel ?? 'Dismiss'}
-      onClick={(e) => { e.stopPropagation(); p.onClose!(); }}>
-      &times;
-    </button>
-  );
+  const close = p.onClose && <NoticeClose onClose={p.onClose} label={p.closeLabel} testId={p.closeTestId} />;
   return (
     <div
       ref={p.cardRef}

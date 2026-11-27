@@ -11,9 +11,10 @@
  * tests/e2e/browser/session-panel-narrow.spec.ts holds every notice to this.
  */
 import type { CSSProperties, ReactNode } from 'react';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import '@/styles/panel-notice.css';
 
-export function PanelNotice({ className, icon, actions, style, testId, role, children }: {
+export function PanelNotice({ className, icon, actions, style, testId, role, data, onClose, closeLabel, closeTestId, children }: {
   /** The box, tone and kind: `session-error-banner` (+ `--idle`, `--warning`, ...) */
   className?: string;
   icon?: ReactNode;
@@ -21,6 +22,12 @@ export function PanelNotice({ className, icon, actions, style, testId, role, chi
   style?: CSSProperties;
   testId?: string;
   role?: 'status' | 'alert';
+  /** Its own data attributes (`data-context-full`), on the root. */
+  data?: Record<`data-${string}`, string | undefined>;
+  /** The notice's × (every notice can be closed: NoticeClose), at the end of its first line. */
+  onClose?: () => void;
+  closeLabel?: string;
+  closeTestId?: string;
   children: ReactNode;
 }) {
   return (
@@ -30,8 +37,10 @@ export function PanelNotice({ className, icon, actions, style, testId, role, chi
       data-testid={testId}
       role={role}
       style={style}
+      {...data}
     >
       <div className="panel-notice-body">
+        {onClose && <NoticeClose onClose={onClose} label={closeLabel ?? 'Hide this notice'} testId={closeTestId} className="panel-notice-close" />}
         {icon && <span className="panel-notice-icon" aria-hidden="true"><span className="panel-notice-glyph">{icon}</span></span>}
         {children}
       </div>

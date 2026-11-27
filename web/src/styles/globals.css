@@ -2173,6 +2173,8 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   border-radius: var(--radius-sm);
   margin: 4px 8px;
 }
+/* Its × (NoticeClose) floated to the end of its first line. */
+.session-history-stale-close { float: right; margin: -4px -8px 0 6px; }
 
 /* A slow host still sending the history: a state, not a fault (no warning tint). */
 .session-history-loading-line {
@@ -2673,6 +2675,10 @@ html .notification-feed-item.wn-notice:focus-visible { outline: 2px solid var(--
   font-weight: 400;
   font-size: var(--font-size-sm);
 }
+/* Its × (NoticeClose) at the end of the header; folded, the one line ends with Show. */
+.permission-request-close { margin: -4px -8px -4px auto; }
+.permission-request-card.is-folded { padding-top: 6px; padding-bottom: 6px; }
+.permission-request-show { margin-left: auto; }
 .permission-request-input { margin-top: 8px; }
 .permission-request-input-toggle {
   background: none;
@@ -12328,6 +12334,8 @@ body.walnut-dragging {
    (.todo-search-meta-row): past the 18px phase circle and the row's gap. A card's own line box
    (.todo-pinned-card-override, .status-card-body) already starts there. */
 .todo-item-content > .task-filter-override-row { padding-left: 22px; }
+/* Its × (NoticeClose) at the line's end, inside the line's own height. */
+.task-filter-override-close { vertical-align: middle; margin: -4px 0 -4px 2px; }
 .home-navigation-scroll .todo-item-content > .task-filter-override-row { padding-left: 24px; }
 
 /* Fade-out animation when focus override is removed */
@@ -15589,15 +15597,6 @@ html .model-picker-col-title.wn-menu-heading {
   font-size: var(--font-size-md);
   margin-bottom: 14px;
 }
-.hook-banner-dismiss {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--fg-muted);
-  font-size: 16px;
-  cursor: pointer;
-  padding: 0 4px;
-}
 
 /* ===== Commands Page ===== */
 
@@ -16721,17 +16720,8 @@ td.usage-share-col {
   opacity: 0.85;
 }
 
-.sfe-notice-dismiss {
-  border: none;
-  background: transparent;
-  color: inherit;
-  opacity: 0.6;
-  cursor: pointer;
-  font-size: var(--font-size-xs);
-  padding: 0 2px;
-  margin-left: 6px;
-}
-.sfe-notice-dismiss:hover { opacity: 1; }
+/* Its × (NoticeClose) after the words, on their line. */
+.sfe-notice-close { margin: -4px -6px -4px 4px; vertical-align: middle; }
 
 .session-file-explorer-preview .file-content-view {
   height: 100%;
@@ -17399,19 +17389,6 @@ a.tag-chip:hover .tag-chip-value,
   margin: 0 0 4px;
   font-size: 16px;
   font-weight: 600;
-}
-
-.settings-banner {
-  padding: 6px 12px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  margin-bottom: 12px;
-}
-
-.settings-banner-success {
-  background: rgba(52, 199, 89, 0.1);
-  color: var(--success);
 }
 
 /* ── Suggestion accuracy (Tasks & Sessions) ──
@@ -18088,6 +18065,8 @@ a.tag-chip:hover .tag-chip-value,
   cursor: pointer;
 }
 .draft-fallback-use:hover { background: var(--bg-hover); }
+/* Its × (NoticeClose) at the end of the line. */
+.draft-fallback-close { margin: -4px -6px -4px auto; }
 .draft-needs-folder {
   flex-shrink: 0;
   margin: 0 2px 4px;
@@ -18409,6 +18388,7 @@ a.tag-chip:hover .tag-chip-value,
   opacity: 0.6;
   flex-shrink: 0;
 }
+.chat-interrupt-close { margin: -4px 0; }
 
 /* ===== Quick Access Bar (above chat input) ===== */
 
@@ -20577,6 +20557,10 @@ a.file-link:hover {
 }
 .session-terminal-plain-row { display: flex; align-items: center; gap: 8px; }
 .session-terminal-plain-text { flex: 1; min-width: 0; }
+/* The terminal notices' × (NoticeClose): at the end of the row; on the folder-gone line, floated
+   to the end of its first line. */
+.session-terminal-plain-row > .wn-notice-close { margin: -4px -6px -4px 0; }
+.session-terminal-gone-notice > .wn-notice-close { float: right; margin: -4px -6px 0 6px; }
 .session-terminal-plain-text code,
 .session-terminal-plain-details pre,
 .session-terminal-ssh-detail { font-family: var(--font-mono); }
@@ -20789,6 +20773,9 @@ a.file-link:hover {
   border-bottom: 1px solid #2f3449;
 }
 .session-terminal-path-notice > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Its × (NoticeClose) in the strip's own colour on the terminal's dark ground, as the panes' ×. */
+.session-terminal-path-notice > .wn-notice-close { color: inherit; }
+.session-terminal-panel .session-terminal-path-notice > .wn-notice-close.btn-icon:hover { background: color-mix(in srgb, currentColor 16%, transparent); color: inherit; }
 /* Docked under a view, a split gives its room to the output: slimmer strips. */
 .session-terminal-panel.is-docked .session-terminal-pane-strip { height: 20px; font-size: var(--font-size-xs); }
 .session-terminal-panel.is-docked .session-terminal-pane-close { width: 18px; height: 18px; }
@@ -21316,6 +21303,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   font-size: var(--font-size-sm);
   color: var(--warning);
 }
+.side-question-notice-close { margin: -4px -6px -4px 4px; vertical-align: middle; }
 
 /* Pre-thread one-shot entries — collapsed by default, own bounded scroll. */
 .side-question-legacy {
@@ -21883,6 +21871,7 @@ html body .side-question-popover--threads.open-walnut-fullscreen {
   border-bottom: 1px solid var(--border);
 }
 .session-diff-notice span { flex: 1 1 auto; min-width: 0; }
+.session-diff-notice-close, .session-diff-ghost-close { flex: none; margin: -4px -6px -4px 0; }
 .session-diff-tree-file.is-viewed .session-diff-tree-name { color: var(--fg-muted); }
 .session-diff-tree-file.is-viewed .session-diff-tree-status { opacity: 0.55; }
 .session-diff-tree-viewed {
@@ -24245,6 +24234,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   margin-left: auto;
   flex-shrink: 0;
 }
+.cal-alert-close { flex-shrink: 0; margin: -4px -6px -4px 0; }
 
 /* --- layout ---------------------------------------------------------------- */
 .cal-body {
@@ -27873,8 +27863,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   flex-shrink: 0;
 }
 
-.stale-build-pill-action,
-.stale-build-pill-later {
+.stale-build-pill-action {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -27900,17 +27889,8 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   text-decoration: underline;
 }
 
-.stale-build-pill-later {
-  min-width: 26px;
-  padding: 0 6px;
-  color: var(--fg-muted);
-  font-size: var(--font-size-lg);
-  line-height: 1;
-}
-
-.stale-build-pill-later:hover {
-  color: var(--fg);
-}
+/* Later: its × (NoticeClose, the family's look), centred on the pill's line. */
+.stale-build-pill-later { flex-shrink: 0; align-self: center; margin-right: 2px; }
 
 .stale-build-pill.is-docked .stale-build-pill-later { margin-left: auto; }
 /* Docked (the open rail, a popout's bar): a heading too long for one line ("Updating
@@ -28045,6 +28025,7 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   pointer-events: none;
 }
 .sidebar.collapsed .stale-build-pill.is-rail .stale-build-pill-later:focus-visible { opacity: 1; pointer-events: auto; }
+.sidebar.collapsed .stale-build-pill.is-rail .stale-build-pill-later svg { width: 10px; height: 10px; }
 
 /* A popout has no rail: a thin bar along the window's bottom edge, in the flow,
    under the composer. The leaf view gives up the bar's height. */

@@ -7,7 +7,9 @@
  * shape, in the same corner stack (CornerSlot: the two never overlap), one row per host with
  * the step in words and a measured bar, the line saying it keeps going, and a "–" that puts it
  * down to one line ("Connecting to build-box · 34%") that stays until the connect ends; a click
- * on that line opens the card again.
+ * on that line opens the card again. Its × hides it (card or line) while the hosts it showed connect:
+ * the connect goes on, a host that finishes and leaves the list keeps it hidden, and a host that
+ * starts connecting later brings it back (useGroupClose).
  *
  * Which hosts (background-connect.ts): a host whose FIRST connect runs, never an established
  * host's reconnect. Connected, a host reads "<name> is connected" for a few seconds, then goes;
@@ -20,6 +22,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
 import { NoticeCard, NoticeStatus } from '@/components/common/NoticeCard';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useGroupClose } from '@/utils/notice-dismiss';
 import { ICON_CHECK, ICON_TERMINAL } from '@/components/common/Icons';
 import { SetupProgress } from '@/components/common/SetupProgress';
 import { useAllHostStatus } from '@/hooks/useHostStatus';
@@ -33,8 +37,13 @@ import './host-connect-card.css';
 /** The card's line about closing: the connect runs in Walnut's server, not in this page. */
 export const BACKGROUND_NOTE = 'Keeps going in the background. You can close this window.';
 
+/** What the × does, in its own words. */
+const CLOSE_LABEL = 'Hide: the connect keeps going';
+
 /** A mouse click on the card's buttons leaves the focus where the person had it. */
 const keepFocus = (e: MouseEvent) => e.preventDefault();
+/** The same for the × (NoticeClose), from the card around it. */
+const closeKeepsFocus = { onMouseDown: (e: MouseEvent) => { if ((e.target as Element).closest('.wn-notice-close')) e.preventDefault(); } };
 
 function Row({ row }: { row: BackgroundConnectRow }) {
   if (row.state === 'connected') {
@@ -72,6 +81,9 @@ export function HostConnectCard() {
   // "–" and the line's click choose for as long as anything shows.
   const [form, setForm] = useState<'auto' | 'card' | 'pill'>('auto');
   if (rows.length === 0 && form !== 'auto') setForm('auto');
+  // The ×: hidden while every host shown is one it was closed on; the connect keeps going (and its
+  // end still shows in Notifications).
+  const closed = useGroupClose(rows.map((r) => r.host));
   const asPill = form === 'pill' || (form === 'auto' && (phone || compact));
 
   // A keyboard press of "–" (or of the line) took the focus with it: it moves to what replaced it.
@@ -88,7 +100,8 @@ export function HostConnectCard() {
     setForm(to);
   };
 
-  if (rows.length === 0) return null;
+  if (!closed.shown) return null;
+  const close = closed.close;
   const connecting = rows.some((r) => r.state === 'connecting');
   const { words, percent } = pillParts(rows);
   const line = pillText(rows);
@@ -96,7 +109,7 @@ export function HostConnectCard() {
   return (
     <CornerSlot order={CORNER_ORDER.hostConnect} className="corner-slot-host-connect">
       {asPill ? (
-        <NoticeCard className="wn-notice-pill">
+        <NoticeCard className="wn-notice-pill" handlers={closeKeepsFocus}>
           <button
             type="button"
             ref={pillRef}
@@ -110,21 +123,26 @@ export function HostConnectCard() {
             <NoticeStatus tone={connecting ? 'live' : 'ok'}>{words}</NoticeStatus>
             {percent !== undefined && <span className="hcc-pill-percent">{`· ${percent}%`}</span>}
           </button>
+          <NoticeClose onClose={close} label={CLOSE_LABEL} testId="host-connect-close" />
         </NoticeCard>
       ) : (
         <NoticeCard
           className="hcc-card"
+          handlers={closeKeepsFocus}
           role="region"
           testId="host-connect-card"
           ariaLabel="Connecting in the background"
           avatar={{ glyph: connecting ? ICON_TERMINAL : ICON_CHECK, tone: connecting ? 'live' : 'ok' }}
           who="Computers"
           status={{ tone: connecting ? 'live' : 'ok', text: connecting ? 'Setting up in the background' : 'Done' }}
+          onClose={close}
+          closeLabel={CLOSE_LABEL}
+          closeTestId="host-connect-close"
           end={(
             <button
               type="button"
               ref={minimizeRef}
-              className="approval-minimize wn-notice-x"
+              className="approval-minimize"
               aria-label="Make it smaller"
               title="Make it smaller: one line until it is done"
               data-testid="host-connect-minimize"

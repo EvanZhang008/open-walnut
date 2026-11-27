@@ -27,6 +27,8 @@ import {
 import { createPortal } from 'react-dom'
 import { useInRouterContext, useLocation } from 'react-router-dom'
 import { NoticeCard } from '@/components/common/NoticeCard'
+import { NoticeClose } from '@/components/common/NoticeClose'
+import { noticeText, useLineClose } from '@/utils/notice-dismiss'
 import { log } from '@/utils/log'
 import { badge } from '@/components/common/badge'
 import { NoticeStatus, type NoticeTone } from '@/components/common/NoticeCard'
@@ -572,25 +574,29 @@ export function SettingsNotice({
   children,
   role,
   action,
+  onClose,
 }: {
   kind?: 'info' | 'success' | 'warn' | 'error'
   children: ReactNode
   role?: string
   action?: ReactNode
+  /** Its close, where the owner takes the notice away itself (a one-off banner); without it the
+   *  close hides these words here. */
+  onClose?: () => void
 }) {
   const withAction = hasContent(action)
+  // Its close hides these words here (every notice can be closed: NoticeClose); new words show again.
+  const line = useLineClose(`${kind}|${noticeText(children)}`)
+  if (!line.shown) return null
   return (
     <NoticeCard
       solid
-      className={`settings-notice settings-notice-${kind}${withAction ? ' settings-notice-with-action' : ''}`}
+      className={`settings-notice settings-notice-${kind} settings-notice-with-action`}
       role={role}
     >
-      {withAction ? (
-        <>
-          <span className="settings-notice-text">{children}</span>
-          <span className="settings-notice-action">{action}</span>
-        </>
-      ) : children}
+      <span className="settings-notice-text">{children}</span>
+      {withAction && <span className="settings-notice-action">{action}</span>}
+      <NoticeClose onClose={onClose ?? line.close} label="Hide this notice" className="settings-notice-close" />
     </NoticeCard>
   )
 }

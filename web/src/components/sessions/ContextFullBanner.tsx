@@ -11,6 +11,8 @@ import type { SessionRecord } from '@/types/session';
 import { useEvent } from '@/hooks/useWebSocket';
 import { SessionRetryButton } from './SessionRetryButton';
 import { WarningTriangleIcon } from '@/components/common/PhoneIcons';
+import { useNoticeDismiss } from '@/utils/notice-dismiss';
+import { PanelNotice } from './PanelNotice';
 
 interface ContextFullBannerProps {
   sessionId: string;
@@ -51,13 +53,18 @@ export function ContextFullBanner({ sessionId, session, onResuming }: ContextFul
     if (d.sessionId === sessionId && d.contextRecovery) setLive(d.contextRecovery);
   }, [sessionId]));
   const { text, busy } = contextFullBannerText(newer(session.contextRecovery, live), session.last_status_change);
+  // Its × hides it until its sentence changes (compacting, failed) or the next episode (a new error time).
+  const close = useNoticeDismiss(`session-context-full:${sessionId}`, `${session.last_status_change ?? ''}|${text}`);
+  if (close.hidden) return null;
   return (
-    <div className={`session-error-banner${busy ? ' session-error-banner--reconnecting' : ''}`} data-context-full>
-      <span className="session-error-banner-icon">{busy ? '↻' : <WarningTriangleIcon size={14} />}</span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <span className="session-error-banner-text">{text}</span>
-      </div>
-      {!busy && (
+    <PanelNotice
+      className={`session-error-banner${busy ? ' session-error-banner--reconnecting' : ''}`}
+      data={{ 'data-context-full': '' }}
+      icon={busy ? '\u21BB' : <WarningTriangleIcon size={14} />}
+      onClose={close.dismiss}
+      closeLabel="Hide this banner until it says something new"
+      closeTestId="context-full-close"
+      actions={busy ? null : (
         <SessionRetryButton
           sessionId={sessionId}
           host={session.host}
@@ -69,6 +76,8 @@ export function ContextFullBanner({ sessionId, session, onResuming }: ContextFul
           }}
         />
       )}
-    </div>
+    >
+      <span className="session-error-banner-text panel-notice-prose">{text}</span>
+    </PanelNotice>
   );
 }

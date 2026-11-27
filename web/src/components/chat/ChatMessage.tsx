@@ -30,6 +30,8 @@ import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { markdownToRichHtml } from '@/utils/markdown';
 import { badge, priorityTone } from '@/components/common/badge';
 import { DisclosureChevron } from '@/components/controls';
+import { SendFailedNote, TurnInterruptedRow } from './ChatRowLines';
+
 export interface RouteInfo {
   direction: 'sent' | 'received';
   event: string;
@@ -1299,12 +1301,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
                 {onCancel && <button className="chat-queued-cancel" onClick={onCancel} type="button" aria-label="Cancel queued message">&times;</button>}
               </span>
             )}
-            {failed && (
-              <div className="chat-send-failed" role="alert" data-testid="chat-send-failed">
-                <span className="chat-send-failed-reason">Not sent: {failed}</span>
-                {onRetry && <button className="btn btn-sm" onClick={onRetry} type="button">Retry</button>}
-              </div>
-            )}
+            {failed && <SendFailedNote key={failed} reason={failed} onRetry={onRetry} />}
           </div>
         ) : (
           (!isCollapsed || !shouldAutoCollapse) && (
@@ -1455,13 +1452,7 @@ function specialChatRow({ role, content, timestamp, source, notification }: Chat
   // Showing it as a user message makes automated reaps indistinguishable from
   // the user's own action.
   if (role === 'user' && content.trim() === '[Request interrupted by user]') {
-    return (
-      <div className="chat-interrupt-banner">
-        <span className="chat-interrupt-icon">{'\u23F9'}</span>
-        <span className="chat-interrupt-text">Turn interrupted</span>
-        {time && <span className="chat-interrupt-time">{time}</span>}
-      </div>
-    );
+    return <TurnInterruptedRow id={timestamp} time={time} icon />;
   }
 
   return undefined;

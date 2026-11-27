@@ -33,3 +33,13 @@
    with one button that asks again now. */
 .connection-line { align-items: center; }
 .connection-line-btn { margin-left: auto; }
+
+/* Each line's × (NoticeClose) at its end. The 24 px square would make the band taller than its
+   words, so it reaches into the padding instead of pushing it. */
+.away-line-close { margin: -4px -8px -4px auto; align-self: center; }
+.connection-line-btn + .away-line-close { margin-left: 0; }
+.mac-away-composer-close { float: right; margin: -4px -6px 0 6px; }
+/* The phone row (PhoneStatusRow, phone-layout.css): the same ×, with a finger-sized target. */
+.app-shell-navigation .phone-status-row-close { flex: none; width: 44px; min-width: 44px; min-height: 44px; margin-right: -10px; }
+/* Folded by its ×: one quiet line that still says why there is no send. */
+.mac-away-composer.is-folded { padding: 4px 12px; font-size: var(--font-size-sm); }

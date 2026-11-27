@@ -3,13 +3,17 @@
  * open tasks wait outside, and Leave. The list under it shows only the focus (MainPage.tsx).
  * Right after a Leave here it shows what waited outside (what needs the person now) until Done.
  * Entering and changing spaces is in Settings > Focus (FocusSpacesSection.tsx).
+ * Its × (NoticeClose) hides the line while in this focus: the list still shows only the focus, and
+ * the line comes back with the next focus entered (or this one entered again).
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Task } from '@open-walnut/core'
 import { taskInScope } from '@open-walnut/focus-scope'
 import { useTaskListSelect } from '@/contexts/TasksContext'
-import { leaveFocus, type ActiveFocus } from './focus-store'
+import { NoticeClose } from '@/components/common/NoticeClose'
+import { useNoticeDismiss } from '@/utils/notice-dismiss'
+import { leaveFocus, useFocusSnapshot, type ActiveFocus } from './focus-store'
 import { useFocusOn, useFocusView } from './useFocusView'
 import { outsideCounts, outsideWords, summarize, untilWords, type FocusSummary } from './focus-model'
 import { SummaryView } from './FocusPanel'
@@ -18,11 +22,20 @@ import '@/styles/focus-spaces.css'
 
 const NO_TASKS: readonly Task[] = []
 
+/** One stay in a focus: the space (or its name) and when it was entered; null once out of every focus. */
+export function focusStaySignature(loaded: boolean, active: ActiveFocus | null, on: boolean): string | null | undefined {
+  if (!on) return null
+  if (!loaded) return undefined
+  return active ? `${active.spaceId ?? active.name}@${active.since}` : null
+}
+
 export function FocusBanner() {
   const view = useFocusView()
   const tasks = useTaskListSelect(({ tasks: list }) => list) ?? NO_TASKS
   const on = useFocusOn()
   const navigate = useNavigate()
+  const snap = useFocusSnapshot()
+  const { hidden, dismiss } = useNoticeDismiss('focus-banner', focusStaySignature(snap.loaded, snap.active, on))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [ended, setEnded] = useState<FocusSummary | null>(null)
@@ -37,7 +50,7 @@ export function FocusBanner() {
       </div>
     )
   }
-  if (!view || !outside) return null
+  if (!view || !outside || hidden) return null
   const leave = () => {
     if (busy) return
     setBusy(true)
@@ -69,6 +82,7 @@ export function FocusBanner() {
         <button type="button" className="btn btn-sm" onClick={() => navigate('/settings#focus-spaces')} title="Switch to another space or edit this one, in Settings > Focus" data-testid="focus-banner-change">Change</button>
         <button type="button" className="btn btn-sm" disabled={busy} onClick={leave} data-testid="focus-banner-leave">Leave</button>
       </div>
+      <NoticeClose onClose={dismiss} label="Hide this line while in this focus" testId="focus-banner-close" className="focus-banner-close" />
     </div>
   )
 }

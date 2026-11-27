@@ -190,6 +190,8 @@ html .kanban-menu-group.wn-menu-heading { padding-left: 28px; }
 
 /* ── Card widgets: prompt, editor, composer, start, leader row ── */
 .kanban-prompt { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 2px; font-size: var(--font-size-sm); min-width: 0; }
+/* Its first line leaves room for the card's × (OneCardFrame, actions/AskCard.tsx), which folds the prompt back to the status line. */
+.has-close .kanban-prompt > :first-child { padding-right: 26px; }
 .kanban-prompt .nfc-card-cmd { display: block; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-size-sm); cursor: pointer; }
 .kanban-prompt .is-clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .kanban-prompt .notification-feed-item-actions { display: flex; flex-wrap: wrap; gap: 6px; }

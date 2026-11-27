@@ -524,14 +524,16 @@ button.approval-line-more { border: 0; cursor: pointer; font: inherit; font-size
 
 /* After "stop asking me": what changed, with Undo and the way to the switch. */
 .approval-stopped { display: flex; flex-direction: column; gap: 6px; }
-.approval-stopped-line { font-weight: 600; }
+.approval-stopped-line { display: flex; align-items: flex-start; gap: 8px; font-weight: 600; }
 .approval-stopped-what { font-size: var(--font-size-md); color: var(--fg-muted); overflow-wrap: anywhere; }
 .approval-stopped-sub { font-size: var(--font-size-md); color: var(--fg); }
 .approval-dialog .approval-stopped-inline { margin-top: 4px; padding: 0; border: 0; }
 .approval-stopped-actions { display: flex; align-items: center; gap: 14px; font-size: var(--font-size-md); }
-.approval-stopped-close {
-  margin-left: auto; padding: 0 4px; border: 0; background: none; color: var(--fg-muted);
-  font-size: 16px; line-height: 1; cursor: pointer;
-}
-.approval-stopped-close:hover { color: var(--fg); }
 .approval-stop-asking:hover { color: var(--accent-text); text-decoration: underline; }
+
+/* The one × (NoticeClose) at the end of a card's first line: a receipt's, the stop-asking note's. */
+:is(.approval-settled-line, .approval-stopped-line) > .wn-notice-close { flex: none; align-self: center; margin: -4px -6px -4px auto; }
+/* A pill (an approval or a host connect put aside) keeps its × beside its face. */
+.wn-notice-pill:has(> .wn-notice-close) { display: flex; align-items: center; }
+.wn-notice-pill > .approval-aside { flex: 1 1 auto; min-width: 0; width: auto; }
+.wn-notice-pill > .wn-notice-close { flex: none; margin-right: 6px; }

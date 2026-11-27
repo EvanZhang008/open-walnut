@@ -64,7 +64,7 @@ import { PdfPreview } from '@/components/common/PdfPreview';
 import { SegmentedControl } from '@/components/controls';
 import {
   ICON_NEW_TAB, ICON_NOTE, ICON_COPY, ICON_DOWNLOAD, ICON_FOLDER, ICON_OPEN_APP, ICON_EXPAND, ICON_COLLAPSE,
-  ICON_SEARCH, ICON_HISTORY, ICON_MORE, ICON_CHECK, ICON_CLOSE, ICON_CODE, ICON_FILE, ICON_SKIP_BACK, ICON_SKIP_FORWARD,
+  ICON_SEARCH, ICON_HISTORY, ICON_MORE, ICON_CHECK, ICON_CODE, ICON_FILE, ICON_SKIP_BACK, ICON_SKIP_FORWARD,
 } from '@/components/common/Icons';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { FileSourceEditor, type FileSourceEditorHandle } from '@/components/common/FileSourceEditor';
@@ -88,6 +88,8 @@ import { previewFrameName } from '@/components/common/preview-page-storage';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 import { useHidesHighlights } from '@/hooks/useHidesHighlights';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useLineClose, useNoticeDismiss } from '@/utils/notice-dismiss';
 import '@/styles/live-edit.css';
 import '@/styles/file-doc-bar.css';
 import { fileCardOpenIn, selectionToolbarOpen } from '@/utils/file-card-escape';
@@ -1723,6 +1725,14 @@ export function FileContentView({
     onFindResult: (r) => frameFindRef.current?.result(r),
   });
   const { strayed, setStrayed, returnToFile, selectionRect: frameSelectionRect } = preview;
+  // The strips' × (NoticeClose). The offline strip hides until the host answers again (then a new
+  // outage shows it). The stale-draft strip hides for this one draft, by what it holds (a reread
+  // makes a new object with the same draft: it stays hidden; the next file open clears it, so it is
+  // offered again): the draft itself stays stored, untouched. The preview-moved strip hides for this
+  // one stray (kept by identity, so the next stray shows it again).
+  const offlineClose = useNoticeDismiss(`fv-offline:${host ?? ''}`, live.unreachable ? 'unreachable' : null);
+  const staleDraftClose = useLineClose(staleDraft ? `${staleDraft.baseHash}\n${staleDraft.text}` : null);
+  const [closedStray, setClosedStray] = useState<object | null>(null);
   clearFrameSelectionRef.current = preview.clearSelection;
   // The preview's URL version. Frozen while the reader has followed a link away
   // from the file: a write to the file must not pull them back on its own.
@@ -2555,9 +2565,10 @@ export function FileContentView({
           fetch" with live mode silently paused underneath: the strip exists so
           "not saving right now" is never invisible. Hidden behind a real error
           banner, which already says what to do. */}
-      {live.unreachable && !saveError && (
+      {live.unreachable && !saveError && !offlineClose.hidden && (
         <div className="fv-offline-banner" role="status">
-          Can't reach {live.unreachableHost ?? 'Walnut'} right now. Your edits are kept in the editor and will be saved on their own once it is back.
+          <span className="fv-banner-text">Can't reach {live.unreachableHost ?? 'Walnut'} right now. Your edits are kept in the editor and will be saved on their own once it is back.</span>
+          <NoticeClose onClose={offlineClose.dismiss} label="Hide until it is reachable again" testId="fv-offline-close" className="fv-banner-close" />
         </div>
       )}
       {bannerText && (
@@ -2594,24 +2605,16 @@ export function FileContentView({
             </span>
           )}
           {!conflictOpen && !retryOpen && !reloadOpen && saveError && (
-            <button
-              type="button"
-              className="fv-save-error-dismiss"
-              onClick={() => setSaveError(null)}
-              aria-label="Dismiss"
-              title="Dismiss"
-            >
-              {ICON_CLOSE}
-            </button>
+            <NoticeClose onClose={() => setSaveError(null)} testId="fv-save-error-close" className="fv-banner-close" />
           )}
         </div>
       )}
       {/* A draft written against OLDER bytes. Non-transient on purpose: both the
           user's text and whatever landed on disk are real work, so this waits
           for a decision instead of picking a winner. */}
-      {staleDraft != null && (
+      {staleDraft != null && staleDraftClose.shown && (
         <div className="fv-draft-banner" role="status">
-          <span>You have unsaved changes to this file from an older version of it on disk.</span>
+          <span className="fv-banner-text">You have unsaved changes to this file from an older version of it on disk.</span>
           <button
             type="button"
             className="btn btn-sm"
@@ -2623,6 +2626,8 @@ export function FileContentView({
           <button type="button" className="btn btn-sm" onClick={discardStaleDraft}>
             Discard draft
           </button>
+          {/* Hides the strip only: the draft is kept, and the strip is back the next time this file opens. */}
+          <NoticeClose onClose={staleDraftClose.close} label="Hide: the draft is kept and offered again next time" testId="fv-draft-banner-close" className="fv-banner-close" />
         </div>
       )}
       {searchOpen && (
@@ -2637,7 +2642,7 @@ export function FileContentView({
           onClose={closeSearch}
         />
       )}
-      {!loading && showPreview && isHtml && strayed && (
+      {!loading && showPreview && isHtml && strayed && closedStray !== strayed && (
         <div className="fv-draft-banner fv-strayed-banner" role="status">
           <button type="button" className="btn btn-sm" onClick={returnToFile}>
             ← Back to {filePath.split('/').pop() || filePath}
@@ -2655,6 +2660,7 @@ export function FileContentView({
           <span className="fv-strayed-where" title={strayed.path}>
             {strayed.path ? `Preview moved to ${strayed.path}` : 'Preview moved to another page'}
           </span>
+          <NoticeClose onClose={() => setClosedStray(strayed)} label="Hide this strip: the preview stays where it moved" testId="fv-strayed-close" className="fv-banner-close" />
         </div>
       )}
       {!loading && showPreview && isHtml && (

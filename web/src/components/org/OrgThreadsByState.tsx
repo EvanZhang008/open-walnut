@@ -16,8 +16,10 @@
  *
  * A card that leaves a group on screen leaves a line in its place for a few seconds (thread-moves.ts).
  */
+import { useLeanCallback } from '@/hooks/useLeanCallback';
 import { focusUnlessTyping, isTypingField } from '@/utils/focus-unless-typing';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { DisclosureButton } from '@/components/controls';
 import type { Task } from '@open-walnut/core';
 import type { OrgThread } from '@/api/org-threads';
@@ -76,23 +78,26 @@ function keepFocusHome(root: HTMLElement | null, at: FocusPlace | null, groups: 
 /** The line a card left in its place: where it is now, Show to open that group and bring the card
  *  into view. It goes by itself MOVE_NOTE_MS after it showed: a read that moved the card on out of
  *  sight only renames it, a new move (another group left: moveKey) is a new line with its own
- *  clock. One holding the focus hands it to its group's head, never to the page. */
+ *  clock. Its × takes it away at once. One holding the focus hands it to its group's head, never to
+ *  the page. */
 function MoveNote({ m, onShow, onDone }: { m: ThreadMove; onShow: (m: ThreadMove) => void; onDone: (id: string) => void }) {
   const ref = useRef<HTMLLIElement>(null);
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      const li = ref.current;
-      if (li?.contains(document.activeElement)) focusUnlessTyping(headOf(li.closest('[data-testid="org-thread-groups"]'), m.from));
-      onDone(m.id);
-    }, MOVE_NOTE_MS);
-    return () => window.clearTimeout(id);
+  const leave = useLeanCallback(() => {
+    const li = ref.current;
+    if (li?.contains(document.activeElement)) focusUnlessTyping(headOf(li.closest('[data-testid="org-thread-groups"]'), m.from));
+    onDone(m.id);
   }, [m.id, m.from, onDone]);
+  useEffect(() => {
+    const id = window.setTimeout(leave, MOVE_NOTE_MS);
+    return () => window.clearTimeout(id);
+  }, [m.id, leave]);
   return (
     <li ref={ref} className="org-thread-move-note" data-testid="org-thread-move-note" data-moved-id={m.id} data-to={m.to} role="status">
       {/* Where it is now first: a long title gives way, never the group. */}
       <span className="org-thread-move-to">{`Moved to ${THREAD_GROUP_LABELS[m.to]}`}</span>
       <span className="org-thread-move-words">{`\u201c${m.title}\u201d`}</span>
       <button type="button" className="org-thread-link" data-testid="org-thread-move-show" onClick={() => onShow(m)}>Show</button>
+      <NoticeClose onClose={leave} label="Remove this note" testId="org-thread-move-close" className="org-thread-move-close" />
     </li>
   );
 }

@@ -31,6 +31,7 @@ import { SessionServerList, type SessionServerListProps } from './SessionServerL
 import { openable, serverLabel } from './session-server-label';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import '@/styles/session-servers.css';
+import { NoticeClose } from '@/components/common/NoticeClose';
 
 /** The iframe must fire `load` within this after its src is set. */
 const LOAD_TIMEOUT_MS = 20_000;
@@ -399,6 +400,7 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
         <div className="session-servers-notice" role="status" data-testid="session-servers-notice">
           <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 5 9l4.5-6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
           <span>{notice}</span>
+          <NoticeClose onClose={() => setNotice(null)} testId="session-servers-notice-close" className="session-servers-notice-close" />
         </div>
       )}
       {phase === 'error' && error ? (

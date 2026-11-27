@@ -24,6 +24,7 @@ import {
   collapseRepeats, healthLabel, historyWords, nameTaskIn, offLabel, quietReason, routineError, routineHealth, rowTiming, runOutcome, runStamp, settledRun,
 } from './routine-groups';
 import '@/styles/routine-description.css';
+import { NoticeClose } from '@/components/common/NoticeClose';
 
 interface RoutineRowProps {
   routine: Routine;
@@ -175,7 +176,7 @@ export function RoutineRow({
         <div className="routine-action-error" role="alert" data-testid="routine-action-error">
           <span>{nameTaskIn(actionError, routine)}</span>
           {onDismissError && (
-            <button type="button" className="routine-action-error-dismiss" aria-label="Dismiss" onClick={() => onDismissError(routine.id)}>×</button>
+            <NoticeClose onClose={() => onDismissError(routine.id)} testId="routine-action-error-close" className="routine-action-error-dismiss" />
           )}
         </div>
       )}

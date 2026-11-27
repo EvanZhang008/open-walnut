@@ -179,7 +179,10 @@
 .drawing-workspace-conflict span { flex: 1 1 260px; }
 .drawing-workspace-warning { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: var(--font-size-sm); color: var(--fg-secondary); border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
 .drawing-workspace-warning span { flex: 1; }
-.drawing-workspace-notice { margin: 0; padding: 6px 12px; color: var(--error); font-size: var(--font-size-sm); border-bottom: 1px solid var(--border); }
+.drawing-workspace-notice { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 6px 12px; color: var(--error); font-size: var(--font-size-sm); border-bottom: 1px solid var(--border); }
+.drawing-workspace-notice-text { flex: 1; min-width: 0; }
+/* The line's × (NoticeClose), at its end, inside its height. */
+.drawing-workspace-notice-close { flex: none; margin: -4px -6px -4px 0; }
 
 /* The canvas and what sits on it. */
 .drawing-workspace-canvas { position: relative; flex: 1 1 auto; min-height: 240px; }

@@ -98,12 +98,14 @@ test('stuck on "Prompt is too long": Compact and resend, never Reconnect', async
   await expect.poll(() => retried).toBe(1)
 })
 
-test('while Walnut compacts it, the banner says so and offers no button', async ({ page }) => {
+test('while Walnut compacts it, the banner says so and offers no button but its close', async ({ page }) => {
   await fullContext(page, { state: 'compacting' })
   const panel = await openSessionPanel(page)
   const banner = panel.locator('.session-error-banner[data-context-full]')
   await expect(banner).toContainText('Walnut is compacting it, then resends the messages that got no answer')
-  await expect(banner.getByRole('button')).toHaveCount(0)
+  // Only its × (every notice closes): no action while the compaction runs.
+  await expect(banner.getByRole('button')).toHaveCount(1)
+  await expect(banner.getByTestId('context-full-close')).toBeVisible()
   await banner.screenshot({ path: `${SCREENSHOT_DIR}/compacting.png` })
 })
 

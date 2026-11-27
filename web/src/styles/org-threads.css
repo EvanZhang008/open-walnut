@@ -199,6 +199,8 @@
 .org-thread-move-to { flex: none; color: var(--fg-secondary); }
 .org-thread-move-words { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-thread-move-note .org-thread-link { flex: none; }
+/* Its × (NoticeClose) last, after Show: it takes the note away at once. */
+.org-thread-move-note > .org-thread-move-close { flex: none; align-self: center; margin: -4px -6px -4px 0; }
 @keyframes org-thread-move-note-fade { 0%, 83% { opacity: 1; } 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .org-thread-move-note { animation: none; } }
 
@@ -206,3 +208,9 @@
    engines: WebKit has no CSS scroll anchoring), so Chromium's own anchoring stays out of it: two
    corrections of one move undo each other. */
 .org-rail-body:has(> .org-threads), .session-threads-body:has(> .org-threads) { overflow-anchor: none; }
+
+/* A card's × (NoticeClose, thread-fold.tsx) at its top right, over the end of its state line, which
+   leaves it room: it folds the card to one line in its list. */
+.org-thread.has-close { position: relative; }
+.org-thread > .org-thread-close { position: absolute; top: 4px; right: 4px; z-index: 1; }
+.org-thread.has-close > .org-thread-head .org-thread-meta { padding-right: 24px; }

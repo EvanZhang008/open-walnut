@@ -24,6 +24,8 @@
 .session-supervision-heading strong { color: var(--fg); font-weight: 500; }
 .session-supervision p { margin: 4px 0; }
 .session-supervision [role="alert"] { color: var(--error); }
+.session-supervision-end { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.session-supervision-end > .wn-notice-close { margin: -4px -6px -4px 0; }
 .session-supervision-toggle { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .session-supervision-footer { color: var(--fg-muted); }
 .session-supervision-footer button {

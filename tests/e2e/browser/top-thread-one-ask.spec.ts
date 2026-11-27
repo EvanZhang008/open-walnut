@@ -44,7 +44,7 @@ const CAPTIONS = {
   once: 'The question the thread holds shows once above the chat',
   other: 'On another thread, the bar says where the question is; the arrows stay put',
   back: 'One click steps back to the question',
-  hide: 'Hide the top: it folds to one line',
+  hide: 'The × folds the top to one line',
   hidden: 'Hidden: one line names the question; the strip does not draw it again',
   show: 'Show brings the thread back: still one question',
   off: 'With the top thread switched off, the strip shows it alone',

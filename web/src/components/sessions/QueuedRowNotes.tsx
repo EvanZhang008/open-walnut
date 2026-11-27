@@ -2,9 +2,14 @@
  * The plain lines under a queued bubble that has waited too long, or that the
  * queue lost track of (queued-wait.ts). Each keeps its own clock, so the "N min"
  * stays true without re-rendering the whole chat history.
+ *
+ * Each note has its × (QueueNote): it hides the note only. The message still waits and goes out
+ * by itself; Send now, Edit and Delete stay on the bubble.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import { leftQueueLine, queuedWaitLine, type WaitLineInput } from './queued-wait';
+import { useLineClose } from '@/utils/notice-dismiss';
 
 const TICK_MS = 10_000;
 
@@ -18,6 +23,19 @@ function useClock(active: boolean): number {
     return () => clearInterval(id);
   }, [active]);
   return now;
+}
+
+/** One note under a queued bubble, with its ×. `closeKey` names what it says (its message and
+ *  reason, never its ticking minutes): closed, it stays hidden until that changes. */
+export function QueueNote({ className, closeKey, children }: { className?: string; closeKey: string; children: ReactNode }) {
+  const closed = useLineClose(closeKey);
+  if (!closed.shown) return null;
+  return (
+    <div className={`thread-queue-note${className ? ` ${className}` : ''}`} role="status">
+      {children}
+      <NoticeClose onClose={closed.close} label="Hide this note: the message still goes by itself" testId="queue-note-close" className="queue-note-close" />
+    </div>
+  );
 }
 
 const isWaiting = (status: string) => status === 'pending' || status === 'received';
@@ -46,13 +64,13 @@ export function QueuedWaitNote({ m, turnRunning, syncError, sending, onSendNow }
   if (!line) return null;
   const clientOnly = m.queueId.startsWith('temp-');
   return (
-    <div className="thread-queue-note session-msg-wait-note" role="status">
+    <QueueNote className="session-msg-wait-note" closeKey={m.queueId}>
       {line}
       {!m.afterTurn && !clientOnly && !sending && (
         <button type="button" className="session-msg-send-now-btn" onClick={onSendNow}>Send now</button>
       )}
       {sending && <span className="session-msg-send-now-sent"> Sending…</span>}
-    </div>
+    </QueueNote>
   );
 }
 

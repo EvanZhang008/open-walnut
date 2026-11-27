@@ -75,6 +75,8 @@
 
 .mail-list-status-line[data-tone='error'] { color: var(--error); }
 .mail-list-status-text { min-width: 0; }
+/* The line's × (NoticeClose) at its end, inside the line's height. */
+.mail-list-status-close { margin: -4px -6px -4px auto; align-self: center; }
 
 .mail-grouped-state .mail-list-note { padding-top: 2px; }
 .mail-rules-error, .mail-groups-error { color: var(--fg-secondary); }

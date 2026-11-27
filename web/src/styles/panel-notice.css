@@ -90,3 +90,10 @@
 @container (max-width: 260px) {
   .panel-notice-actions > * { flex: 1 1 100%; }
 }
+
+/* The notice's × (NoticeClose) in its top right corner, over the room the first line leaves it: the
+   icon and the words keep the whole width of the box at any width (a float beside the icon left the
+   icon alone on a line at 200 px). */
+.panel-notice:has(> .panel-notice-body > .panel-notice-close) { position: relative; }
+.panel-notice:has(> .panel-notice-body > .panel-notice-close) > .panel-notice-body { padding-right: 24px; }
+.panel-notice-close { position: absolute; top: 4px; right: 4px; }

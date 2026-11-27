@@ -53,6 +53,7 @@ import { framingLabel, splitComposedFraming } from '@open-walnut/composed-framin
 import { splitRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
+import { TurnInterruptedRow } from '@/components/chat/ChatRowLines';
 import { CLI_ERROR_VARIANT, COMPACTION_PENDING_RUN_ID, envelopeSteps, foldStepsPhrase, systemRowVariant, systemRunDisclosureId, systemRunLabel, systemRunShows, type SystemRunIdentity } from './fold-steps';
 import { IdleCompactLine } from './IdleCompactLine';
 import { isIdleCompactLine } from '../../../../src/core/sessions/prompt-cache';
@@ -1324,12 +1325,7 @@ function specialSessionRow({ message }: SessionMessageProps): ReactNode | undefi
   // Both CLI variants: "[Request interrupted by user]" and
   // "[Request interrupted by user for tool use]" (62 of the latter in corpus).
   if (isUser && text && /^\[Request interrupted by user( for tool use)?\]$/.test(text.trim())) {
-    return (
-      <div className="chat-interrupt-banner">
-        <span className="chat-interrupt-text">Turn interrupted</span>
-        {time && <span className="chat-interrupt-time">{time}</span>}
-      </div>
-    );
+    return <TurnInterruptedRow id={message.msgId ?? message.timestamp} time={time} />;
   }
 
   // CLI-injected context (skill content dump, compaction summary, image

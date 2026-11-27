@@ -89,11 +89,10 @@ import { applyStripChange, onTaskbarClose } from './sessionTaskbarStore';
 import { isRealSessionColumn } from './sessionTaskbar';
 import { onMinimizeToTaskbar } from '@/utils/taskbar-minimize';
 import { FocusDock } from '@/components/dock/FocusDock';
-import { FirstUseSetup } from '@/components/common/FirstUseSetup';
+import { FirstUseSetup, useFirstUseCard } from '@/components/common/FirstUseSetup';
 import { FoundHostPrompts } from '@/components/common/FoundHostPrompts';
 import { EmptyState } from '@/components/common/EmptyState';
 import { firstUseCanStartMain, firstUseNeedsSetup } from '@/utils/first-use';
-import { firstUseCardPlace } from './home-first-use-card';
 import type { DraftGateError } from '@/components/sessions/HostGateErrorBar';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import {
@@ -767,13 +766,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // notifications (the bell panel's problem rows and a top toast, HostProblemToasts), so no chat,
   // session or task column carries one (2026-11-16, the user: "this shoudl not show on top of
   // quick chat pannel", "please unified, shodl as notificaiton in the notificaiton bar").
-  const welcomeIn = firstUseCardPlace(needsFirstSetup, chatVisible, todoShown);
+  // Its × (useFirstUseCard) makes it no card at all, in either place, until the setup step changes.
+  const { place: welcomeIn, close: closeWelcome } = useFirstUseCard(needsFirstSetup, chatVisible, todoShown, health, loading || healthLoading);
   const tasksBanner = useMemo(() => (
     <>
       {todoShown && <FoundHostPrompts />}
-      {welcomeIn === 'tasks' && <div className="first-use-in-tasks" data-testid="first-use-in-tasks"><FirstUseSetup health={health} loading={healthLoading} /></div>}
+      {welcomeIn === 'tasks' && <div className="first-use-in-tasks" data-testid="first-use-in-tasks"><FirstUseSetup health={health} loading={healthLoading} onClose={closeWelcome} /></div>}
     </>
-  ), [todoShown, welcomeIn, health, healthLoading]);
+  ), [todoShown, welcomeIn, health, healthLoading, closeWelcome]);
   // "The current session" (stores/active-session.ts) must stay inside the open
   // strip: a closed column stops being the target, an empty strip has none.
   useEffect(() => { reconcileActiveSession(sessionColumnIds); }, [sessionColumnIds]);
@@ -3936,7 +3936,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           // list as "no asks yet" and flash its composer on every page load.
           tasksLoading={loading}
           setupReady={!healthLoading && firstUseCanStartMain(health)}
-          setup={welcomeIn === 'slot' ? <FirstUseSetup health={health} loading={healthLoading} /> : undefined}
+          setup={welcomeIn === 'slot' ? <FirstUseSetup health={health} loading={healthLoading} onClose={closeWelcome} /> : undefined}
           inspectorOpen={inspector.isOpen}
           onToggleInspector={inspector.toggle}
           {...(walnutRepairTarget ? { onFixWalnut: handleFixWalnut } : {})}

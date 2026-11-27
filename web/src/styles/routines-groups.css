@@ -437,16 +437,8 @@
   flex: 1 1 auto;
 }
 
-.routine-action-error-dismiss {
-  flex: 0 0 auto;
-  border: 0;
-  background: none;
-  color: var(--fg-muted);
-  font-size: var(--font-size-lg);
-  line-height: 1;
-  padding: 0 2px;
-  cursor: pointer;
-}
+/* Its × (NoticeClose, the family's look) at the end of the line. */
+.routine-action-error > .routine-action-error-dismiss { flex: 0 0 auto; margin: -4px -4px -4px 0; }
 
 /* The task a session routine runs in, picked by its title (RoutineTaskField). */
 .routine-task-field {

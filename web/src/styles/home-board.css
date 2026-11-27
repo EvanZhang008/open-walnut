@@ -36,7 +36,7 @@
 .home-board-actions > button:hover { color: var(--accent); }
 .home-board-actions > button[data-board-done-button]:hover { color: var(--success); }
 .home-board-done-note { display: flex; align-items: center; gap: 12px; }
-.home-board-done-note button { padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: var(--font-size-sm); }
+.home-board-done-note button:not(.wn-notice-close) { padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: var(--font-size-sm); }
 .home-board-parent { margin-top: 6px; color: var(--fg-muted); font-size: var(--font-size-xs); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .home-board-family { margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--border); }
 .home-board-card.home-board-child { margin: 0 0 3px; padding: 7px 0 7px 9px; border: 0; border-left: 2px solid var(--border); border-radius: 0; box-shadow: none; }
@@ -48,7 +48,7 @@
 .home-board-error { display: flex; gap: 12px; align-items: center; width: 100%; min-width: 0; color: var(--error); font-size: var(--font-size-sm); }
 .home-board-error > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .home-board-error button { flex-shrink: 0; }
-.home-board-error button { margin-left: auto; color: var(--fg); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 4px 10px; }
+.home-board-error button:not(.wn-notice-close) { margin-left: auto; color: var(--fg); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 4px 10px; }
 .home-board-sheet button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 700px) {
   .home-board-head { flex-wrap: wrap; padding: 12px; }

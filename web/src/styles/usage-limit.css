@@ -43,13 +43,9 @@
   background: var(--bg-secondary); border-color: var(--border);
 }
 .usage-limit-note .usage-limit-banner-icon { align-self: center; margin-top: 0; color: var(--success); }
-.usage-limit-note-close {
-  display: flex; align-items: center; justify-content: center; flex: none;
-  width: 22px; height: 22px; margin-left: auto; border: 0; border-radius: var(--radius-full);
-  background: transparent; color: var(--fg-muted); cursor: pointer;
-}
-.usage-limit-note-close:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
-.usage-limit-note-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Its × (NoticeClose) at the end of the first row, on the line of the words' head. */
+.usage-limit-close { flex: none; align-self: flex-start; margin: -4px -6px 0 auto; }
+.usage-limit-note .usage-limit-close { align-self: center; margin-top: 0; margin-bottom: 0; }
 
 /* The banner takes focus after a switch (UsageLimitBanner): a ring only for the keyboard. */
 .usage-limit-banner:focus { outline: none; }

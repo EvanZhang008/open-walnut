@@ -67,7 +67,7 @@
 }
 .top-thread-step:hover:not(:disabled) { background: var(--bg-secondary); }
 .top-thread-step:disabled { cursor: default; color: var(--fg-muted); opacity: 0.5; }
-.top-thread-step:focus-visible, .top-thread-hide:focus-visible, .top-thread-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.top-thread-step:focus-visible, .top-thread-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .top-thread-pos { font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 500; }
 .top-thread-left { margin-left: 4px; }
 /* The dot between the bar's "N more" and its working count: the same room on both sides. */
@@ -84,8 +84,8 @@
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.4em), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 2.4em), transparent);
 }
-.top-thread-hide { all: unset; cursor: pointer; margin-left: auto; padding: 2px 6px; border-radius: var(--radius-full); }
-.top-thread-hide:hover { background: var(--bg-secondary); color: var(--fg); }
+/* Its × (NoticeClose) at the bar's end, where Hide stood: it folds the top to its line. */
+.top-thread-bar > .top-thread-close { margin-left: auto; }
 .top-thread-list .org-thread[data-state="needs"] { border-color: color-mix(in srgb, var(--error) 45%, var(--border)); }
 .top-thread-line {
   all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: var(--radius-sm);
@@ -104,5 +104,7 @@
 /* A phone: finger-sized controls. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .top-thread-step { width: 44px; height: 44px; }
-  .app-shell-navigation .top-thread-hide, .app-shell-navigation .top-thread-line { min-height: 44px; box-sizing: border-box; }
+  .app-shell-navigation .top-thread-line { min-height: 44px; box-sizing: border-box; }
+  /* The bar's × (NoticeClose, 24 px on a desk) is a finger's 44 px here, as Hide was. */
+  .app-shell-navigation .top-thread-bar > .top-thread-close { min-width: 44px; min-height: 44px; }
 }

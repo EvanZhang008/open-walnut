@@ -159,18 +159,6 @@
 .fv-save-error-text { flex: 1 1 260px; min-width: 0; }
 /* The choices wrap inside a narrow pane rather than running past its edge. */
 .fv-save-error-actions { flex: 0 1 auto; min-width: 0; max-width: 100%; display: inline-flex; flex-wrap: wrap; gap: 6px; }
-.fv-save-error-dismiss {
-  flex: none;
-  display: inline-flex;
-  padding: 3px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.7;
-}
-.fv-save-error-dismiss:hover { opacity: 1; background: color-mix(in srgb, currentColor 10%, transparent); }
 
 /* ── Explorer: the lead of the document bar ───────────────────────────────── */
 .sfe-nav-lead {

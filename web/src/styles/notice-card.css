@@ -166,25 +166,6 @@ button.wn-notice-open:focus-visible { outline: 2px solid var(--accent); outline-
 
 .wn-notice-end { flex: none; display: inline-flex; align-items: center; gap: 2px; margin: -4px -2px -4px 0; }
 
-/* The ×, "–", "+" at the end of the title row: one finger-sized target, the glyph small. */
-.wn-notice-x {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 26px;
-  min-height: 26px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--fg-muted);
-  font: inherit;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-}
-.wn-notice-x:hover { background: var(--bg-hover); color: var(--fg); }
-
 /* A notice's own content: under the words, past the 22px avatar and its 10px gap, close under
    the preview (the head keeps a little of its padding over it). */
 .wn-notice-head:has(+ .wn-notice-body) { padding-bottom: 4px; }

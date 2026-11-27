@@ -20,6 +20,7 @@ import { HowToUpdateDialog, type UpdateCommand } from './HowToUpdateDialog';
 import { displayVersion, howToUpdateCommands, readSeenVersion, serverPillView, updatedNotice, writeSeenVersion } from './server-update-pill';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { log } from '@/utils/log';
+import { NoticeClose } from '@/components/common/NoticeClose';
 
 /** "Walnut updated to X" goes by itself once this window has been looked at this long. */
 const UPDATED_NOTICE_MS = 2 * 60_000;
@@ -234,8 +235,8 @@ export function StaleBuildPill() {
               <RefreshIcon /><span className="stale-build-pill-label">{label}</span>
             </button>
           </>}
-        <button type="button" className="stale-build-pill-later" onClick={onLater} aria-disabled={pending || undefined}
-          title={laterLabel} aria-label={laterLabel}>×</button>
+        {/* Its × is Later (or Dismiss for the "updated" note): the label says which. */}
+        <NoticeClose onClose={onLater} disabled={pending} label={laterLabel} className="stale-build-pill-later" />
       </div>, docked ? dock : document.body,
     )}
     {howTo && <HowToUpdateDialog version={update.status?.live?.version ?? update.status?.latest ?? null}

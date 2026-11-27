@@ -132,7 +132,7 @@ test.describe('the gate bar lives with the host', () => {
     expect((await bar.locator('.host-gate-actions button').allInnerTexts()).map((t) => t.trim())).toEqual(['Check again', 'Start anyway', 'Open Settings'])
     await hostFixture(request, { action: 'clear-problems', host: 'buildbox' })
     const ready = panel.locator('[data-testid="host-gate-ready"]')
-    await expect(ready).toHaveText(/^✓ Build box is ready \(Claude Code 2\.1\.281\)$/)
+    await expect(ready.locator('.hpb-ready-text')).toHaveText(/^✓ Build box is ready \(Claude Code 2\.1\.281\)$/)
     await expect(bar).toHaveCount(0)
     await expect(ready).toHaveCount(0, { timeout: 5_000 })
     await expect(draftSend(panel)).toBeEnabled()
@@ -197,7 +197,8 @@ test.describe('a host that left Settings, and hosts that are off', () => {
     const bar = gateBar(panel)
     await expect(bar).toHaveAttribute('data-code', 'host_removed')
     await expect(bar.locator('.session-error-banner-text')).toHaveText(REMOVED)
-    await expect(bar.getByRole('button')).toHaveCount(0)
+    // Only its × (every notice closes): no action.
+    await expect(bar.locator('button:not(.wn-notice-close)')).toHaveCount(0)
   })
 
   test('ephemeral fixture: no remote quick chip, an off ring on the pill, host_off on Start with no dial (C79)', async ({ page, request }) => {
@@ -228,7 +229,8 @@ test.describe('a host that left Settings, and hosts that are off', () => {
     expect(after.spawns.length).toBe(before.spawns.length)
     const bar = gateBar(panel)
     await expect(bar.locator('.session-error-banner-text')).toHaveText(REMOTE_OFF)
-    await expect(bar.getByRole('button')).toHaveCount(0)
+    // Only its × (every notice closes): no action.
+    await expect(bar.locator('button:not(.wn-notice-close)')).toHaveCount(0)
   })
 })
 

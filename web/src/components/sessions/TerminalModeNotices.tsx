@@ -11,6 +11,8 @@
  */
 
 import { CopyButton } from '@/components/common/CopyButton';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useLineClose } from '@/utils/notice-dismiss';
 import type { TerminalOpenPlain, TerminalSshFailed } from '@/api/terminal';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { END_REATTACH_HINT, END_UNCONFIRMED_TEXT } from '@/hooks/terminal-end-model';
@@ -52,6 +54,9 @@ interface PlainNoticeProps {
 export function TerminalPlainNotice({ plain, retrying, disabled = false, onRetry }: PlainNoticeProps) {
   const where = plain.host ?? 'this machine';
   const cmd = <code>{plain.installCommand}</code>;
+  // Its × hides it for this pane until the shell's state changes; the header's Not persistent badge stays.
+  const closed = useLineClose(`${plain.reason}|${plain.host ?? ''}`);
+  if (!closed.shown) return null;
   return (
     <div className="session-terminal-plain-notice" role="status" data-testid="terminal-plain-notice">
       <div className="session-terminal-plain-row">
@@ -66,6 +71,7 @@ export function TerminalPlainNotice({ plain, retrying, disabled = false, onRetry
         <button className="btn btn-sm" onClick={onRetry} disabled={retrying || disabled} title="Check for dtach again; if it can be built, this shell is replaced by a persistent one">
           {retrying ? 'Retrying…' : 'Retry'}
         </button>
+        <NoticeClose onClose={closed.close} label="Hide this notice" testId="terminal-plain-close" />
       </div>
       {plain.reason === 'build_failed' && plain.detail && (
         <details className="session-terminal-plain-details">
@@ -100,6 +106,9 @@ interface EndUnconfirmedProps {
 
 /** "End terminal" could not be confirmed: the shell may still run. Never claim it ended. */
 export function TerminalEndUnconfirmedNotice({ reason, ending, onRetry }: EndUnconfirmedProps) {
+  // Its × hides it until another End comes back unconfirmed with a new reason.
+  const closed = useLineClose(reason);
+  if (!closed.shown) return null;
   return (
     <div className="session-terminal-plain-notice" role="alert" data-testid="terminal-end-unconfirmed">
       <div className="session-terminal-plain-row">
@@ -109,6 +118,7 @@ export function TerminalEndUnconfirmedNotice({ reason, ending, onRetry }: EndUnc
         <button type="button" className="btn btn-sm" onClick={onRetry} disabled={ending} title="Try to end the terminal again">
           {ending ? 'Ending…' : 'Try again'}
         </button>
+        <NoticeClose onClose={closed.close} label="Hide this notice" testId="terminal-end-unconfirmed-close" />
       </div>
     </div>
   );

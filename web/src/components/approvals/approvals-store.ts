@@ -38,6 +38,8 @@ export interface ApprovalsState {
   stoppedAsking: { id: string; at: number; undone?: boolean } | null;
   /** "Approve, and stop asking me" is on its way for this one: its own "Approved" receipt is not shown (the note says it). */
   stoppingId: string | null;
+  /** The server's list was read at least once: `items` is then every request waiting, not a guess. */
+  listed?: boolean;
 }
 
 const EMPTY: ApprovalsState = { items: new Map(), busy: {}, errors: {}, done: {}, openId: null, stoppedAsking: null, stoppingId: null };
@@ -115,7 +117,7 @@ export async function refreshApprovals(): Promise<void> {
     const items = new Map(fresh.map((a) => [a.id, a]));
     // One that left the list while this window was away was answered elsewhere: its notice goes too.
     for (const id of state.items.keys()) if (!items.has(id)) clearApprovalNotice(id);
-    set({ items });
+    set({ items, listed: true });
     // The Mac app also takes back notices from before it started whose approval is gone now.
     keepApprovalNotices([...items.keys()]);
     for (const a of fresh) notice(a);

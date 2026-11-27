@@ -25,6 +25,8 @@ import { HostCommands } from '@/components/hosts/HostCommands';
 import { demoHostMessage } from '@/utils/demo-generation';
 import { StableButton } from '@/components/common/HostProblemRows';
 import { openHostSettings } from '@/utils/host-settings-nav';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { HostReceipt } from './SessionHostErrorBar';
 import '@/styles/attention-banner.css';
 
 export interface DraftGateError {
@@ -88,7 +90,8 @@ export function HostGateErrorBar({ gate, draftHost, label, onClear, onStartAnywa
 
   if (readyUntil !== null) {
     return (
-      <div className="session-error-banner session-error-banner--idle host-gate-bar" role="status" data-testid="host-gate-ready">
+      <div className="session-error-banner session-error-banner--idle host-gate-bar has-corner-close" role="status" data-testid="host-gate-ready">
+        <NoticeClose onClose={onClear} label="Hide this line" testId="host-gate-ready-close" className="host-gate-close" />
         <span className="hpb-ready-text">{hostReadySentence(label, status?.readiness?.claude?.version)}</span>
       </div>
     );
@@ -97,7 +100,9 @@ export function HostGateErrorBar({ gate, draftHost, label, onClear, onStartAnywa
   // A replica cannot dial ssh: no Retry there (Check again relays to the Mac).
   const ids = problem ? hostActionsFor(problem, { surface: 'errorbar', replica, allowOverride: !!gate.body.allowOverride }) : [];
   return (
-    <div className="session-error-banner host-gate-bar" role="alert" data-testid="host-gate-bar" data-code={gate.code} data-host={alias}>
+    <div className="session-error-banner host-gate-bar has-corner-close" role="alert" data-testid="host-gate-bar" data-code={gate.code} data-host={alias}>
+      {/* Its × clears this refusal (the draft keeps what was typed); the next refused Start says it again. */}
+      <NoticeClose onClose={onClear} label="Hide this message" testId="host-gate-close" className="host-gate-close" />
       <div className="host-gate-body">
         {!problem && <span className="session-error-banner-text">{gate.body.error}</span>}
         {problem?.type === 'off' && <span className="session-error-banner-text">{REMOTE_OFF_NOTE}</span>}
@@ -116,7 +121,7 @@ export function HostGateErrorBar({ gate, draftHost, label, onClear, onStartAnywa
             {problem.problem.commands.length > 0 && <HostCommands commands={problem.problem.commands} />}
           </>
         )}
-        {actions.receipt && <div className="hpb-receipt">{actions.receipt}</div>}
+        <div><HostReceipt receipt={actions.receipt} /></div>
         {actions.failed === 'retry' && <div className="host-connect-retry-msg" role="alert">{RETRY_FAILED_TEXT}</div>}
       </div>
       {ids.length > 0 && (

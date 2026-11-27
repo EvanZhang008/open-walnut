@@ -21,6 +21,7 @@ import { TOP_HIDDEN_VIEW, awakeAt, stripItems } from '@/components/org/top-threa
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useNow } from '@/components/approvals/ApprovalPrompts';
 import { ActionNeeded } from './ActionNeeded';
+import { AskFoldLine, FOLD_WORDS } from './AskFold';
 
 /**
  * `threadsOpen`: the task's Threads view is open beside this chat. It shows every thread, so the top
@@ -39,8 +40,8 @@ export const SessionActionStrip = memo(function SessionActionStrip({ task, sessi
 });
 
 /**
- * Hide folds everything above the chat to one line each, the strip's and the top thread's, kept in the
- * view memory for every chat (TOP_HIDDEN_VIEW), so a question that comes later stays folded too, its
+ * The × of the strip's card and of the top thread folds everything above the chat to one line each,
+ * kept in the view memory for every chat (TOP_HIDDEN_VIEW), so a question that comes later stays folded too, its
  * words in the line (2026-11-23, the user, on a question card that took half his small screen:
  * asking for a way to collapse it).
  */
@@ -49,9 +50,8 @@ function useTopHidden(): [boolean, (v: boolean) => void] {
 }
 
 /**
- * The strip folded: one line that names its first item and how many more, and Show. The question is
- * the agent's words, drawn by the shared renderer beside the Show button, never inside a button (its
- * links open on their own); a click elsewhere on the line shows the card too.
+ * The strip folded by its ×: one line that names its first item and how many more, and Show (the
+ * one fold line, AskFold.tsx); a click elsewhere on the line shows the card too.
  */
 function StripLine({ task, items, onShow }: { task: Task; items: readonly ActionItem[]; onShow: () => void }) {
   const first = items[0];
@@ -59,13 +59,9 @@ function StripLine({ task, items, onShow }: { task: Task; items: readonly Action
   const more = items.length - 1;
   return (
     <div className="top-thread is-hidden action-strip-line" data-testid="action-strip-line" data-count={items.length}>
-      <div className="top-thread-line" onClick={(e) => { if (!(e.target as HTMLElement).closest('a')) onShow(); }}>
-        <i className="top-thread-dot is-needs" aria-hidden="true" />
-        <AgentText compact inline {...taskTextSource(task, 'needs')} className="top-thread-line-title" text={first.summary} testId="action-strip-line-title" />
-        {more > 0 && <><span aria-hidden="true">{' · '}</span><span className="top-thread-line-count">{more} more</span></>}
-        <button type="button" className="btn btn-link btn-sm action-strip-show" data-testid="action-strip-show" aria-expanded={false}
-          onClick={(e) => { e.stopPropagation(); onShow(); }} title="Show what it asks above the chat">Show</button>
-      </div>
+      <AskFoldLine testId="action-strip-fold" showTestId="action-strip-show" onShow={onShow} title="Show what it asks above the chat"
+        words={<AgentText compact inline {...taskTextSource(task, 'needs')} className={FOLD_WORDS} text={first.summary} testId="action-strip-line-title" />}
+        extra={more > 0 && <><span aria-hidden="true">{' · '}</span><span className="top-thread-line-count">{more} more</span></>} />
     </div>
   );
 }

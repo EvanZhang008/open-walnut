@@ -326,7 +326,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
       )}
       {promptOpen && status.prompt && (
         <div className="kanban-card-prompt" data-kanban-zone onPointerDown={(e) => e.stopPropagation()}>
-          <OneCardFrame testId="kanban-card-ask"><KanbanCardPrompt request={status.prompt} onAnswered={() => ctx.markSeen(vm.taskId)} /></OneCardFrame>
+          <OneCardFrame testId="kanban-card-ask" onClose={() => setPromptOpen(false)} closeLabel="Fold it back to the card's status line: it still waits on you" closeTestId="kanban-card-ask-close"><KanbanCardPrompt request={status.prompt} onAnswered={() => ctx.markSeen(vm.taskId)} /></OneCardFrame>
         </div>
       )}
       {editor?.field === 'summary' ? (

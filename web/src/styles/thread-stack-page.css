@@ -155,6 +155,8 @@
 
 /* A question sent while another is answering waits its turn. */
 .thread-queue-note { margin-top: 2px; color: var(--fg-muted); font-size: var(--font-size-sm); text-align: right; }
+/* Its × (NoticeClose, QueuedRowNotes QueueNote) after its words, on their line. */
+.thread-queue-note .queue-note-close { margin: -4px -6px -4px 2px; vertical-align: middle; }
 
 /* The drawer toggle's fixed slot in the session header. */
 /* Zero layout height, centred on the row: the 24px toggle appearing on the first

@@ -22,6 +22,8 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { CORNER_ORDER, CornerSlot, useCornerState } from '@/components/common/corner-stack';
 import { NoticeCard, NoticeStatus } from '@/components/common/NoticeCard';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { dismissNotice, isNoticeDismissed, forgetNotices, useNoticeDismiss } from '@/utils/notice-dismiss';
 import { useEvent } from '@/hooks/useWebSocket';
 import { QUIET_CATCHUP_ID } from '@/contexts/notifications/system-notice';
 import { OPEN_CENTER_EVENT } from '@/utils/open-anywhere';
@@ -132,7 +134,7 @@ export function ApprovalDetail({ a, open = false }: { a: Approval; open?: boolea
 }
 
 /** What the request is, who asks, the detail, and the answer: the card's and the dialog's body. */
-function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approval; s: ApprovalsState; now: number; onOpen?: () => void; onMinimize?: () => void; total?: number }) {
+function ApprovalBody({ a, s, now, onOpen, onMinimize, onClose, total = 0 }: { a: Approval; s: ApprovalsState; now: number; onOpen?: () => void; onMinimize?: () => void; onClose?: () => void; total?: number }) {
   const hostName = useHostDisplayLabel(a.requester.host);
   const asker = a.requester.taskId;
   // The card leads with what the step does and why, whole, as the dialog does (2026-11-14, the user:
@@ -155,6 +157,7 @@ function ApprovalBody({ a, s, now, onOpen, onMinimize, total = 0 }: { a: Approva
               <span aria-hidden="true">–</span>
             </button>
           )}
+          {onClose && <NoticeClose onClose={onClose} label={CLOSE_WAITING_LABEL} testId="approval-close" />}
         </span>
       </div>
       {onOpen
@@ -204,7 +207,8 @@ function StoppedAsking({ s, now, inDialog = false }: { s: ApprovalsState; now: n
   return (
     <Frame className={`approval-card approval-card-settled approval-stopped${inDialog ? ' approval-stopped-inline' : ''}`} role="status" testId="approval-stopped-asking">
       <div className="approval-stopped-line">
-        {st.undone ? 'Agents ask you first again.' : 'Approved. From now on agents go ahead without asking you.'}
+        <span>{st.undone ? 'Agents ask you first again.' : 'Approved. From now on agents go ahead without asking you.'}</span>
+        {!inDialog && <NoticeClose onClose={dismissStoppedAsking} label="Close" className="approval-stopped-close" testId="approval-stopped-close" />}
       </div>
       {what && <div className="approval-stopped-what">{what}</div>}
       {st.undone
@@ -218,7 +222,6 @@ function StoppedAsking({ s, now, inDialog = false }: { s: ApprovalsState; now: n
       <div className="approval-stopped-actions">
         {!st.undone && <button type="button" className="approval-link" data-testid="approval-stopped-undo" title="Turn approvals back on. The one you approved stays approved." onClick={() => { void undoStopAsking(); }}>Ask me again</button>}
         <button type="button" className="approval-link" data-testid="approval-stopped-settings" onClick={() => { dismissStoppedAsking(); closeApproval(); navigate('/settings#general'); }}>Settings › General</button>
-        {!inDialog && <button type="button" className="approval-stopped-close" aria-label="Close" onClick={dismissStoppedAsking}>×</button>}
       </div>
     </Frame>
   );
@@ -337,6 +340,45 @@ function ApprovalDialog({ s, now, id }: { s: ApprovalsState; now: number; id: st
   );
 }
 
+/**
+ * The corner's × on a waiting request (2026-11-27, the user's rule: every card in front of him has a
+ * visible close). It never answers: the requests waiting then leave the corner, in every window,
+ * and stay in the notification center and on the Needs you line; a request that comes later brings
+ * the card back (with every one still waiting in its count). Keys in notice-dismiss.ts, one per id.
+ */
+const CORNER_CLOSED_SCOPE = 'approval-corner';
+const CLOSE_WAITING_LABEL = 'Hide: the request stays in the notification center';
+
+/** True while the person closed this request's card in the corner (the toast stack reads it for its room). */
+export const closedInCorner = (id: string): boolean => isNoticeDismissed(CORNER_CLOSED_SCOPE, id);
+
+/** What the corner shows of the requests waiting: all of them, or none while each was closed there. */
+export function shownInCorner<T extends { id: string }>(asking: readonly T[]): readonly T[] {
+  return asking.some((a) => !closedInCorner(a.id)) ? asking : [];
+}
+
+/** The corner's ×: every request waiting now leaves the corner (none is answered). */
+export function closeInCorner(asking: readonly { id: string }[]): void {
+  for (const a of asking) dismissNotice(CORNER_CLOSED_SCOPE, a.id);
+}
+
+/** The corner's closes of requests no longer waiting (answered, expired) go, so they never fill the store. */
+/** The requests this window has seen waiting, so it forgets only closes of requests it saw go. */
+const seenWaiting = new Set<string>();
+
+/**
+ * Drop the corner's closes of requests this window saw waiting and now sees gone (answered,
+ * withdrawn, expired). Never one it has not seen: another window with a newer list may have just
+ * closed a request this one does not know yet, and that close stays.
+ */
+export function forgetClosedInCorner(waiting: Iterable<string>): void {
+  const now = new Set(waiting);
+  const gone = [...seenWaiting].filter((id) => !now.has(id));
+  for (const id of gone) seenWaiting.delete(id);
+  for (const id of now) seenWaiting.add(id);
+  if (gone.length > 0) forgetNotices(CORNER_CLOSED_SCOPE, gone);
+}
+
 /** The count the corner gives, the same as the Needs you line's. */
 const waitingWords = (n: number) => `${n} approval${n === 1 ? '' : 's'} waiting`;
 
@@ -378,7 +420,14 @@ export function ApprovalPrompts() {
   // it stays until it is answered, a newer one only adds to its "N waiting".
   // One the person snoozed on its task's row (Action needed) waits out its snooze off the corner.
   const snoozed = useSnoozedApprovalIds();
-  const waiting = pendingAt(s, now).filter((a) => a.id !== s.openId && !snoozed.has(a.id));
+  const asking = pendingAt(s, now).filter((a) => a.id !== s.openId && !snoozed.has(a.id));
+  // Read for its subscription: a close in any window draws this one again (no signature of its own).
+  useNoticeDismiss(CORNER_CLOSED_SCOPE, undefined);
+  // Once the server's list is known, a close kept for a request that is gone is dropped.
+  useEffect(() => { if (s.listed) forgetClosedInCorner(s.items.keys()); }, [s.listed, s.items]);
+  // Closed with its ×: the corner shows nothing until a request comes that was not waiting then.
+  const waiting = shownInCorner(asking);
+  const closeWaiting = () => closeInCorner(asking);
   const first = waiting[0];
   const card = first;
   // The answer of the card the corner was showing stays a moment over its place ("Approved …"),
@@ -400,6 +449,12 @@ export function ApprovalPrompts() {
     receiptTimer.current = setTimeout(() => setReceipt(null), SETTLED_HOLD_MS);
   }, [card?.id, s.done, s.items, s.openId, s.stoppedAsking?.id, s.stoppingId]);
   useEffect(() => () => { if (receiptTimer.current) clearTimeout(receiptTimer.current); }, []);
+  // A receipt's ×: it goes now, not after its hold.
+  const closeReceipt = () => {
+    if (receiptTimer.current) clearTimeout(receiptTimer.current);
+    receiptTimer.current = null;
+    setReceipt(null);
+  };
   const holding = card ? receipt : null;
   // A card made smaller (two short lines) stays so until another request comes (it opens full again, so the
   // new one is not missed). In a crowded stack (corner-stack.tsx compact) it is that one line
@@ -453,6 +508,7 @@ export function ApprovalPrompts() {
               <div className="approval-settled-line">
                 {settledWord(lastSettled)}
                 <span className="approval-settled-what">{lastSettled.what}</span>
+                <NoticeClose onClose={closeReceipt} testId="approval-settled-close" />
               </div>
             </NoticeCard>
           )}
@@ -464,6 +520,7 @@ export function ApprovalPrompts() {
                 <span>{waitingWords(waiting.length)}</span>
                 <span className="approval-aside-open" aria-hidden="true">Open<span className="wn-dir-mark">{ICON_CHEVRON_RIGHT}</span></span>
               </button>
+              <NoticeClose onClose={closeWaiting} label={CLOSE_WAITING_LABEL} testId="approval-close" />
             </NoticeCard>
           )}
           {card && (!aside || holding) && (
@@ -492,6 +549,7 @@ export function ApprovalPrompts() {
                       <span aria-hidden="true">–</span>
                     </button>
                   )}
+                  <NoticeClose onClose={closeWaiting} label={CLOSE_WAITING_LABEL} testId="approval-close" />
                   <span className="approval-line-break" aria-hidden="true" />
                   <span className="approval-line-meta">
                     {waiting.length > 1 && (phone
@@ -508,7 +566,7 @@ export function ApprovalPrompts() {
                 </NoticeCard>
               ) : (
                 <NoticeCard key={card.id} className={`approval-card${armedId === card.id ? '' : ' approval-card-arming'}`} data={{ 'approval-id': card.id }} testId="approval-card">
-                  <ApprovalBody a={card} s={s} now={now} onOpen={() => openApproval(card.id)} onMinimize={() => setLineFor({ id: card.id, n: waiting.length })} total={waiting.length} />
+                  <ApprovalBody a={card} s={s} now={now} onOpen={() => openApproval(card.id)} onMinimize={() => setLineFor({ id: card.id, n: waiting.length })} onClose={closeWaiting} total={waiting.length} />
                   <NoticeOffer />
                 </NoticeCard>
               )}
@@ -519,6 +577,7 @@ export function ApprovalPrompts() {
                   <div className="approval-settled-line">
                     {settledWord(holding)}
                     <span className="approval-settled-what">{holding.what}</span>
+                    <NoticeClose onClose={closeReceipt} testId="approval-settled-close" />
                   </div>
                   <div className="approval-settled-next">Next: {card.what}</div>
                 </NoticeCard>

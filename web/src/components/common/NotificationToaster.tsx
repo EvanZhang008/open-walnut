@@ -51,9 +51,11 @@ import { isPhoneOverlayOpen, usePhoneOverlayDepth } from '@/hooks/usePhoneOverla
 import type { ImageAttachment } from '@/api/chat';
 import { CORNER_ORDER, CornerSlot, useCornerState } from './corner-stack';
 import { NoticeCard, SEVERITY_GLYPH, noticeAvatarOf } from './NoticeCard';
+import { NoticeClose } from './NoticeClose';
 import { keepInSight, noticeSource, noticeStatus } from '@/contexts/notifications/notice-face';
 import { CopyCommandButton, NoticeDetailsToggle, NoticeWords, noticeCommands, prettyDetail, useCutOff, wholeTitle } from './NoticeText';
 import { pendingAt, useApprovals } from '@/components/approvals/approvals-store';
+import { closedInCorner } from '@/components/approvals/ApprovalPrompts';
 import { sessionsWithPromptCard, usePromptCardsChanged } from '@/components/sessions/prompt-keys';
 import { useNotificationCenterOpen } from '@/stores/notification-center-open';
 import { useShiftClickGuard } from './useShiftClickGuard';
@@ -159,7 +161,7 @@ export function NotificationToaster() {
   usePhoneOverlayDepth(); // re-render when a session overlay opens or closes
   // Only while the approval card really shows: a Needs you line on screen lists them instead.
   const { approvalsListed } = useCornerState();
-  const approvalInCorner = pendingAt(useApprovals(), Date.now()).length > 0 && !approvalsListed;
+  const approvalInCorner = pendingAt(useApprovals(), Date.now()).some((a) => !closedInCorner(a.id)) && !approvalsListed;
   // Crowded (compact) the toasts keep to their short form but not to fewer of them: two Undos
   // from two columns closed back to back both stay in reach.
   const shownCount = approvalInCorner ? WITH_APPROVAL_SHOWN : window.innerHeight < SHORT_WINDOW_PX ? 1 : DESKTOP_TOASTS_SHOWN;
@@ -190,7 +192,8 @@ export function NotificationToaster() {
     : kept.has(t)));
   // The older ones stay in the notification center (on the phone they also wait their turn); one
   // line says how many and opens it. Asks are not among them: they have their own fold line.
-  const older = phone ? allToasts.length - shown.length : allToasts.filter((t) => !asking(t) && !kept.has(t)).length;
+  const olderToasts = phone ? allToasts.filter((t) => !shown.includes(t)) : allToasts.filter((t) => !asking(t) && !kept.has(t));
+  const older = olderToasts.length;
   // Many sessions asking at once: two answerable asks stay up, the rest fold into one
   // line that opens the panel, so the stack never runs off the screen. One the person is
   // using (pointer on it, a note typed) stays; the other places go to the newest asks.
@@ -264,6 +267,10 @@ export function NotificationToaster() {
           testId="notification-toaster-more"
           line={<>{older === 1 ? '1 more notification' : `${older} more notifications`}<span className="wn-dir-mark" aria-hidden="true">{ICON_CHEVRON_RIGHT}</span></>}
           onOpen={openCenter}
+          // Off the corner: the older ones leave the stack (the notification center keeps those it lists).
+          onClose={() => olderToasts.forEach((t) => dismissToast(t.id))}
+          closeLabel={foldsEphemeral ? 'Dismiss the older ones' : 'Hide the older ones: the notification center keeps them'}
+          closeTestId="notification-toaster-more-close"
         />
       )}
       {toasts.map((toast) => {
@@ -319,7 +326,7 @@ export function NotificationToaster() {
           onOpen={() => window.dispatchEvent(new CustomEvent('notification:open-center'))}
           end={(
             // Off the page's corner; the asks stay in the panel and on their session cards.
-            <button type="button" className="nfc-more-asks-close wn-notice-x" aria-label="Hide the waiting asks line" title="Hide (the asks stay in the panel)" onClick={hideLine}>&times;</button>
+            <NoticeClose onClose={hideLine} label="Hide the waiting asks line: the asks stay in the panel" className="nfc-more-asks-close" />
           )}
         />
       )}
@@ -417,14 +424,7 @@ function MessageToast({ toast, phone, more, onDismiss, onPin, onRead, navigate, 
           )}
           {/* The phone keeps a closed toast to one row: its Details sits in the title row. */}
           {toolsInHeader && toggle}
-          <button
-            type="button"
-            className="notification-toast-close wn-notice-x"
-            onClick={(e) => { e.stopPropagation(); onDismiss(); }}
-            aria-label="Dismiss"
-          >
-            &times;
-          </button>
+          <NoticeClose onClose={onDismiss} className="notification-toast-close" />
         </>
       )}
     >
@@ -653,14 +653,7 @@ function PermissionToast({ n, onDismiss, onPin, onRead, onLeave, navigate, phone
               Open session ↗
             </button>
           )}
-          <button
-            type="button"
-            className="notification-toast-close wn-notice-x"
-            onClick={(e) => { e.stopPropagation(); onDismiss(); }}
-            aria-label="Dismiss"
-          >
-            &times;
-          </button>
+          <NoticeClose onClose={onDismiss} className="notification-toast-close" />
         </>
       )}
     >

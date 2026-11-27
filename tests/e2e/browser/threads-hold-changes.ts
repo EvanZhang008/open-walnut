@@ -222,6 +222,8 @@ export const ABOVE_A_CARD: Record<string, string> = {
   'org-thread-group-count': 'a folded group above gets its first card',
   'org-thread-move-note': 'a card above leaves',
   'org-thread-move-show': 'its move line fades',
+  // Its × takes the line away before its fade: the same change, sooner.
+  'org-thread-move-close': 'its move line fades',
   'org-thread-groups': 'the list is read again after a reconnect',
   'org-threads-empty-row': 'none: drawn only when there is no card',
   'org-threads-empty': 'none: drawn only when there is no card',

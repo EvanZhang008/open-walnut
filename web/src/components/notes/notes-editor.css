@@ -851,3 +851,9 @@ mark.notes-search-mark {
   /* Clear of the floating "Open in new window" button at the right. */
   margin: 8px 56px 0 16px;
 }
+
+/* A note banner that waits on a decision, folded by its × to one line (AskFoldLine): where the
+   banner stood, the same room around it. */
+.notes-fold { margin: 8px 16px 0; }
+/* A locked note's: clear of the floating "Open in new window" button, as its card is. */
+.notes-fold--locked { margin: 8px 56px 0 16px; }

@@ -4,12 +4,14 @@
  * does in this state (2026-11-20, the user: "done ... it should be stop"). Plus the glyphs the bar
  * draws: a key, the microphone and the live level.
  */
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useLineClose } from '@/utils/notice-dismiss';
 import { MODES, type ModeMatch, type QuickMode } from './quickbar-modes';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { personLine, type QuickPerson } from './quickbar-people';
 
 export function QuickBarFoot({
-  mode, recording, transcribing, micLive, counting, to, note, peopleFailed, onRetryPeople, typedMode, empty, onMode, canCapture, switchTo,
+  mode, recording, transcribing, micLive, counting, to, note, onCloseNote, peopleFailed, onRetryPeople, typedMode, empty, onMode, canCapture, switchTo,
 }: {
   mode: QuickMode;
   recording: boolean;
@@ -18,6 +20,8 @@ export function QuickBarFoot({
   counting: boolean;
   to: QuickPerson | null;
   note: string | null;
+  /** The note's ×: the bar clears the note where it keeps it, so the same note said again shows. */
+  onCloseNote: () => void;
   peopleFailed: boolean;
   onRetryPeople: () => void;
   typedMode: ModeMatch | null;
@@ -30,12 +34,24 @@ export function QuickBarFoot({
   const phone = usePhoneLayout();
   const who = to?.title ?? 'CEO';
   const live = recording ? (micLive ? 'Listening' : 'Opening the microphone') : transcribing ? 'Finishing the last words' : null;
+  // A note's × clears it in the bar (onCloseNote), so the next note shows, the same words too; the
+  // restart line's hides it until the list loads, and a later failure shows it again. Closed, the
+  // foot shows what it shows with no note.
+  const trouble = useLineClose(peopleFailed ? 'restarting' : null);
 
   let left: React.ReactNode;
   if (counting) left = <span className="qb-foot-send">Sending to {who}…</span>;
-  else if (note) left = <span className="qb-foot-note" role="status">{note}</span>;
+  else if (note) {
+    // The trouble line's layout: the words shorten, the × stays whole.
+    left = (
+      <span className="qb-foot-note qb-foot-trouble" role="status">
+        <span className="qb-foot-trouble-text">{note}</span>
+        <NoticeClose onClose={onCloseNote} testId="qb-foot-note-close" />
+      </span>
+    );
+  }
   else if (live) left = <span className="qb-foot-live"><span className="qb-dot" />{live}</span>;
-  else if (peopleFailed && mode === 'send') {
+  else if (trouble.shown && mode === 'send') {
     left = (
       <span className="qb-foot-note qb-foot-trouble" role="status">
         {/* The words shorten, never the button: it stays whole beside them. */}
@@ -43,6 +59,7 @@ export function QuickBarFoot({
           Walnut is restarting, trying again in a few seconds. Sends go to {who}.
         </span>
         <button type="button" className="qb-foot-retry" onClick={onRetryPeople}>Retry now</button>
+        <NoticeClose onClose={trouble.close} label="Hide: Walnut keeps trying" testId="qb-foot-trouble-close" />
       </span>
     );
   } else if (mode === 'send' && typedMode) {

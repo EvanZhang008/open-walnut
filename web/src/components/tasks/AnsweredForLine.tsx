@@ -3,12 +3,15 @@
  * (task_send answers_ask), with Withdraw: the answer is taken back and the ask returns to his
  * Needs you (core/sessions/ask-withdraw.ts; 2026-11-08, the Personal VP's reflection: an answer
  * given on his older words could not be taken back). Two clicks, so a stray one changes nothing.
+ * Its × hides the line until another answer is given for him (useNoticeDismiss); it withdraws nothing.
  */
 import { useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { withdrawAskAnswer } from '@/api/tasks';
 import { AgentText } from '@/components/common/AgentText';
 import { taskTextSource } from '@/utils/agent-text-source';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { useNoticeDismiss } from '@/utils/notice-dismiss';
 import '@/styles/task-detail-pane.css';
 
 /**
@@ -70,7 +73,8 @@ export function WithdrawAnswerButton({ taskId, compact = false, onError }: { tas
 
 export function AnsweredForLine({ task, onError }: { task: Task; onError?: (message: string) => void }) {
   const p = task.phase === 'COMPLETE' ? null : answeredForParts(task);
-  if (!p) return null;
+  const notice = useNoticeDismiss(`answered-for:${task.id}`, p ? `${p.by}|${p.ask}|${p.answer}` : null);
+  if (!p || notice.hidden) return null;
   // The answer opens its paths on its writer's machine; the ask's writer is not kept with the
   // answer, so a path in it asks which machine (never a guess).
   return (
@@ -81,6 +85,7 @@ export function AnsweredForLine({ task, onError }: { task: Task; onError?: (mess
         {p.answer && <>: <AgentText compact inline {...taskTextSource(task, 'waiting')} text={p.answer} testId="answered-for-answer" /></>}
       </span>
       <span className="tdp-start-queue-actions"><WithdrawAnswerButton taskId={task.id} onError={onError} /></span>
+      <NoticeClose onClose={notice.dismiss} label="Hide this line until another answer is given for you" testId="task-detail-answered-for-close" className="tdp-start-queue-close" />
     </div>
   );
 }

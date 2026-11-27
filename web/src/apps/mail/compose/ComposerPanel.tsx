@@ -47,7 +47,7 @@ import {
   type MailComposer,
 } from '../mail-store';
 import { AddressChipsField } from './AddressChipsField';
-import { SendStatusCard } from './SendStatusCard';
+import { ComposerNotice, SendStatusCard } from './SendStatusCard';
 import {
   closeMailComposer,
   setMailComposerFields,
@@ -417,9 +417,7 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
           </div>
         )}
 
-        {composer.notice && (
-          <p className="mail-compose-notice" data-testid="mail-compose-notice">{composer.notice}</p>
-        )}
+        <ComposerNotice notice={composer.notice} testId="mail-compose-notice" />
       </div>
 
       <div className="mail-compose-footer">

@@ -12,6 +12,7 @@ import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { ICON_REFRESH, ICON_WARNING } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 import '@/styles/header-fit.css';
+import { NoticeClose } from '@/components/common/NoticeClose';
 
 /**
  * The Changed tab's Turns view: one row per snapshot the session's daemon
@@ -271,7 +272,7 @@ export function SessionTurnsView({ sessionId, sessionCwd, sessionHost, onComment
                 }}
               >Undo</button>
             )}
-            <button type="button" className="turns-strip-close" onClick={() => setNotice(null)} aria-label="Dismiss">×</button>
+            <NoticeClose onClose={() => setNotice(null)} className="turns-strip-close" />
           </div>
         )}
         <div className="session-diff-body">

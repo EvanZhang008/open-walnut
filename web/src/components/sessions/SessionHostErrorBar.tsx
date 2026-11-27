@@ -20,6 +20,8 @@ import { demoHostMessage } from '@/utils/demo-generation';
 import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { StableButton } from '@/components/common/HostProblemRows';
 import { PanelNotice } from './PanelNotice';
+import { useLineClose, useNoticeDismiss } from '@/utils/notice-dismiss';
+import { NoticeClose } from '@/components/common/NoticeClose';
 import '@/styles/attention-banner.css';
 
 export function reconnectingText(label: string): string {
@@ -81,7 +83,7 @@ export function SessionHostErrorText({ host, label, reconnecting, fallback }: {
         <div className="session-host-error-actions">
           <StableButton label={check} labels={['Check again', 'Checking...', CHECK_FAILED_TEXT]}
             disabled={actions.pending !== null} onClick={() => { void actions.checkAgain(); }} testId="session-host-check" />
-          {actions.receipt && <span className="hpb-receipt">{actions.receipt}</span>}
+          <HostReceipt receipt={actions.receipt} />
         </div>
       </div>
     );
@@ -107,9 +109,21 @@ function HostConnectButton({ actions, replica, idle, busy, testId }: {
     <div className="session-host-error-actions">
       {!replica && <StableButton label={actions.pending === 'retry' ? busy : idle} labels={[idle, busy]}
         disabled={actions.pending !== null} onClick={() => { void actions.retry(); }} testId={testId} />}
-      {actions.receipt && <span className="hpb-receipt">{actions.receipt}</span>}
+      <HostReceipt receipt={actions.receipt} />
       {actions.failed === 'retry' && <span className="host-connect-retry-msg" role="alert">{RETRY_FAILED_TEXT}</span>}
     </div>
+  );
+}
+
+/** A host button's receipt ("Tried again just now: same result", 5 s): its × takes it away now. */
+export function HostReceipt({ receipt }: { receipt: string | null }) {
+  const { shown, close } = useLineClose(receipt);
+  if (!shown) return null;
+  return (
+    <span className="hpb-receipt">
+      {receipt}
+      <NoticeClose onClose={close} label="Hide this line" testId="host-receipt-close" className="hpb-receipt-close" />
+    </span>
   );
 }
 
@@ -203,10 +217,14 @@ export function SessionHostDownBanner({ host, label }: { host: string; label: st
     if (showNow) setHeld(true);
     else if (connected || !status) setHeld(false);
   }, [showNow, connected, status]);
-  if (!showNow && !held) return null;
+  // Its × hides it until the host's state changes (idle, down, off) or it is connected again.
+  const { hidden, dismiss } = useNoticeDismiss(`session-host-down:${host}`,
+    !status ? undefined : connected ? null : idle ? 'idle' : p?.type === 'off' ? 'off' : 'down');
+  if ((!showNow && !held) || hidden) return null;
   const l = status?.label || label || host;
   return (
-    <PanelNotice className="session-error-banner session-error-banner--reconnecting" icon={'\u21BB'} testId="session-host-down" role="status">
+    <PanelNotice className="session-error-banner session-error-banner--reconnecting" icon={'\u21BB'} testId="session-host-down" role="status"
+      onClose={dismiss} closeLabel="Hide this banner" closeTestId="session-host-down-close">
       <div className="session-host-down-body">
         {idle ? <SessionHostIdleText host={host} label={l} /> : (
           <>

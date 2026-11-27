@@ -33,6 +33,14 @@ export function foldToasts<T extends { id: string }>(list: readonly T[], expande
   return { shown: list.slice(0, visible), folded, foldText: `+${folded} more ${folded === 1 ? 'move' : 'moves'}` };
 }
 
+/**
+ * What the `+N more moves` line's × dismisses: the folded older moves, never a folded save that
+ * failed with a button (Retry): that one is kept until it is run, closed itself, or its clock ends.
+ */
+export function foldedToDismiss<T extends { id: string; tone?: KanbanToast['tone']; actions?: readonly unknown[] }>(list: readonly T[], shown: readonly T[]): string[] {
+  return list.filter((t) => !shown.includes(t) && !(t.tone === 'error' && (t.actions?.length ?? 0) > 0)).map((t) => t.id);
+}
+
 // ── Timers: one clock per toast, all paused together while hovered ──
 
 export interface ToastClock {

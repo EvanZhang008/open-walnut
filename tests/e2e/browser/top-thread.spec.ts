@@ -13,7 +13,7 @@
  *     A new thread that needs him sorts in ahead: the thread on show stays on show ("2 / 6").
  *  2. He replies in the top card: the words are filed in that thread, which leaves the list (his
  *     reply makes it the node's move), so the next takes its place ("2 / 5") and the header reads 5.
- *  3. Hide: one line, "5 threads (2 need you) · Show"; still hidden after a reload; Show brings it back.
+ *  3. The ×: one line, "5 threads (2 need you) · Show"; still hidden after a reload; Show brings it back.
  *  3b. A card whose words run past the top's room: the cut block fades at its end, and Show all
  *     (or a click on its title) opens it whole in the Threads view beside the chat, scrolled to and
  *     marked, and the top goes; back in the top it keeps its bound height. With the Threads
@@ -267,7 +267,7 @@ test('on a VP: the top is the Threads list\'s first, steps through all of them, 
   await expect(page.getByTestId('org-pill-threads')).toHaveAttribute('data-threads', '5')
   await shot(page, '3-replied', page.getByTestId('org-detail'))
 
-  // 3. Hide: one line that counts them; kept over a reload; Show brings it back.
+  // 3. The ×: one line that counts them; kept over a reload; Show brings it back.
   await top.getByTestId('top-thread-hide').click()
   await expect(top).toHaveAttribute('data-hidden', 'true')
   await expect(top.getByTestId('top-thread-count')).toHaveText('5 threads (2 need you)')

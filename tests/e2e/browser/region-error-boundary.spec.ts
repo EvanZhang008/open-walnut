@@ -79,6 +79,10 @@ const SCENARIOS: Record<string, (page: Page) => Promise<void>> = {
     // The conversation above it stays.
     await expect(panel.locator('.session-history')).toContainText('Answer 5.');
     await expectOtherColumnWorks(other);
+    // Its × folds the error to one line that keeps Retry: the composer's only way back.
+    await error.getByRole('button', { name: 'Fold this error to one line' }).click();
+    await expect(error).toHaveAttribute('data-folded', 'true');
+    await expect(error).toContainText('The message box: error');
     await error.getByRole('button', { name: 'Retry' }).click();
     const box = panel.locator('.session-panel-input textarea').first();
     await box.fill('typing again after Retry');

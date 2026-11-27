@@ -18,6 +18,8 @@ import {
   applyScrollFraction,
 } from './scroll-memory';
 import { UnavailableState } from '@/components/common/EmptyState';
+import { NoticeClose } from '@/components/common/NoticeClose';
+import { AskFoldLine, FOLD_WORDS } from '@/components/actions/AskFold';
 import './notes-width.css';
 
 /** A link drawn as missing: the shared notes list looks again (it can lag a bulk write). */
@@ -579,8 +581,7 @@ export function MarkdownEditorPanel({
       )}
       {pendingExternal && pendingExternal.path === key && (
         <ReloadBanner
-          kind={pendingExternal.kind}
-          message={pendingExternal.message}
+          pending={pendingExternal}
           onApply={onApplyExternal}
           onDismiss={onDismissExternal}
         />
@@ -684,20 +685,44 @@ function CodeIcon() {
   );
 }
 
+/** What the page's unsaved-work check (utils/unsaved-work.ts) says of a deleted note's text. */
+const DELETED_UNSAVED = "A deleted note's text, not saved";
+
 /**
- * Non-destructive reload affordance for a deferred external/AI write (§6.2).
+ * Non-destructive reload affordance for a deferred external/AI write (§6.2). Exported for its test
+ * (tests/web/notice-close-review-fixes.test.ts).
  */
-function ReloadBanner({
-  kind,
-  message,
+export function ReloadBanner({
+  pending,
   onApply,
   onDismiss,
 }: {
-  kind: PendingExternalChange['kind'];
-  message?: string;
+  pending: PendingExternalChange;
   onApply?: () => void;
   onDismiss?: () => void;
 }) {
+  const { kind, message } = pending;
+  // The banner's ×, for this change only (each change is a new `pending`): the text stays in the
+  // editor, nothing is loaded or saved, and a save still goes with the hash it was read at, so the
+  // server refuses one over a newer version (409): useNoteContent merges the two or shows a new
+  // conflict here. A banner that waits on a decision (a conflict, a deleted note) folds to one line
+  // with Show, never gone while the text stays unsaved; the others hide.
+  const [closedFor, setClosedFor] = useState<PendingExternalChange | null>(null);
+  const decides = kind === 'deleted' || kind === 'conflict';
+  if (closedFor === pending) {
+    if (!decides) return null;
+    return (
+      <div className="notes-fold" {...(kind === 'deleted' ? { 'data-walnut-unsaved': DELETED_UNSAVED } : {})}>
+        <AskFoldLine testId="notes-reload-banner-folded" showTestId="notes-reload-banner-show" lead="Not saved"
+          words={<span className={FOLD_WORDS}>{kind === 'deleted' ? 'this note was deleted or moved' : 'this note was changed elsewhere'}</span>}
+          onShow={() => setClosedFor(null)} />
+      </div>
+    );
+  }
+  const close = (
+    <NoticeClose onClose={() => setClosedFor(pending)} label={decides ? 'Fold to one line: your text stays here, unsaved' : 'Hide this banner'}
+      testId="notes-reload-banner-close" />
+  );
   if (kind === 'needs-leader') {
     // A save this host could not keep while the Mac is away (WP11): the editor keeps the text.
     return (
@@ -705,6 +730,7 @@ function ReloadBanner({
         <span className="notes-reload-banner-text">{message ?? 'This change needs your Mac.'} Your text stays here, unsaved.</span>
         <div className="notes-reload-banner-actions">
           <button className="btn btn-sm btn-ghost" onClick={onDismiss}>Keep editing</button>
+          {close}
         </div>
       </div>
     );
@@ -713,13 +739,14 @@ function ReloadBanner({
     // Deleted since it was read: the save was refused rather than recreating it; the text stays.
     // Unsaved work for the page (utils/unsaved-work.ts): a deploy's reload waits for it.
     return (
-      <div className="notes-reload-banner conflict" role="status" data-testid="notes-deleted-banner" data-walnut-unsaved="A deleted note's text, not saved">
+      <div className="notes-reload-banner conflict" role="status" data-testid="notes-deleted-banner" data-walnut-unsaved={DELETED_UNSAVED}>
         <span className="notes-reload-banner-text">
           {message ? `Could not save it as a new note: ${message} ` : 'This note was deleted or moved. '}
           Your text stays here, unsaved.
         </span>
         <div className="notes-reload-banner-actions">
           <button className="btn btn-sm btn-primary" onClick={onApply}>{message ? 'Try again' : 'Save as a new note'}</button>
+          {close}
         </div>
       </div>
     );
@@ -741,6 +768,7 @@ function ReloadBanner({
             Keep editing
           </button>
         )}
+        {close}
       </div>
     </div>
   );

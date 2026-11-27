@@ -7,4 +7,7 @@
 .picture-attach:disabled { opacity: 0.4; cursor: default; }
 /* What the last add left out (one past the limit, a file that is not a picture): said, never silent.
    Its own row in a wrapping box (AnswerBox), as the strip above it is. */
-.picture-strip-notice { flex-basis: 100%; width: 100%; margin: 4px 0 0; font-size: var(--font-size-sm); line-height: 1.4; color: var(--fg-muted); }
+.picture-strip-notice-line { flex-basis: 100%; width: 100%; display: flex; align-items: flex-start; gap: 4px; margin: 4px 0 0; }
+.picture-strip-notice { flex: 1; min-width: 0; font-size: var(--font-size-sm); line-height: 1.4; color: var(--fg-muted); }
+/* Its × (NoticeClose), at the end of the line's first row, inside its height. */
+.picture-strip-notice-close { flex: none; margin: -4px -4px -4px 0; }

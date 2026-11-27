@@ -25,6 +25,9 @@
    chrome-row flex rules in globals.css list this class next to .fv-save-error. */
 .fv-offline-banner {
   flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   font-size: var(--font-size-sm);
   line-height: 1.45;
   padding: 6px 10px;
@@ -32,3 +35,8 @@
   background: color-mix(in srgb, var(--warning) 10%, transparent);
   color: var(--fg);
 }
+
+/* The file strips' × (NoticeClose: offline, save error, stale draft, preview moved), FileContentView.
+   At the end of the strip's first line, inside its height. */
+.fv-offline-banner > .fv-banner-text { flex: 1; min-width: 0; }
+.fv-banner-close { flex: none; margin: -4px -4px -4px auto; }

@@ -26,6 +26,8 @@ import { InlineCodeText } from '@/components/common/InlineCodeText';
 import { HostCommands } from '@/components/hosts/HostCommands';
 import { demoHostMessage } from '@/utils/demo-generation';
 import { HostStatusDot } from '@/components/sessions/path-selector/HostStatusDot';
+import { useLineClose } from '@/utils/notice-dismiss';
+import { NoticeClose } from './NoticeClose';
 import { activeStepLabel } from '@/utils/host-connect';
 import type { BannerRow } from '@/utils/attention-banner-model';
 import { useRowExpanded } from '@/utils/host-row-expanded';
@@ -182,11 +184,20 @@ function FixProgress({ actions, label }: { actions: HostActions; label: string }
   );
 }
 
-/** The muted line under a settled attempt: same result, or the POST itself failed. */
+/**
+ * The muted line under a settled attempt: same result, or the POST itself failed. The receipt's ×
+ * takes it away now (it would go after 5 s anyway); the next press's receipt shows again.
+ */
 function Receipts({ actions }: { actions: HostActions }) {
+  const receipt = useLineClose(actions.receipt);
   return (
     <>
-      {actions.receipt && <div className="hpb-receipt" data-testid="hpb-receipt">{actions.receipt}</div>}
+      {receipt.shown && (
+        <div className="hpb-receipt-line">
+          <div className="hpb-receipt" data-testid="hpb-receipt">{actions.receipt}</div>
+          <NoticeClose onClose={receipt.close} label="Hide this line" testId="hpb-receipt-close" className="hpb-receipt-close" />
+        </div>
+      )}
       {actions.failed === 'retry' && <div className="host-connect-retry-msg" role="alert">{RETRY_FAILED_TEXT}</div>}
     </>
   );
