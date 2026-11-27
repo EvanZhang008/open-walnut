@@ -23,10 +23,11 @@ import ts from 'typescript';
 const ROOT = path.resolve(__dirname, '../..');
 const WEB_SRC = path.join(ROOT, 'web/src');
 const BASELINE = path.join(__dirname, 'time-words-baseline.json');
+const SRC_RECORD = path.join(__dirname, 'time-words-src.json');
 
 /** Files that may format dates themselves, and why. */
 const ALLOWED: Record<string, string> = {
-  'utils/time.ts': 'the one module every screen writes a time through',
+  'utils/time.ts': 'the one module every screen writes a time through (it re-exports src/core/time-words.ts)',
 };
 
 const DATE_OPTION_KEYS = new Set(['year', 'month', 'day', 'weekday', 'hour', 'minute', 'second', 'dateStyle', 'timeStyle', 'timeZoneName', 'hour12', 'era']);
@@ -144,6 +145,14 @@ function pluginSrcDirs(): string[] {
 export function scanHandClocks(file: string, src: string): TimeHit[] {
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, kindOf(file));
   const hits: TimeHit[] = [];
+  // `const hh = String(d.getHours()).padStart(2, '0')`, then `${hh}:${mm}`: the name holds the hours.
+  const hourNames = new Set<string>();
+  const collect = (n: ts.Node) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && /\.getHours\(\)/.test(n.initializer.getText())) hourNames.add(n.name.text);
+    ts.forEachChild(n, collect);
+  };
+  collect(sf);
+  const isHours = (e: ts.Expression) => /\.getHours\(\)/.test(e.getText()) || (ts.isIdentifier(e) && hourNames.has(e.text));
   const visit = (n: ts.Node) => {
     if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken && !(ts.isBinaryExpression(n.parent) && n.parent.operatorToken.kind === ts.SyntaxKind.PlusToken)) {
       // 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()): flatten the chain and read it like a template.
@@ -154,7 +163,7 @@ export function scanHandClocks(file: string, src: string): TimeHit[] {
       flat(n);
       const lit = (e: ts.Expression | undefined) => (e && ts.isStringLiteralLike(e) ? e.text : '');
       parts.forEach((e, i) => {
-        if (!ts.isStringLiteralLike(e) && /\.getHours\(\)/.test(e.getText()) && lit(parts[i + 1]).startsWith(':') && !lit(parts[i - 1]).endsWith('T')) {
+        if (!ts.isStringLiteralLike(e) && isHours(e) && lit(parts[i + 1]).startsWith(':') && !lit(parts[i - 1]).endsWith('T')) {
           hits.push({ line: sf.getLineAndCharacterOfPosition(n.getStart()).line + 1, text: n.getText().slice(0, 120) });
         }
       });
@@ -162,7 +171,7 @@ export function scanHandClocks(file: string, src: string): TimeHit[] {
     if (ts.isTemplateExpression(n)) {
       n.templateSpans.forEach((span, i) => {
         const before = i === 0 ? n.head.text : n.templateSpans[i - 1].literal.text;
-        if (/\.getHours\(\)/.test(span.expression.getText()) && span.literal.text.startsWith(':') && !before.endsWith('T')) {
+        if (isHours(span.expression) && span.literal.text.startsWith(':') && !before.endsWith('T')) {
           hits.push({ line: sf.getLineAndCharacterOfPosition(n.getStart()).line + 1, text: n.getText().slice(0, 120) });
         }
       });
@@ -282,6 +291,7 @@ describe('UI standard: one way to write a time', () => {
     expect(clocks('const s = `${day}T${pad(d.getHours())}:${pad(d.getMinutes())}`')).toBe(0);
     expect(clocks('const m = d.getHours() * 60 + d.getMinutes()')).toBe(0);
     expect(clocks("var s = pad(d.getHours()) + ':' + pad(d.getMinutes());")).toBe(1);
+    expect(clocks("const hh = String(d.getHours()).padStart(2, '0'); const s = `${hh}:${mm}`;")).toBe(1);
     expect(clocks("var s = ymd + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());")).toBe(0);
 
     const found = [WEB_SRC, ...pluginSrcDirs()].flatMap(files).flatMap((f) => {
@@ -293,6 +303,36 @@ describe('UI standard: one way to write a time', () => {
     // An entry whose file no longer builds a clock goes.
     const stale = Object.keys(ALLOWED_CLOCKS).filter((rel) => !fs.existsSync(path.join(ROOT, rel)) || scanHandClocks(rel, fs.readFileSync(path.join(ROOT, rel), 'utf8')).length === 0);
     expect(stale).toEqual([]);
+  });
+
+  it("the server's texts a person reads use src/core/time-words.ts; every other time it writes says why", () => {
+    // Server code writes times for people (notices, letters, reports, status lines) and for machines
+    // and agents (logs, file names, keys, prompts). The first kind goes through time-words.ts; every
+    // file that still writes a time itself is named in time-words-src.json with who reads it, and its
+    // count may only go down. A new file that writes a time fails until it uses time-words.ts or says why.
+    const found: Record<string, number> = {};
+    for (const f of files(path.join(ROOT, 'src'))) {
+      const rel = path.relative(ROOT, f).split(path.sep).join('/');
+      if (rel === 'src/core/time-words.ts') continue;
+      const src = fs.readFileSync(f, 'utf8');
+      const n = scanTimeFile(rel, src).length + scanHandClocks(rel, src).length;
+      if (n) found[rel] = n;
+    }
+    const known = JSON.parse(fs.readFileSync(SRC_RECORD, 'utf8')) as Record<string, { n: number; why: string }>;
+    if (process.env.TIME_WORDS_RECORD === '1') {
+      const next = Object.fromEntries(Object.keys(found).sort().map((f) => [f, { n: found[f], why: known[f]?.why ?? 'TODO: who reads it' }]));
+      fs.writeFileSync(SRC_RECORD, `${JSON.stringify(next, null, 2)}\n`);
+      return;
+    }
+    const problems = Object.entries(found).flatMap(([f, n]) => {
+      const k = known[f];
+      if (!k) return [`${f}: writes ${n} time(s) itself; use src/core/time-words.ts, or name it in time-words-src.json with who reads it`];
+      if (n > k.n) return [`${f}: ${n} (was ${k.n}); use src/core/time-words.ts`];
+      if (/^TODO/.test(k.why)) return [`${f}: say who reads it in time-words-src.json`];
+      return [];
+    });
+    const stale = Object.entries(known).filter(([f, k]) => (found[f] ?? 0) < k.n).map(([f, k]) => `${f}: ${found[f] ?? 0} (was ${k.n}): TIME_WORDS_RECORD=1 lowers it`);
+    expect([...problems, ...stale]).toEqual([]);
   });
 
   it('time words that start a JSX text are capitalized', () => {

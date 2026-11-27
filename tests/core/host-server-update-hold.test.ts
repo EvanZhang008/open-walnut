@@ -69,9 +69,9 @@ describe('the knobs and the words', () => {
   })
 
   it('the notice names both builds, the window and the latest time', () => {
-    expect(clockTime(T0 + 360 * MIN)).toBe('15:00')
+    expect(clockTime(T0 + 360 * MIN)).toBe('3:00 PM')
     expect(heldNotice('0.6.6-aaa1111', '0.6.7-abc1234', 30 * MIN, T0 + 360 * MIN))
-      .toBe('It runs Walnut 0.6.6-aaa1111; this computer\'s 0.6.7-abc1234 goes out after 30 quiet minutes with no newer deploy here (at the latest by 15:00). Retry sends it now.')
+      .toBe('It runs Walnut 0.6.6-aaa1111; this computer\'s 0.6.7-abc1234 goes out after 30 quiet minutes with no newer deploy here (at the latest by 3:00 PM). Retry sends it now.')
     expect(heldNotice('a', 'b', 60 * MIN, T0)).toContain('after a quiet hour')
     expect(heldNotice('a', 'b', 120 * MIN, T0)).toContain('after 2 quiet hours')
   })

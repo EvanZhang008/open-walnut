@@ -23,7 +23,7 @@ import { DaemonConnection, type DaemonConnectState } from '../../src/providers/d
 
 const SRC = path.join(__dirname, '../../src/providers')
 const LABEL = 'Big dev box'
-/** 14:05 local: the status speaks this server's own time. */
+/** 2:05 PM local: the status speaks this server's own time. */
 const T = new Date(2026, 10, 24, 14, 5).getTime()
 const wait = (kind: DaemonUpdateWaitKind, why: string, since = T): DaemonUpdateWait => ({ kind, why, since, expected: 'build-new' })
 
@@ -39,23 +39,23 @@ function unionOf(file: string, name: string): string[] {
 describe('the sentence a waiting update says', () => {
   it('postponed: what it waits for, in the path\'s words, and since when', () => {
     expect(daemonUpdateWaitSentence(LABEL, wait('postponed', 'waiting: service.handover: active ACP workers or relay requests must finish first'), T))
-      .toBe('The daemon update on Big dev box waits (since 14:05): service.handover: active ACP workers or relay requests must finish first')
+      .toBe('The daemon update on Big dev box waits (since 2:05 PM): service.handover: active ACP workers or relay requests must finish first')
     // The SSH path's reason has no "waiting:" prefix.
-    expect(daemonUpdateWaitSentence(LABEL, wait('postponed', 'ACP turns are open'), T)).toBe('The daemon update on Big dev box waits (since 14:05): ACP turns are open')
+    expect(daemonUpdateWaitSentence(LABEL, wait('postponed', 'ACP turns are open'), T)).toBe('The daemon update on Big dev box waits (since 2:05 PM): ACP turns are open')
   })
 
   it('a wait with a known end says until when', () => {
     expect(daemonUpdateWaitSentence(LABEL, { ...wait('postponed', 'the gap'), until: T + 90 * 60_000 }, T))
-      .toBe('The daemon update on Big dev box waits (since 14:05, until 15:35): the gap')
-    expect(daemonUpdateWaitSentence(LABEL, { ...wait('postponed', 'the gap'), until: T - 1 }, T)).toBe('The daemon update on Big dev box waits (since 14:05): the gap')
+      .toBe('The daemon update on Big dev box waits (since 2:05 PM, until 3:35 PM): the gap')
+    expect(daemonUpdateWaitSentence(LABEL, { ...wait('postponed', 'the gap'), until: T - 1 }, T)).toBe('The daemon update on Big dev box waits (since 2:05 PM): the gap')
   })
 
   it('skipped as shared, held, and every other skip: its own lead, then the why', () => {
     expect(daemonUpdateWaitSentence(LABEL, wait('shared', 'shared, another Walnut uses it'), T))
-      .toBe('Big dev box keeps the daemon another Walnut uses there, so this Walnut does not update it (since 14:05): shared, another Walnut uses it')
+      .toBe('Big dev box keeps the daemon another Walnut uses there, so this Walnut does not update it (since 2:05 PM): shared, another Walnut uses it')
     expect(daemonUpdateWaitSentence(LABEL, wait('held', 'automatic updates are off for this host'), T))
-      .toBe('Daemon updates on Big dev box are held by its setting (since 14:05): automatic updates are off for this host')
-    expect(daemonUpdateWaitSentence(LABEL, wait('cooldown', ''), T)).toBe('The daemon update on Big dev box waits for its cooldown (since 14:05)')
+      .toBe('Daemon updates on Big dev box are held by its setting (since 2:05 PM): automatic updates are off for this host')
+    expect(daemonUpdateWaitSentence(LABEL, wait('cooldown', ''), T)).toBe('The daemon update on Big dev box waits for its cooldown (since 2:05 PM)')
   })
 
   it('class guard: every NetUpdatePhase and every NetUpdateSkip in the source says what it is for the wait', () => {
@@ -74,7 +74,7 @@ describe('the sentence a waiting update says', () => {
       if (SKIP_WAIT_LEADS[skip]) {
         expect(kind).toBe(skip)
         const s = daemonUpdateWaitSentence(LABEL, wait(skip, 'why'), T)
-        expect(s).toContain('(since 14:05): why')
+        expect(s).toContain('(since 2:05 PM): why')
         expect(s).toContain(skip === 'turned-off' ? 'turned off' : LABEL)
       } else expect(kind).toBeNull()
     }
@@ -102,9 +102,9 @@ describe('the sentence a waiting update says', () => {
   })
 
   it('since when: the time today, the date and time on another day', () => {
-    expect(sinceTime(T, T + 3_600_000)).toBe('14:05')
-    expect(sinceTime(T - 2 * 24 * 3_600_000, T)).toBe('Nov 22, 14:05')
-    expect(daemonUpdateWaitSentence(LABEL, wait('held', 'autofix is off', T - 3 * 24 * 3_600_000), T)).toBe('Daemon updates on Big dev box are held by its setting (since Nov 21, 14:05): autofix is off')
+    expect(sinceTime(T, T + 3_600_000)).toBe('2:05 PM')
+    expect(sinceTime(T - 2 * 24 * 3_600_000, T)).toBe('Nov 22, 2:05 PM')
+    expect(daemonUpdateWaitSentence(LABEL, wait('held', 'autofix is off', T - 3 * 24 * 3_600_000), T)).toBe('Daemon updates on Big dev box are held by its setting (since Nov 21, 2:05 PM): autofix is off')
   })
 
   it('class guard: every SSH update path that holds an update notes a wait first', () => {

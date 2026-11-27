@@ -26,6 +26,7 @@ import { subjectFragment } from './sort-subject-fragment.js'
 import type {
   DraftKind, GroupsScope, MailSortWriteDeps, PreviewResponse, ProposeDraft, ProposeResponse, RuleWhen, SortFeatures,
 } from './sort-types.js'
+import { dayDate } from '../../core/time-words.js'
 
 const LABEL_SUBJECT_CHARS = 60
 
@@ -35,8 +36,9 @@ export interface LocalDraft {
   label?: string
 }
 
+/** "Sep 28" ("Sep 28, 2025" in another year): a rule's label is kept, so never "today". */
 function shortDate(at: number): string {
-  return new Date(at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return dayDate(at, { dated: true })
 }
 
 /** `Only the mail "<subject>" from <sender>, Sep 28`. */

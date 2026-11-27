@@ -24,6 +24,7 @@ import { awaitsUserDecision } from '../human-inbox/open-decision.js';
 import { briefOffNow } from './brief-off.js';
 import { homeWritesStopped } from '../../lib/leader-clocks.js';
 import { letterOutsideSource } from '../human-inbox/letter-outside.js';
+import { pointInTime } from '../time-words.js';
 
 const SCHEDULE_FILE = path.join(WALNUT_HOME, 'org', 'report-schedule.json');
 /** A report the clock could not send this long after its time is dropped, with a log line. */
@@ -48,13 +49,9 @@ const atOf = (t: Pick<Task, 'phase_changed_at' | 'completed_at'>): number => {
   const v = Date.parse(t.completed_at ?? t.phase_changed_at ?? '');
   return Number.isFinite(v) ? v : 0;
 };
-/** A time as the report says it: the server's own clock (the one `at: "08:00"` reads), with its offset. */
+/** A time as the report says it: "Nov 27, 2:05 PM" on the server's own clock (the user's Mac); a report is kept, so never "today". */
 export function reportTime(ms: number): string {
-  const d = new Date(ms);
-  const p = (n: number) => String(n).padStart(2, '0');
-  const off = -d.getTimezoneOffset();
-  const zone = off === 0 ? 'UTC' : `UTC${off > 0 ? '+' : '-'}${Math.floor(Math.abs(off) / 60)}${Math.abs(off) % 60 ? `:${p(Math.abs(off) % 60)}` : ''}`;
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} ${zone}`;
+  return pointInTime(ms, { dated: true });
 }
 const hhmm = reportTime;
 

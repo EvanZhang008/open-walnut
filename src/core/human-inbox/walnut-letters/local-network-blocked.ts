@@ -5,6 +5,7 @@
  */
 import type { ByLang } from './languages.js';
 import { letterKind } from './kind.js';
+import { pointInTime } from '../../time-words.js';
 
 export interface LocalNetworkBlockedParams {
   /** When Walnut first saw the block (epoch ms), shown in this server's local time. */
@@ -49,12 +50,9 @@ const WORDS: ByLang<Words> = {
   },
 };
 
-/** `YYYY-MM-DD HH:MM` in this server's local time (the Mac's, so the user's own clock). */
+/** "Nov 27, 2:05 PM" in this server's local time (the Mac's, so the user's own clock); a letter is kept, so never "today". */
 export function letterTime(ms: number): string {
-  const d = new Date(ms);
-  if (!Number.isFinite(d.getTime())) return '?';
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return pointInTime(ms, { dated: true }) || '?';
 }
 
 export const LOCAL_NETWORK_BLOCKED = letterKind<LocalNetworkBlockedParams>({

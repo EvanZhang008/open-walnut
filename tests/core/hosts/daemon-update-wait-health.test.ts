@@ -35,7 +35,7 @@ describe('Walnut Health for an update that waits long', () => {
     const item = daemonUpdateWaitItem('devbox', 'Dev box', postponed)
     expect(item).toMatchObject({ kind: 'operation-error', severity: 'warning', category: 'Sessions', host: 'devbox', dedupKey: daemonUpdateWaitKey('devbox'), recoveryKey: daemonUpdateWaitKey('devbox') })
     expect(item.title).toBe('The daemon on Dev box still waits for its update')
-    expect(item.body).toMatch(/^The daemon update on Dev box waits \(since (Nov 24, )?09:00\): service\.handover: active ACP workers or relay requests must finish first\. /)
+    expect(item.body).toMatch(/^The daemon update on Dev box waits \(since (Nov 24, )?9:00 AM\): service\.handover: active ACP workers or relay requests must finish first\. /)
     expect(audienceOf(item as never)).toBe('health')
   })
 

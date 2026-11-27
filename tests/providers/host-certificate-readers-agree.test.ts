@@ -21,6 +21,8 @@ const OTHER_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOther work@laptop'
 const KEY_PRINT = 'SHA256:certkeycertkeycertkey'
 const UNTIL = '2026-09-24T08:00:00'
 const NOW = new Date('2026-09-24T12:00:00').getTime()
+/** The expiry reads as a date and 12-hour clock; the year shows only when it is not this year. */
+const CERT_EXPIRED_AT = /^SSH certificate expired at Sep 24, (2026, )?8:00 AM$/
 const report = (until: string) =>
   `/dev/stdin:\n        Type: ecdsa-sha2-nistp256-cert-v01@openssh.com user certificate\n        Public key: ECDSA-CERT ${KEY_PRINT}\n        Valid: from 2026-09-23T08:00:00 to ${until}\n`
 
@@ -80,7 +82,7 @@ describe('the expiry reader and the refusal reader see the same certificates', (
   for (const shape of SHAPES) {
     it(`${shape.name}: expired is ${shape.ambiguous ? 'the expiry ahead, and no other reason' : 'cert-expired in both'}`, async () => {
       expect(await sshCertificateExpiry('me@devbox', deps(shape, UNTIL))).toBe(new Date(UNTIL).getTime())
-      expect(await gatherSshCredentialEvidence('me@devbox', deps(shape, UNTIL))).toEqual(shape.ambiguous ? null : { tag: 'cert-expired', detail: 'SSH certificate expired at 2026-09-24 08:00' })
+      expect(await gatherSshCredentialEvidence('me@devbox', deps(shape, UNTIL))).toEqual(shape.ambiguous ? null : { tag: 'cert-expired', detail: expect.stringMatching(CERT_EXPIRED_AT) })
     })
     it(`${shape.name}: still valid names no certificate reason`, async () => {
       expect(await sshCertificateExpiry('me@devbox', deps(shape, '2026-09-25T08:00:00'))).toBe(new Date('2026-09-25T08:00:00').getTime())

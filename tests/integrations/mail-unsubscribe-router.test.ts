@@ -469,7 +469,7 @@ describe('in the user\'s letter language', () => {
 
     await one.answer({ letterId, actionId: 'send' });
     // "Sent at <clock> to 1 recipient."
-    expect(one.replies[0]!.markdown).toMatch(/^\u5df2\u4e8e \d{1,2}:\d{2} \u53d1\u7ed9 1 \u4f4d\u6536\u4ef6\u4eba\u3002$/);
+    expect(one.replies[0]!.markdown).toMatch(/^\u5df2\u4e8e \d{1,2}:\d{2} [AP]M \u53d1\u7ed9 1 \u4f4d\u6536\u4ef6\u4eba\u3002$/);
 
     await one.answer({ letterId: 'lt-from-nowhere', actionId: 'send' });
     expect(one.replies[1]!.markdown).not.toContain('no longer the one Walnut is waiting on');

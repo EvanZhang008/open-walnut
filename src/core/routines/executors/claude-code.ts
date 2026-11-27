@@ -25,6 +25,7 @@ import type { ExecutorDefinition } from '../types.js';
 import type { CronJob } from '../../cron/types.js';
 import { clearHostGateNotices, noteHostGateRefusal, resetHostGateNotices } from '../host-gate-notice.js';
 import { routineLaunchPlacement, routinePlacementOf } from '../run-placement.js';
+import { clockTime, pointInTime } from '../../time-words.js';
 
 /** How a refused run tells the human (a cron notification by default; a seam for tests). */
 export interface RoutineGateNotify {
@@ -108,15 +109,7 @@ export function stripTriageCountHint(message: string): string {
 /** A catch-up run's task says which run it stands for: "<title> (catch-up for 2026-11-08 08:00)". */
 export function catchUpTitle(title: string, runForMs: number | undefined): string {
   if (runForMs === undefined) return title;
-  const d = new Date(runForMs);
-  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  return `${title} (catch-up for ${day} ${localHhMm(runForMs)})`;
-}
-
-/** Local HH:MM, zero-padded. */
-function localHhMm(nowMs: number): string {
-  const d = new Date(nowMs);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `${title} (catch-up for ${pointInTime(runForMs, { dated: true })})`;
 }
 
 /**
@@ -131,7 +124,7 @@ export function renderRoutineTitleTemplate(
   template: string,
   opts: { nowMs: number; count?: number },
 ): string {
-  const withTime = template.split('{time}').join(localHhMm(opts.nowMs));
+  const withTime = template.split('{time}').join(clockTime(opts.nowMs));
   const rendered = opts.count === undefined
     ? withTime.split(' · ').filter((seg) => !seg.includes('{count}')).join(' · ')
     : withTime.split('{count}').join(String(opts.count));

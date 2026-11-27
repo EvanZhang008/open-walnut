@@ -15,23 +15,28 @@
 import { log } from '../../logging/index.js';
 import type { CronJob } from '../cron/types.js';
 import { missedRuns, routineOwnerChain, type MissedRun } from '../cron/run-log.js';
+import { pointInTime } from '../time-words.js';
 
 export const MISSED_SWEEP_MS = 5 * 60_000;
 const FIRST_SWEEP_MS = 90_000;
 
-/** The slot's time as the routine's own clock reads it. */
+/**
+ * The slot's time as Walnut writes a point in time ("Nov 8, 8:00 AM"; a notice is kept, so never
+ * "today"). A routine on another zone than this server's (the user's Mac) says it in its own zone,
+ * named: "Nov 8, 8:00 AM PST".
+ */
 export function slotLabel(job: Pick<CronJob, 'schedule'>, slotMs: number): string {
   const tz = job.schedule.kind === 'cron' && job.schedule.tz ? job.schedule.tz : undefined;
+  if (!tz || tz === Intl.DateTimeFormat().resolvedOptions().timeZone) return pointInTime(slotMs, { dated: true }) || new Date(slotMs).toISOString();
   try {
     // Built from the parts, so the words between the date and the time do not change with the
-    // runtime's ICU: newer data joins them with " at " ("Sun, Nov 8 at 8:00 AM"), older with ", ".
+    // runtime's ICU: newer data joins them with " at " ("Nov 8 at 8:00 AM"), older with ", ".
     const parts = new Intl.DateTimeFormat('en-US', {
-      weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-      ...(tz ? { timeZone: tz, timeZoneName: 'short' } : {}),
+      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: tz, timeZoneName: 'short',
     }).formatToParts(new Date(slotMs));
     const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '';
-    const zone = part('timeZoneName');
-    return `${part('weekday')}, ${part('month')} ${part('day')}, ${part('hour')}:${part('minute')} ${part('dayPeriod')}${zone ? ` ${zone}` : ''}`;
+    const year = part('year') !== String(new Date().getFullYear()) ? `, ${part('year')}` : '';
+    return `${part('month')} ${part('day')}${year}, ${part('hour')}:${part('minute')} ${part('dayPeriod')} ${part('timeZoneName')}`;
   } catch {
     return new Date(slotMs).toISOString();
   }

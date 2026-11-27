@@ -148,7 +148,7 @@ describe('mail rules panel sentences', () => {
       .toMatch(/^Line 7: then must name a group or Important\. Walnut is still using the rules from 10:42\sAM\.$/);
     expect(fileErrorSentence({ rule: { index: 2, id: 'r-7f3a2c' }, message: 'then must name a group or Important.', since }))
       .toMatch(/^Rule 3 \(r-7f3a2c\): then must name a group or Important\. Walnut is still using the rules from 10:42\sAM\.$/);
-    const missing = { message: 'The rules file is missing. Walnut is still using the rules from 10:42.', since };
+    const missing = { message: 'The rules file is missing. Walnut is still using the rules from 10:42 AM.', since };
     expect(fileErrorSentence(missing)).toBe(missing.message);
     expect(isMissingFileError(missing)).toBe(true);
     expect(isMissingFileError({ line: 3, message: 'x', since })).toBe(false);

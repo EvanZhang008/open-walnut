@@ -286,18 +286,18 @@ describe('claude-code titleTemplate + the count hint', () => {
 
   beforeEach(() => { quickStartSession.mockClear(); });
 
-  it('{time} renders the run\'s local HH:MM', () => {
-    // 09:07 local, built from local parts so the assertion is timezone-proof.
+  it('{time} renders the run\'s local clock', () => {
+    // 9:07 AM local, built from local parts so the assertion is timezone-proof.
     const at = new Date(2026, 8, 21, 9, 7, 0).getTime();
-    expect(renderRoutineTitleTemplate('Triage · {time}', { nowMs: at })).toBe('Triage · 09:07');
+    expect(renderRoutineTitleTemplate('Triage · {time}', { nowMs: at })).toBe('Triage · 9:07 AM');
   });
 
   it('{count} renders the hint, and the whole segment is dropped when there is none', () => {
     const at = new Date(2026, 8, 21, 14, 10, 0).getTime();
     const t = 'Triage · {time} · {count} items';
-    expect(renderRoutineTitleTemplate(t, { nowMs: at, count: 12 })).toBe('Triage · 14:10 · 12 items');
+    expect(renderRoutineTitleTemplate(t, { nowMs: at, count: 12 })).toBe('Triage · 2:10 PM · 12 items');
     // Never "· 0 items" about a batch nobody counted.
-    expect(renderRoutineTitleTemplate(t, { nowMs: at })).toBe('Triage · 14:10');
+    expect(renderRoutineTitleTemplate(t, { nowMs: at })).toBe('Triage · 2:10 PM');
   });
 
   it('reads the hint line and strips it from the message the session sees', () => {
@@ -331,7 +331,7 @@ describe('claude-code titleTemplate + the count hint', () => {
     const params = quickStartSession.mock.calls[0][0] as Record<string, unknown>;
     expect(params.message).toContain('batch body');
     expect(params.message).not.toContain('WALNUT_TRIAGE_COUNT');
-    expect(String(params.taskTitle)).toMatch(/^Triage · \d{2}:\d{2} · 7 items$/);
+    expect(String(params.taskTitle)).toMatch(/^Triage · \d{1,2}:\d{2} [AP]M · 7 items$/);
   });
 
   // 2026-11-13: the whole first message was wrapped in a peer note, which escaped the batch's
@@ -361,7 +361,7 @@ describe('claude-code titleTemplate + the count hint', () => {
       expect(envs[1]!.raw).toContain('from="Walnut (routine:j3:Inbox Triage)"');
       expect(envs[1]!.body).toContain(instructions);
       const title = (quickStartSession.mock.calls.at(-1)![0] as Record<string, unknown>).taskTitle;
-      expect(String(title)).toMatch(/^Triage · \d{2}:\d{2} · 7 items$/);
+      expect(String(title)).toMatch(/^Triage · \d{1,2}:\d{2} [AP]M · 7 items$/);
     });
 
     it('a catch-up note ahead of the fence is framed on its own', async () => {
@@ -393,7 +393,7 @@ describe('claude-code titleTemplate + the count hint', () => {
       },
     }, 'batch body');
     const params = quickStartSession.mock.calls[0][0] as Record<string, unknown>;
-    expect(String(params.taskTitle)).toMatch(/^Triage · \d{2}:\d{2}$/);
+    expect(String(params.taskTitle)).toMatch(/^Triage · \d{1,2}:\d{2} [AP]M$/);
   });
 });
 

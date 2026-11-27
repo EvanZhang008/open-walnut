@@ -32,6 +32,7 @@ import { isRemoteIdBlocked, isRemoteIdClaimedByLiveTask, recordRemoteLink } from
 import { findProjectTombstoneByRemoteListId, learnProjectTombstoneRemoteIds } from '../core/project-tombstones.js';
 import type { Config } from '../core/types.js';
 import { pluginAuthFailureOf, type PluginAuthFailure, type PluginAuthFailureKind, type PluginConnectionStatus, type PluginSignInPrompt, type RemoteSyncItem } from '../core/integration-types.js';
+import { pointInTime } from '../core/time-words.js';
 
 // ── Plugin-system helpers ──
 
@@ -462,7 +463,7 @@ export async function getAuthStatus(): Promise<PluginConnectionStatus> {
       ...(tokenExpiresAt ? { credentialExpiresAt: tokenExpiresAt } : {}),
       lastFailureAt: failure.at,
       detail: tokenValid
-        ? `Microsoft refused to renew the credential${failure.code ? ` (${failure.code})` : ''}. Sync still works until ${new Date(tokenExpiresAt!).toLocaleTimeString()}; sign in before then.`
+        ? `Microsoft refused to renew the credential${failure.code ? ` (${failure.code})` : ''}. Sync still works until ${pointInTime(tokenExpiresAt!)}; sign in before then.`
         : `Microsoft refused to renew the credential${failure.code ? ` (${failure.code})` : ''}. Sync is paused until you sign in.`,
     };
   }

@@ -393,7 +393,7 @@ describe('review findings', () => {
     expect(message.endsWith('Reflect.')).toBe(true)
     // Run now stands for no slot: its message gets no slot id, only the sent mark (cron/sent-run.ts).
     expect(ctx).toEqual({ runForMs: SLOT1, markSent: expect.any(Function) })
-    expect(catchUpTitle('Org reflection', new Date(2026, 10, 8, 8, 0).getTime())).toBe('Org reflection (catch-up for 2026-11-08 08:00)')
+    expect(catchUpTitle('Org reflection', new Date(2026, 10, 8, 8, 0).getTime())).toMatch(/^Org reflection \(catch-up for Nov 8, (2026, )?8:00 AM\)$/)
     expect(catchUpTitle('Org reflection', undefined)).toBe('Org reflection')
   })
 })

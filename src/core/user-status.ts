@@ -50,6 +50,7 @@ import type { ActionItem } from './action-needed.js';
 // The web reads Action needed through this module's alias (@open-walnut/user-status).
 export { ACTION_KINDS, ACTION_KIND_LABELS, openActions, ownLineIsItem, promptKind, type ActionItem, type ActionKind } from './action-needed.js';
 import { ERROR_OWNER_WORDS, USER_ERROR_WORDS, errorOwnerOf, usersErrorKind } from './sessions/session-error-owner.js';
+import { clockTime } from './time-words.js';
 
 export type UserState = 'needs' | 'read' | 'working' | 'waiting' | 'done';
 
@@ -1434,8 +1435,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
       // Walnut retries a transient turn error by itself first (session-auto-continue.ts).
       const retryAt = Date.parse(input.autoRetryAt ?? '');
       if (Number.isFinite(retryAt)) {
-        const at = new Date(retryAt).toISOString().slice(11, 16);
-        return strip({ state: 'waiting', kind: 'machine', waitingOn: clipped(`Walnut, retrying its failed turn by itself at ${at} UTC${why ? ` (${clipped(why, 140)})` : ''}`, 240), ...w, stoppedBy: 'machine' });
+        const at = clockTime(retryAt);
+        return strip({ state: 'waiting', kind: 'machine', waitingOn: clipped(`Walnut, retrying its failed turn by itself at ${at}${why ? ` (${clipped(why, 140)})` : ''}`, 240), ...w, stoppedBy: 'machine' });
       }
       // Cut at a word (2026-11-24: "…so Walnut stopped the tur). Retry it").
       return failureOf(input, w, why ? `Its session failed (${clipped(why, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.',

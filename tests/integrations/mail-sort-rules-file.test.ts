@@ -230,7 +230,7 @@ describe('a file that vanishes', () => {
     now += 3_000
     await rules.check()
     expect(rules.current.exists).toBe(false)
-    expect(rules.current.error?.message).toBe('The rules file is missing. Walnut is still using the rules from 10:42.')
+    expect(rules.current.error?.message).toBe('The rules file is missing. Walnut is still using the rules from 10:42 AM.')
     expect(rules.current.doc.rules).toHaveLength(1)
   })
 

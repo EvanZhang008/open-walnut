@@ -23,6 +23,7 @@
 import type { NetUpdatePhase, NetUpdateSkip } from './daemon-net-update.js'
 import { dropHoldClocks, upgradeHoldClock } from './acp-upgrade-hold.js'
 import { DAEMON_UPDATE_BEHIND_MAX_MS } from './daemon-update-behind.js'
+import { clockTime as clockWords, pointInTime } from '../core/time-words.js'
 
 /** Why an update waits: 'postponed' (work there, another name of the daemon updating it, a link cut), or why it is skipped for now. */
 export type DaemonUpdateWaitKind = 'postponed' | NetUpdateSkip
@@ -75,20 +76,16 @@ export function waitKindOf(phase: NetUpdatePhase, skip?: NetUpdateSkip): DaemonU
   return null
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-/** 04:07, in this server's own time zone (the status's reader is its user). */
+/** "4:07 AM", in this server's own time zone (the status's reader is its user). */
 export function clockTime(at: number): string {
-  const d = new Date(at)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return clockWords(at)
 }
 
-/** 04:07 today, "Nov 22, 04:07" on another day (a wait over a day must not read as one of a few hours). */
+/** "4:07 AM" today, "Nov 22, 4:07 AM" on another day (a wait over a day must not read as one of a few hours). */
 export function sinceTime(at: number, now: number = Date.now()): string {
-  const d = new Date(at)
-  const n = new Date(now)
-  const today = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate()
-  return today ? clockTime(at) : `${MONTHS[d.getMonth()]} ${d.getDate()}, ${clockTime(at)}`
+  const today = new Date(at).toDateString() === new Date(now).toDateString()
+  return today ? clockWords(at) : pointInTime(at, { now, dated: true })
 }
 
 /** The one sentence a waiting update says, on the host's status and in Walnut Health. */

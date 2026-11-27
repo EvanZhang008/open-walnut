@@ -575,7 +575,7 @@ describe('answering the letter', () => {
     // rather than read once: the row settles before the thread reply lands, deliberately, because
     // the LEDGER is the record and a courtesy reply must never be able to hold up a settle.
     await expect.poll(async () => await threadTexts(asked.body.letterId!), { timeout: 15_000 })
-      .toEqual(expect.arrayContaining([expect.stringMatching(/^Sent at \d\d:\d\d to 1 recipient\./)]));
+      .toEqual(expect.arrayContaining([expect.stringMatching(/^Sent at \d{1,2}:\d{2} [AP]M to 1 recipient\./)]));
     expect(eventsOf('send-settled').some((one) => one.draftId === draft.draftId && one.state === 'sent')).toBe(true);
   });
 

@@ -34,6 +34,7 @@
 import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import { sshAgentEnv, sshAgentSock, sshHome } from '../lib/ssh-home.js'
+import { pointInTime } from '../core/time-words.js'
 
 export const SSH_EVIDENCE_PREFIX = 'walnut-ssh-evidence:'
 
@@ -96,9 +97,7 @@ export function certValidUntil(keygenReport: string): number | null {
 }
 
 function fmt(ms: number): string {
-  const d = new Date(ms)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  return pointInTime(ms, { dated: true })
 }
 
 function filesFromSshG(output: string, key: string, home: string): string[] {

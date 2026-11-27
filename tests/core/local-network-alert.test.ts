@@ -47,9 +47,10 @@ describe('localNetworkLetter', () => {
     expect(l.markdown).toContain('\u7cfb\u7edf\u8bbe\u7f6e > \u9690\u79c1\u4e0e\u5b89\u5168\u6027 > \u672c\u5730\u7f51\u7edc')
   })
 
-  it('shows the time as local YYYY-MM-DD HH:MM', () => {
+  it('shows the time as a local date and 12-hour clock, never "today" (a letter is kept)', () => {
     const d = new Date(2026, 10, 3, 7, 5)
-    expect(letterTime(d.getTime())).toBe('2026-11-03 07:05')
+    // The year shows only when it is not this year.
+    expect(letterTime(d.getTime())).toMatch(/^Nov 3, (2026, )?7:05 AM$/)
   })
 })
 

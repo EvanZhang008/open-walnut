@@ -14,6 +14,8 @@
  * person pressed Retry, when the settings ask for another program, and when
  * the program there is too old for this Mac's copies.
  */
+import { clockTime as clockWords } from '../time-words.js'
+
 
 export const DEFAULT_UPDATE_QUIET_MS = 30 * 60_000
 export const DEFAULT_UPDATE_MAX_BEHIND_MS = 6 * 60 * 60_000
@@ -64,10 +66,9 @@ export function minutesFromEnv(raw: string | undefined, fallbackMs: number): num
   return Number.isFinite(n) && n >= 0 ? n * 60_000 : fallbackMs
 }
 
-/** A time of day on this computer's clock, `HH:MM`. */
+/** A time of day on this computer's clock ("2:05 PM"). */
 export function clockTime(at: number): string {
-  const d = new Date(at)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return clockWords(at)
 }
 
 function quietWords(ms: number): string {

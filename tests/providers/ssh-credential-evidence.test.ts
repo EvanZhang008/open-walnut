@@ -36,6 +36,8 @@ const printOf = (input?: string): RunResult => ({
 })
 const SSH_G = 'user me\nidentityfile ~/.ssh/id_rsa\nidentityfile ~/.ssh/id_ed25519\n'
 const NOW = new Date('2026-09-24T12:00:00').getTime()
+/** The expiry reads as a date and 12-hour clock; the year shows only when it is not this year. */
+const CERT_EXPIRED_AT = /^SSH certificate expired at Sep 24, (2026, )?8:00 AM$/
 
 function stubRun(map: Record<string, RunResult | ((input?: string) => RunResult)>) {
   const calls: string[] = []
@@ -113,7 +115,7 @@ describe('gatherSshCredentialEvidence (stubbed tools)', () => {
       'ssh-keygen -L': { code: 0, stdout: EXPIRED, stderr: '' },
     })
     expect(await gatherSshCredentialEvidence('me@devbox', { env: { SSH_AUTH_SOCK: '/x', HOME: '/h' }, run, now: () => NOW }))
-      .toEqual({ tag: 'cert-expired', detail: 'SSH certificate expired at 2026-09-24 08:00' })
+      .toEqual({ tag: 'cert-expired', detail: expect.stringMatching(CERT_EXPIRED_AT) })
   })
 
   it('an unrelated expired certificate next to another key that was refused stays plain auth', async () => {

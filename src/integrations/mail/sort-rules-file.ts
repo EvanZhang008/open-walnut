@@ -19,6 +19,7 @@ import { derivedRuleId } from './sort-classify.js'
 import { rulesErrorOf, syntaxErrorOf, withLines } from './sort-rules-lines.js'
 import { heldPatternsOf, validateRulesDoc, type ValidateOptions } from './sort-rules-schema.js'
 import type { Rule, RuleValidationError, RulesError, RulesFileDoc } from './sort-types.js'
+import { clockTime } from '../../core/time-words.js'
 
 export const RULES_FILE_NAME = 'sort-rules.yaml'
 export const LAST_GOOD_META_KEY = 'sort_rules_last_good'
@@ -95,10 +96,7 @@ export function fillRuleIds(rules: Rule[]): Rule[] {
 }
 
 export function missingSentence(since: number): string {
-  const at = new Date(since)
-  const hh = String(at.getHours()).padStart(2, '0')
-  const mm = String(at.getMinutes()).padStart(2, '0')
-  return `The rules file is missing. Walnut is still using the rules from ${hh}:${mm}.`
+  return `The rules file is missing. Walnut is still using the rules from ${clockTime(since)}.`
 }
 
 export interface RulesFileState {

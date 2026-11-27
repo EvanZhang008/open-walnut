@@ -3,11 +3,13 @@
  * 2026-11-08: the daily org reflection did not run and nobody heard.
  */
 import { describe, it, expect, vi } from 'vitest'
-import { noticeMissedRunsOnce, missedRunNotice, type MissedRunDeps } from '../../../src/core/routines/missed-runs.js'
+import { noticeMissedRunsOnce, missedRunNotice, slotLabel, type MissedRunDeps } from '../../../src/core/routines/missed-runs.js'
 import type { CronJob } from '../../../src/core/cron/types.js'
 
 const HOUR = 3_600_000
 const SLOT = Date.UTC(2026, 10, 8, 16, 0, 0)
+/** The routine's own zone is named only when it is not the server's own. */
+const SERVER_IS_LA = Intl.DateTimeFormat().resolvedOptions().timeZone === 'America/Los_Angeles'
 
 function job(over: Partial<CronJob> = {}): CronJob {
   return {
@@ -86,10 +88,17 @@ describe('telling a missed run', () => {
     expect(d.marked).toEqual([])
   })
 
+  it('a slot reads as a date and a 12-hour clock: no zone in the server\'s own, the zone named in another', () => {
+    const own = { schedule: { kind: 'cron', expr: '0 8 * * *' } } as CronJob
+    expect(slotLabel(own, SLOT)).toMatch(/^[A-Z][a-z]{2} \d{1,2}, (\d{4}, )?\d{1,2}:\d{2} [AP]M$/)
+    expect(slotLabel(job(), SLOT)).toMatch(SERVER_IS_LA ? /^Nov 8, (2026, )?8:00 AM$/ : /^Nov 8, (2026, )?8:00 AM PST$/)
+    expect(slotLabel({ schedule: { kind: 'cron', expr: '0 8 * * *', tz: 'Asia/Tokyo' } } as CronJob, SLOT)).toMatch(/^Nov 9, (2026, )?1:00 AM (GMT\+9|JST)$/)
+  })
+
   it('says what was missed, why, and how to run it now or set it aside', () => {
     const text = missedRunNotice(job(), [{ slotMs: SLOT, reason: 'Not started: no room' }], 'owner')
     expect(text).toContain('Your routine "Org reflection" (mvmrfw2l-4dad) missed a run')
-    expect(text).toContain('Sun, Nov 8, 8:00 AM PST')
+    expect(text).toMatch(new RegExp(`Nov 8, (2026, )?8:00 AM${SERVER_IS_LA ? '' : ' PST'}`))
     expect(text).toContain('Not started: no room')
     expect(text).toContain(`"path":"/api/routines/mvmrfw2l-4dad/run","body":{"catchUpMs":${SLOT}}`)
     expect(text).toContain(`"path":"/api/routines/mvmrfw2l-4dad/missed/dismiss","body":{"slotMs":${SLOT}}`)

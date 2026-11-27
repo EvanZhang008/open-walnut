@@ -144,7 +144,7 @@ describe('the user vs a session (C11, G10)', () => {
     expect(err.statusCode).toBe(409)
     expect(err.code).toBe('status_set_by_user')
     expect(err.details).toMatchObject({ task: worker, lane: 'waiting-cr' })
-    expect(err.message).toMatch(/^The user placed this card in "Waiting on CR" today at \d{2}:\d{2}\. Leave lane out to keep their pick, or pass override_user: true to replace it\. Your suggestion to move it to "Mitigating" was recorded on the card; the user can accept it\.$/)
+    expect(err.message).toMatch(/^The user placed this card in "Waiting on CR" today at \d{1,2}:\d{2} [AP]M\. Leave lane out to keep their pick, or pass override_user: true to replace it\. Your suggestion to move it to "Mitigating" was recorded on the card; the user can accept it\.$/)
     const card = (await getBoard(owner))!.cards[worker]
     expect(card.lane).toBe('waiting-cr')
     expect(card.lane_by).toBe('human')
@@ -432,7 +432,7 @@ describe('the latest event wins after a completion (C12, N16)', () => {
     await setBoardLanes(owner, stored.map((l) => ({ ...l })), { by: HUMAN })
     await setBoardLanes(owner, [...stored, { name: 'Vendor', kind: 'wait' }], { by: HUMAN })
     const err = await boardError(() => setBoardLanes(owner, stored, { by: `task:${owner}` }))
-    expect(err.message).toMatch(/^The user set this board's lanes today at \d{2}:\d{2}\. Leave the lanes/)
+    expect(err.message).toMatch(/^The user set this board's lanes today at \d{1,2}:\d{2} [AP]M\. Leave the lanes/)
     expect(err.message).not.toMatch(/\d{4}-\d{2}-\d{2}T/)
   })
 })

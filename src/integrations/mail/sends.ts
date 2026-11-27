@@ -37,6 +37,7 @@ import { beginOutwardSend, knownOpState, reportOutwardSend, type KnownOpState } 
 import type { MailService } from './service.js'
 import type { DraftRow, MailStore, SendRow } from './store.js'
 import type { OutgoingMail } from './types.js'
+import { clockTime } from '../../core/time-words.js'
 
 /**
  * Rows the reaper settles per tick.
@@ -80,11 +81,6 @@ function recipientCount(mail: OutgoingMail): number {
   return to + (mail.cc?.length ?? 0) + (mail.bcc?.length ?? 0)
 }
 
-/** `HH:MM` in the box's own timezone: the human reading it is sitting at that box. */
-function clockTime(at: number): string {
-  const date = new Date(at)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
 
 export class MailSends {
   constructor(private readonly deps: {

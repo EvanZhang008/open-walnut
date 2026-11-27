@@ -4,6 +4,7 @@
  */
 import type { SessionUsageLimit } from '../types.js'
 import { engineLimitName } from '../agents/engine-names.js'
+import { clockTime, pointInTime } from '../time-words.js'
 
 export type { SessionUsageLimit }
 
@@ -101,15 +102,13 @@ export function limitName(w: Pick<SessionUsageLimit, 'engine' | 'window'>): stri
   return `${limitEngineWords(w.engine)} ${win ? `${win} ` : 'usage '}limit`
 }
 
-/** "3:00 PM", "Thu 3:00 PM" past today, in this process's zone (the server's, the user's Mac). */
+/** "3:00 PM", "tomorrow 3:00 PM", "Nov 29, 3:00 PM" past today, in this process's zone (the server's, the user's Mac). */
 export function limitTimeWords(iso: string | undefined, nowMs: number): string {
   const t = iso ? Date.parse(iso) : NaN
   if (!Number.isFinite(t)) return ''
-  const d = new Date(t)
-  const sameDay = new Date(nowMs).toDateString() === d.toDateString()
-  // No-break spaces: "12:52 PM" and "Thu 12:52 PM" never wrap apart.
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/\s/g, '\u00a0')
-  return sameDay ? time : `${d.toLocaleDateString('en-US', { weekday: 'short' })}\u00a0${time}`
+  const sameDay = new Date(nowMs).toDateString() === new Date(t).toDateString()
+  // No-break spaces: "12:52 PM" and "tomorrow 12:52 PM" never wrap apart.
+  return (sameDay ? clockTime(t) : pointInTime(t, { now: nowMs })).replace(/\s/g, '\u00a0')
 }
 
 /** The task's wait in words, for every reader that is not the web (agents, the phone, the Brief). */

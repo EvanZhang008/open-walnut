@@ -201,8 +201,9 @@ describe('the report (buildMorningReport)', () => {
     expect(buildMorningReport(lead, [lead], [lone], since, NOW).markdown).toMatch(/## Other decisions waiting in your inbox \(1\)\n- "Rename the project\?" from Walnut lead: one tap answers it\./);
   });
 
-  it('times read on the server\'s clock with its offset', () => {
-    expect(reportTime(Date.parse('2026-11-01T07:00:00Z'))).toMatch(/^2026-11-0[12] \d{2}:\d{2} UTC([+-]\d{1,2}(:\d{2})?)?$/);
+  it('times read on the server\'s clock as a date and a 12-hour clock, with no zone', () => {
+    // 07:00 UTC is Oct 31 to Nov 2 on the server's clock, whichever zone it runs in.
+    expect(reportTime(Date.parse('2026-11-01T07:00:00Z'))).toMatch(/^(Oct 31|Nov [12]), (2026, )?\d{1,2}:\d{2} [AP]M$/);
   });
 
   it('when: a time of day is the next one, a duration from now, an ISO time; the past is refused', () => {

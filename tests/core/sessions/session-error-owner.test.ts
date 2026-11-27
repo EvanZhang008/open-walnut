@@ -58,7 +58,8 @@ describe('a failed session in the status the user reads', () => {
   it('waits on Walnut while its own retry is pending', () => {
     const s = deriveUserStatus({ ...failed, hasLeader: true, autoRetryAt: new Date(NOW + 180_000).toISOString() }, NOW)
     expect(s).toMatchObject({ state: 'waiting', kind: 'machine' })
-    expect(s.waitingOn).toContain('Walnut, retrying its failed turn by itself at 12:03 UTC (API Error: Connection dropped (ECONNRESET))')
+    // The retry time reads on the server's own 12-hour clock, with no zone.
+    expect(s.waitingOn).toMatch(/^Walnut, retrying its failed turn by itself at \d{1,2}:\d{2} [AP]M \(API Error: Connection dropped \(ECONNRESET\)\)/)
   })
 
   it('then waits on the node above, naming the error, never Needs you', () => {

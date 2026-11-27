@@ -971,7 +971,7 @@ describe('host server manager: a newer build waits for a quiet window (update-ho
   const T0 = new Date(2026, 9, 29, 9, 0).getTime()
   const oldFile = '/home/me/.open-walnut-host/app/0.6.6-aaa1111/walnut'
   const newFile = '/home/me/.open-walnut-host/app/0.6.7-abc1234/walnut'
-  const NOTICE = /^It runs Walnut 0\.6\.6-aaa1111; this computer's 0\.6\.7-abc1234 goes out after 30 quiet minutes with no newer deploy here \(at the latest by 15:00\)\. Retry sends it now\.$/
+  const NOTICE = /^It runs Walnut 0\.6\.6-aaa1111; this computer's 0\.6\.7-abc1234 goes out after 30 quiet minutes with no newer deploy here \(at the latest by 3:00 PM\)\. Retry sends it now\.$/
   let clock = T0
   const managers: Array<ReturnType<typeof createHostServerManager>> = []
   const record = () => JSON.parse(fs.readFileSync(path.join(dir, 'host-servers.json'), 'utf8')).devbox

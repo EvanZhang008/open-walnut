@@ -353,7 +353,7 @@ describe('buildHostStatus: a host away during its own daemon update', () => {
 
   it('reads as updating while the link is down, with no failure', () => {
     const s = buildHostStatus('devbox', devbox, state('reconnecting', { daemonUpdate: { state: 'updating', at } }), undefined, AT);
-    expect(s.phaseLabel).toBe('Updating the daemon on Big dev box (since 04:07); it reconnects once the new one is up');
+    expect(s.phaseLabel).toBe('Updating the daemon on Big dev box (since 4:07 AM); it reconnects once the new one is up');
     expect(s.lastKind).toBeUndefined();
     expect(s.error).toBeUndefined();
   });
@@ -361,7 +361,7 @@ describe('buildHostStatus: a host away during its own daemon update', () => {
   // 2026-11-04 review: away after its update was read as "needs a restart or a new login", untrue
   // for a Mac that is only asleep; only a record that says no daemon runs there says that.
   it('once it has not come back, says it may be asleep, without calling it a daemon failure', () => {
-    const sentence = 'The daemon update on Big dev box at 04:07 has not come back yet; Big dev box may be asleep, and it reconnects when it wakes';
+    const sentence = 'The daemon update on Big dev box at 4:07 AM has not come back yet; Big dev box may be asleep, and it reconnects when it wakes';
     const r = buildHostStatus('devbox', devbox, state('reconnecting', { daemonUpdate: { state: 'lost', at } }), undefined, AT);
     expect(r).toMatchObject({ phaseLabel: sentence, lastHint: sentence, lastError: sentence });
     expect(r.lastKind).not.toBe('daemon');
@@ -373,7 +373,7 @@ describe('buildHostStatus: a host away during its own daemon update', () => {
 
   it('an update whose record says no daemon runs there needs a restart or a new login, as the hint of a daemon failure', () => {
     const update = { state: 'down' as const, at, message: 'no daemon answered within 90 s, nor after the previous service config was put back' };
-    const sentence = 'The daemon update on Big dev box at 04:07 left no daemon running there (no daemon answered within 90 s, nor after the previous service config was put back); Big dev box needs a restart or a new login to start Walnut again';
+    const sentence = 'The daemon update on Big dev box at 4:07 AM left no daemon running there (no daemon answered within 90 s, nor after the previous service config was put back); Big dev box needs a restart or a new login to start Walnut again';
     expect(daemonUpdateSentence('Big dev box', update)).toBe(sentence);
     const r = buildHostStatus('devbox', devbox, state('reconnecting', { daemonUpdate: update }), undefined, AT);
     expect(r).toMatchObject({ phaseLabel: sentence, lastKind: 'daemon', lastHint: sentence, lastError: sentence });

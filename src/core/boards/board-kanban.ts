@@ -24,6 +24,7 @@ import {
   laneById, makeLaneId, MAX_CARDS, MAX_SUMMARY, MAX_WAITING_ON, pickLaneTemplate, placeCard, templateLanes,
   validateLanes, type BoardCard, type BoardLane, type LaneTemplateId, type PlaceTask,
 } from './board-lanes.js';
+import { clockTime, dayDate } from '../time-words.js';
 
 export interface KanbanWriteOpts {
   by: BoardWriter;
@@ -181,24 +182,22 @@ function checkUnchanged(card: BoardCard | undefined, fields: Array<'lane' | 'sum
   }
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
- * N16: when, in words a leader may repeat to the user (`today at 05:34`,
- * `yesterday at 22:10`, `on Oct 3 at 09:00`), in the server's local time, on
- * the board's 24 hour clock. A raw ISO stamp was quoted to users verbatim.
+ * N16: when, in words a leader may repeat to the user (`today at 5:34 AM`,
+ * `yesterday at 10:10 PM`, `on Oct 3 at 9:00 AM`), in the server's local time, on
+ * the clock every screen writes (src/core/time-words.ts). A raw ISO stamp was quoted to users verbatim.
  */
 export function readableAt(iso: string | undefined, now: number = Date.now()): string {
   const t = iso ? Date.parse(iso) : NaN;
   if (!Number.isFinite(t)) return 'earlier';
   const d = new Date(t);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const hm = clockTime(d);
   const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const days = Math.round((day(new Date(now)) - day(d)) / 86_400_000);
   if (days === 0) return `today at ${hm}`;
   if (days === 1) return `yesterday at ${hm}`;
-  return `on ${MONTHS[d.getMonth()]} ${d.getDate()} at ${hm}`;
+  return `on ${dayDate(d, { now, dated: true })} at ${hm}`;
 }
 
 /** A session moving a card the user placed (4.3): the 409 message, or null when the write may go ahead. */

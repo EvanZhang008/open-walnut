@@ -1,0 +1,130 @@
+{
+  "src/core/cron/schedule.ts": {
+    "n": 1,
+    "why": "machine: the cron schedule falls back to the system zone"
+  },
+  "src/core/daily-log.ts": {
+    "n": 1,
+    "why": "agent: \"## 14:05\" headings of the daily log memory file that agents write and read"
+  },
+  "src/core/health/day-key.ts": {
+    "n": 2,
+    "why": "machine: day keys and the system zone for Walnut Health buckets"
+  },
+  "src/core/hosts/cert-warning-time.ts": {
+    "n": 1,
+    "why": "machine: slot math for when the SSH certificate warning goes out"
+  },
+  "src/core/hosts/fleet.ts": {
+    "n": 1,
+    "why": "machine: the start of the fleet spend window"
+  },
+  "src/core/hosts/ssh-cert-expiry-alert.ts": {
+    "n": 1,
+    "why": "machine: the zone passed to the warning slot math"
+  },
+  "src/core/org/recent-work.ts": {
+    "n": 1,
+    "why": "agent: the recent-work block in Main and lead session prompts"
+  },
+  "src/core/project-memory.ts": {
+    "n": 1,
+    "why": "agent: \"## 2026-11-27 14:05\" headings of the project memory log agents write and read"
+  },
+  "src/core/quick-task-parse.ts": {
+    "n": 6,
+    "why": "machine: parsing a typed due date and its default zone"
+  },
+  "src/core/routines/draft.ts": {
+    "n": 1,
+    "why": "agent: the IANA zone name in the routine-drafting prompt"
+  },
+  "src/core/routines/missed-runs.ts": {
+    "n": 2,
+    "why": "person, on purpose: a routine on another zone than the server is said in its own zone, named (\"Nov 8, 8:00 AM PST\"); its own zone goes through time-words"
+  },
+  "src/core/sessions/promise-alarm.ts": {
+    "n": 1,
+    "why": "agent: the promise alarm note delivered into the session"
+  },
+  "src/core/tag-model.ts": {
+    "n": 1,
+    "why": "machine: a dated tag is checked as a calendar day"
+  },
+  "src/core/task-manager.ts": {
+    "n": 1,
+    "why": "machine: \"### 2026-11-27 14:05\" headings of the task log, parsed back by the shared log renderer"
+  },
+  "src/core/task-wait-until.ts": {
+    "n": 1,
+    "why": "agent: the wake message a waiting task gets in its session"
+  },
+  "src/core/triage/runs.ts": {
+    "n": 1,
+    "why": "agent: the Inbox Triage runs journal fed back to the triage agent"
+  },
+  "src/core/usage/collection.ts": {
+    "n": 1,
+    "why": "machine: usage day buckets"
+  },
+  "src/core/usage/cost-report.ts": {
+    "n": 2,
+    "why": "machine: cost report day buckets"
+  },
+  "src/core/usage/outside-codex.ts": {
+    "n": 1,
+    "why": "machine: usage day buckets"
+  },
+  "src/core/usage/response-store.ts": {
+    "n": 2,
+    "why": "machine: usage day buckets and the store zone"
+  },
+  "src/hooks/shared.ts": {
+    "n": 1,
+    "why": "machine: the date field and file name of a saved session summary"
+  },
+  "src/integrations/calendar/caldav/tz.ts": {
+    "n": 2,
+    "why": "machine: CalDAV values and zone math"
+  },
+  "src/integrations/jira/sync.ts": {
+    "n": 1,
+    "why": "machine: a date value sent to the external tracker"
+  },
+  "src/logging/subsystem.ts": {
+    "n": 1,
+    "why": "machine: log line time"
+  },
+  "src/providers/clock-schedule-core.ts": {
+    "n": 2,
+    "why": "machine: the daemon clock schedule math"
+  },
+  "src/providers/host-exec-watch.ts": {
+    "n": 1,
+    "why": "machine: a macOS log query argument"
+  },
+  "src/providers/session-cost-core.ts": {
+    "n": 2,
+    "why": "machine: session cost day buckets"
+  },
+  "src/providers/usage-limit-text.ts": {
+    "n": 2,
+    "why": "machine: parsing an engine usage-limit message (\"resets 3pm\")"
+  },
+  "src/utils/format.ts": {
+    "n": 1,
+    "why": "person, CLI only: the fixed-width date column of `walnut tasks` and `walnut sessions` (\"11-27 14:05\")"
+  },
+  "src/web/routes/task-extras-v1.ts": {
+    "n": 1,
+    "why": "machine: checking a quick-parse request"
+  },
+  "src/web/routes/tasks.ts": {
+    "n": 1,
+    "why": "machine: checking a quick-parse request"
+  },
+  "src/web/routes/usage.ts": {
+    "n": 5,
+    "why": "machine: usage API day keys"
+  }
+}
