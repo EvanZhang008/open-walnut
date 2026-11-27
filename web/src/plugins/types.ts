@@ -1,5 +1,5 @@
 import type { ContentAction, ContentItem } from '../../../packages/plugin-api/src/content-actions'
-import type { RouteLineViewProps } from '../../../packages/plugin-api/src/web'
+import type { CheckboxViewProps, RouteLineViewProps, SegmentedViewProps, TabsViewProps } from '../../../packages/plugin-api/src/web'
 import type { ComponentType, RefObject } from 'react'
 
 export interface Disposable {
@@ -380,6 +380,10 @@ export interface PluginViews {
   ContentActions: ComponentType<{ item: ContentItem; size?: 'buttons' | 'compact' }>
   /** Where Walnut's router sent one item (which router processed it, then its decision), Mail's own line. */
   RouteLine: ComponentType<RouteLineViewProps>
+  /** The shared choice controls (components/controls), so a plugin's pick is the console's own. */
+  Segmented: ComponentType<SegmentedViewProps>
+  Tabs: ComponentType<TabsViewProps>
+  Checkbox: ComponentType<CheckboxViewProps>
 }
 
 export interface WalnutWebApiHost {

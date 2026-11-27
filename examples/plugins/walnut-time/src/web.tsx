@@ -1,5 +1,6 @@
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { createTimeApi } from './web/api'
+import { setHostControls } from './web/controls'
 import { TimeApp } from './web/app'
 import { TIME_CSS } from './web/styles'
 import { TaskTimePage } from './web/task-page'
@@ -34,6 +35,7 @@ import { createTaskTimeStore } from './web/task-time-store'
 const APP_ORDER = 500
 
 export async function activate(walnut: WalnutWebApi) {
+  setHostControls(walnut.ui.views)
   const api = createTimeApi(walnut)
   const log = walnut.log
   const store = createTaskTimeStore(walnut, api, log)

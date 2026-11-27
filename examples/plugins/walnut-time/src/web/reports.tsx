@@ -2,6 +2,7 @@ import type { DayTime, TimeHumanKind } from './api'
 import { DayNav, type DayNavTestIds } from './day-nav'
 import { TREND_DAYS, scopeLabel, type Scope, type ScopeMode } from './time-scope'
 import { formatDuration } from './time-timeline'
+import { Segmented } from './controls'
 
 /**
  * The scope bar, the Agents tab, and the pieces both report tabs draw with. The
@@ -86,19 +87,12 @@ export function ReportFilters({
         onDate={(date) => onScope({ mode: scope.mode, date })}
       />
 
-      <div className="wt-pills" role="group" aria-label="Scope length">
-        {SCOPE_MODES.map((m) => (
-          <button
-            key={m.value}
-            type="button"
-            data-testid={`time-app-scope-${m.value}`}
-            className={`wt-pill${scope.mode === m.value ? ' is-active' : ''}`}
-            onClick={() => onScope({ mode: m.value, date: scope.date })}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
+      <Segmented
+        aria-label="Scope length"
+        value={scope.mode}
+        options={SCOPE_MODES.map((m) => ({ value: m.value, label: m.label, testId: `time-app-scope-${m.value}` }))}
+        onChange={(mode) => onScope({ mode, date: scope.date })}
+      />
 
       <label className="wt-filter-field">
         <span className="wt-filter-label">Project</span>
@@ -114,18 +108,12 @@ export function ReportFilters({
       </label>
 
       {showKind && (
-        <div className="wt-pills" role="group" aria-label="Activity kind">
-          {KINDS.map((k) => (
-            <button
-              key={k.value}
-              data-testid={`time-app-kind-${k.value}`}
-              className={`wt-pill${kind === k.value ? ' is-active' : ''}`}
-              onClick={() => onKind(k.value)}
-            >
-              {k.label}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          aria-label="Activity kind"
+          value={kind}
+          options={KINDS.map((k) => ({ value: k.value, label: k.label, testId: `time-app-kind-${k.value}` }))}
+          onChange={onKind}
+        />
       )}
     </div>
   )

@@ -24,7 +24,7 @@ export const DEMO_CSS = `
 .wd-tab {
   padding: 7px 12px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-full, 999px);
   background: var(--card-bg);
   color: var(--fg-secondary);
   font-size: 13px;
@@ -60,7 +60,7 @@ export const DEMO_CSS = `
 .wd-button {
   padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full, 999px);
   background: var(--bg-secondary);
   color: var(--fg);
   font-size: 13px;
@@ -86,7 +86,7 @@ export const DEMO_CSS = `
 
 .wd-chip {
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full, 999px);
   font-size: 11px;
   font-weight: 650;
   white-space: nowrap;
@@ -129,7 +129,7 @@ export const DEMO_CSS = `
 .wd-facts dt { color: var(--fg-muted); }
 .wd-facts dt { flex: none; }
 .wd-facts dd { margin: 0; min-width: 0; text-align: right; overflow-wrap: anywhere; }
-.wd-facts .wd-chip { display: inline-block; max-width: 100%; white-space: normal; border-radius: 8px; text-align: left; }
+.wd-facts .wd-chip { display: inline-block; max-width: 100%; white-space: normal; border-radius: 8px; /* shape: a fact value that wraps onto several lines is a box, not a key */ text-align: left; }
 
 .wd-tokens { display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); margin: 0; padding: 0; list-style: none; }
 .wd-tokens li { display: flex; gap: 8px; align-items: center; min-width: 0; }

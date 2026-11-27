@@ -1,8 +1,23 @@
 {
-  "tab": {},
-  "segment": {},
+  "tab": {
+    "../../examples/plugins/walnut-demo/src/web/app.tsx": 2,
+    "../../examples/plugins/walnut-demo/src/web/views-section.tsx": 2,
+    "../../examples/plugins/walnut-time/src/web/task-page.tsx": 3
+  },
+  "segment": {
+    "../../plugin-store/notes-import/src/web/import-panel.tsx": 1,
+    "../../plugin-store/walnut-rhythm/src/web/choices.tsx": 2,
+    "../../plugin-store/walnut-rhythm/src/web/focus-card.tsx": 3,
+    "../../plugin-store/walnut-rhythm/src/web/music-card.tsx": 2,
+    "../../plugin-store/walnut-rhythm/src/web/music-picker.tsx": 2
+  },
   "switch": {},
-  "check": {},
+  "check": {
+    "../../plugin-store/notes-import/src/web/import-panel.tsx": 3,
+    "../../plugin-store/notes-import/src/web/organize-panel.tsx": 1,
+    "../../plugin-store/walnut-rhythm/src/web/dnd-row.tsx": 1,
+    "../../plugin-store/walnut-rhythm/src/web/mac-card.tsx": 1
+  },
   "chip": {},
   "pressed": {
     "components/board/kanban/KanbanCard.tsx": 1,
@@ -18,9 +33,28 @@
     "components/sessions/SessionKebabSection.tsx": 3,
     "components/tasks/PinShortcutChoices.tsx": 2,
     "components/tasks/TaskKebabMenu.tsx": 1,
-    "components/tasks/ViewDropdown.tsx": 2
+    "components/tasks/ViewDropdown.tsx": 2,
+    "../../plugin-store/walnut-rhythm/src/web/music-card.tsx": 1
   },
   "disclose": {},
+  "pick": {
+    "apps/mail/compose/MailDraftsList.tsx": 1,
+    "components/calendar/CalendarToolbar.tsx": 1,
+    "components/chat/ChatInput.tsx": 1,
+    "components/common/FileHistoryPanel.tsx": 1,
+    "components/notes/wiki-link/WikiLinkDisambiguation.tsx": 1,
+    "components/org/OrgAvatarDialog.tsx": 1,
+    "components/sessions/SessionBrowserReplay.tsx": 1,
+    "components/sessions/SessionDiffView.tsx": 1,
+    "components/sessions/SessionTurnsView.tsx": 1,
+    "components/tasks/AdoptWorkerFlyout.tsx": 1,
+    "components/tasks/DisplayMenu.tsx": 1,
+    "components/tasks/PluginFieldPicker.tsx": 1,
+    "components/tasks/ReleaseWorkerFlyout.tsx": 1,
+    "components/tasks/TagEditor.tsx": 1,
+    "components/tasks/TaskKebabMenu.tsx": 1,
+    "components/tasks/TasksPageTable.tsx": 4
+  },
   "ownLook": {
     "popout/ext-panel.css": 1,
     "styles/board-kanban-controls.css": 1,
@@ -31,6 +65,9 @@
     "styles/passwords.css": 1,
     "styles/phone-fixes.css": 1,
     "styles/routines-groups.css": 1,
-    "styles/tree-split.css": 2
+    "styles/tree-split.css": 2,
+    "../../examples/plugins/walnut-demo/src/web/styles.ts": 2,
+    "../../plugin-store/notes-import/src/web/styles.ts": 1,
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 1
   }
 }

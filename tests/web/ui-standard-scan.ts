@@ -15,34 +15,30 @@ export { TOKEN_KINDS };
 
 export const WEB_SRC = path.join(__dirname, '../../web/src');
 /**
- * The plugins this repo ships (plugin-store/<id>/src): their pages draw keys in the same console, so
- * the button counts cover them too (2026-11-23: Rhythm's keys had a family of their own). Their files
- * are keyed from WEB_SRC (`../../plugin-store/...`), as the rest.
+ * The plugins this repo ships: the store's (plugin-store/<id>/src) and the examples
+ * (examples/plugins/<id>/src; Time ships as a builtin). Their pages draw keys and picks in the same
+ * console, so every count covers them too (2026-11-23: Rhythm's keys had a family of their own;
+ * 2026-11-27 UI audit: the Time page drew its own tabs, segmented tracks and day keys, which no count
+ * read). Their files are keyed from WEB_SRC (`../../plugin-store/...`, `../../examples/...`), as the rest.
  */
 export const PLUGIN_SRC = path.join(__dirname, '../../plugin-store');
-/** Every TSX file a key can be written in: the console's and the shipped plugins'. */
-export const keyFiles = (exts: string[] = ['.tsx']): string[] => [...walk(WEB_SRC, exts), ...walk(PLUGIN_SRC, exts)];
-/** A plugin's stylesheet is the template string a `styles.ts` exports: its text, from `= \`` to the last backtick. */
-export function pluginCss(src: string): string {
-  const at = src.indexOf('= `');
-  const end = src.lastIndexOf('`');
-  return at < 0 || end <= at + 3 ? '' : src.slice(at + 3, end);
-}
-/**
- * The example plugins this repo ships (examples/plugins/<id>/src): their pages are the console's
- * too (2026-11-27 UI audit: the Time page's Project pick-one had a white fill and edge of its own,
- * in `styles-base.ts`, which no count read).
- */
 export const EXAMPLE_PLUGIN_SRC = path.join(__dirname, '../../examples/plugins');
+export const PLUGIN_SRCS = [PLUGIN_SRC, EXAMPLE_PLUGIN_SRC];
+/** Every TSX file a key can be written in: the console's and the shipped plugins'. */
+export const keyFiles = (exts: string[] = ['.tsx']): string[] => [...walk(WEB_SRC, exts), ...PLUGIN_SRCS.flatMap((dir) => walk(dir, exts))];
+/**
+ * A plugin's stylesheet is the template strings a `styles.ts` exports (`export const X_CSS = \`...\``),
+ * one after the other: a module may export two (`styles-apps.ts`: the Apps tab's and Screen Time's).
+ */
+export function pluginCss(src: string): string {
+  return [...src.matchAll(/=\s*`([^`]*)`/g)].map((m) => m[1]).join('\n');
+}
 /** A plugin's stylesheet module: `styles.ts`, or one part of it (`styles-base.ts`). */
 const STYLES_MODULE = /(^|\/)styles(-[\w-]+)?\.ts$/;
-const stylesOf = (files: string[]): [string, string][] =>
-  files.filter((f) => STYLES_MODULE.test(f)).sort()
-    .map((f) => [f, pluginCss(fs.readFileSync(f, 'utf8'))] as [string, string]).filter(([, css]) => css.length > 0);
 /** The shipped plugins' stylesheets: [file, css text]. */
-export const pluginStyles = (): [string, string][] => stylesOf(walk(PLUGIN_SRC, ['.ts']));
-/** The example plugins' stylesheets. Only the field and input box counts read them for now. */
-export const examplePluginStyles = (): [string, string][] => stylesOf(walk(EXAMPLE_PLUGIN_SRC, ['.ts']));
+export const pluginStyles = (): [string, string][] =>
+  PLUGIN_SRCS.flatMap((dir) => walk(dir, ['.ts'])).filter((f) => STYLES_MODULE.test(f)).sort()
+    .map((f) => [f, pluginCss(fs.readFileSync(f, 'utf8'))] as [string, string]).filter(([, css]) => css.length > 0);
 
 /** The one home of the console's label (standard.md, "Status labels"). */
 export const LABEL_HOME = 'styles/badge.css';
@@ -241,7 +237,9 @@ const KEY_NAME = /-(btn|button|pill|chip|toggle|tab|badge|tag|count)$/;
 const MENU_KEY = /-menu$/;
 const NOT_A_KEY = /(-(row|rows|card|block|rail|bar|head|header|item|cell|aside|drop|panel|menu|list|option|opt|seg|segs|entry|tile|line|section|preview|thumb|frame|daynum|title|result|link|caption|value|marker|text|checkbox|dir|file)|^wn-(field|notice|overlay|dialog|input))$/;
 /** A corner that is round, flat or the parent's: everything else on a key is a square key. */
-const ROUND_CORNER = /^(var\(--radius-full\)|50%|inherit|0|0px|none|initial|unset)$/; // a literal 999px is the token's job (pillRadius)
+// A literal 999px is the token's job (pillRadius); a plugin's sheet may give the token a fallback for an
+// older host (`var(--radius-full, 999px)`), which is the same round corner.
+const ROUND_CORNER = /^(var\(--radius-full(,\s*(999|9999)px)?\)|50%|inherit|0|0px|none|initial|unset)$/;
 /** `border-radius: 8px; /* shape: <why, 10+ characters> *\/`: a class named like a key that is not one (a row's highlight). */
 export const SHAPE_MARK = /\/\*\s*shape:\s*[^*]{10,}\*\//;
 /** A font size off the type scale that a measurement needs, said on its own line (a `size: <why>` comment):
@@ -285,7 +283,7 @@ export function lastCompoundClasses(selector: string): string[] {
 export function isSquareKey(selector: string, radius: string, pressables: Set<string>): boolean {
   const v = radius.replace(/\s*!important$/, '').trim();
   const label = /^var\(--label-radius\)$/.test(v);
-  if (!label && v.split(/\s+/).every((x) => ROUND_CORNER.test(x))) return false;
+  if (!label && (ROUND_CORNER.test(v) || v.split(/\s+/).every((x) => ROUND_CORNER.test(x)))) return false;
   if (/(input-key|input-radius|choice-radius-box)/.test(v)) return false; // the input box's own keys and the tab's focus ring
   if (/\[aria-orientation=['"]?vertical/.test(selector)) return false; // a vertical tab list is a list of rows
   if (selector.includes('::')) return false; // a mark drawn inside the key (a tick, a ring), not the key
@@ -516,22 +514,8 @@ export function countAll(): Counts {
   const fields = fieldClasses();
   const pressables = pressableClasses();
   const bareKeys = bareKeyClasses();
-  const examples = new Set(examplePluginStyles().map(([f]) => f));
-  const sheets: [string, string][] = [...walk(WEB_SRC, ['.css']).sort().map((f) => [f, fs.readFileSync(f, 'utf8')] as [string, string]), ...pluginStyles(), ...examplePluginStyles()];
+  const sheets: [string, string][] = [...walk(WEB_SRC, ['.css']).sort().map((f) => [f, fs.readFileSync(f, 'utf8')] as [string, string]), ...pluginStyles()];
   for (const [file, text] of sheets) {
-    if (examples.has(file)) {
-      // An example plugin's sheet: its fields and input boxes only (the Time page's own pick-one).
-      const rel = path.relative(WEB_SRC, file);
-      const rules = new Map<string, Decl[]>();
-      for (const d of scanCss(rel, text)) rules.set(d.selectors.join(', '), [...(rules.get(d.selectors.join(', ')) ?? []), d]);
-      for (const [, decls] of rules) {
-        const sels = decls[0].selectors;
-        if (sels.some((x) => restylesInput(x, decls, parts))) bump(out.restyledInput, rel);
-        if (sels.some((x) => restylesField(x, decls, fields))) bump(out.restyledField, rel);
-        if (sels.some((x) => sizesFieldText(x, decls, fields))) bump(out.fieldText, rel);
-      }
-      continue;
-    }
     const rel = path.relative(WEB_SRC, file);
     const rules = new Map<string, Decl[]>();
     const lines = text.split('\n');

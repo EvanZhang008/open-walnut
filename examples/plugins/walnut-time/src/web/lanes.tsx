@@ -277,6 +277,7 @@ export function TimeLanes({ blocks, totals, agentMs, showAgents, outside, outsid
                 <button
                   type="button"
                   className="wt-tl-nm wt-tl-expand"
+                  data-choice-exempt="a lane title that is its own fold button, wearing the DisclosureChevron markup of the host"
                   data-testid={`time-app-lanes-expand-${row.kind}`}
                   aria-expanded={row.expandable.expanded}
                   title={row.expandable.expanded ? '收起' : `展开 ${row.expandable.count} 行`}

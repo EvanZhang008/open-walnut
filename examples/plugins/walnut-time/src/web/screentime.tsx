@@ -113,7 +113,7 @@ function ScreenTimeInvite({ busy, onEnable, error }: {
       {error && <div className="wt-degraded">Error: {error}</div>}
       <button
         type="button"
-        className="wt-st-enable"
+        className="btn btn-primary"
         data-testid="time-app-screentime-enable"
         disabled={busy}
         onClick={onEnable}
@@ -211,7 +211,7 @@ function ScreenTimeAccessCard({ day, busy, onRetry, onOpenSettings }: {
         {grantable && (
           <button
             type="button"
-            className="wt-st-enable"
+            className="btn btn-primary"
             data-testid="time-app-screentime-open"
             onClick={onOpenSettings}
           >
@@ -220,7 +220,7 @@ function ScreenTimeAccessCard({ day, busy, onRetry, onOpenSettings }: {
         )}
         <button
           type="button"
-          className="wt-st-retry"
+          className="btn btn-sm"
           data-testid="time-app-screentime-retry"
           disabled={busy}
           onClick={onRetry}
@@ -247,7 +247,7 @@ function ScreenTimeEmpty({ date, day, busy, onRefresh }: {
         ? `Apple reported no device activity on ${dayLabel(date)}.`
         : `Nothing captured for ${dayLabel(date)} yet. Walnut only has the days it snapshotted.`}
       {' '}
-      <button type="button" className="wt-st-retry" disabled={busy} onClick={onRefresh}>
+      <button type="button" className="btn btn-sm" disabled={busy} onClick={onRefresh}>
         {busy ? 'Reading…' : 'Read Apple Screen Time now'}
       </button>
     </p>
@@ -361,12 +361,12 @@ function RowList({ title, rows, totalMs, dropped, droppedMs, testId, hint }: {
         ))}
       </div>
       {hiddenRows > 0 && (
-        <button type="button" className="wt-ap-more" onClick={() => setExpanded(true)}>
+        <button type="button" className="btn btn-sm wt-ap-more" onClick={() => setExpanded(true)}>
           +{hiddenRows} more
         </button>
       )}
       {expanded && rows.length > ROWS_SHOWN && (
-        <button type="button" className="wt-ap-more" onClick={() => setExpanded(false)}>Fewer</button>
+        <button type="button" className="btn btn-sm wt-ap-more" onClick={() => setExpanded(false)}>Fewer</button>
       )}
       {/* Never truncate silently: a capped list that says nothing reads as the
           complete answer, and the missing time is real time. */}

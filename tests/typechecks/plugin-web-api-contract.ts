@@ -72,6 +72,21 @@ const publicMicIsHostMic: HostMicButton = null as unknown as PublicMicButton
 void hostMicIsPublicMic
 void publicMicIsHostMic
 
+// The shared choice controls a plugin draws (Segmented, Tabs, Checkbox): the public props are the
+// ones the host's views take, both ways.
+type PublicSegmented = NonNullable<PublicWebApi['ui']['views']['Segmented']>
+type HostSegmented = HostWebApi['ui']['views']['Segmented']
+type PublicTabs = NonNullable<PublicWebApi['ui']['views']['Tabs']>
+type HostTabs = HostWebApi['ui']['views']['Tabs']
+type PublicCheckbox = NonNullable<PublicWebApi['ui']['views']['Checkbox']>
+type HostCheckbox = HostWebApi['ui']['views']['Checkbox']
+const choiceViewsBothWays: [PublicSegmented, HostSegmented, PublicTabs, HostTabs, PublicCheckbox, HostCheckbox] = [
+  null as unknown as HostSegmented, null as unknown as PublicSegmented,
+  null as unknown as HostTabs, null as unknown as PublicTabs,
+  null as unknown as HostCheckbox, null as unknown as PublicCheckbox,
+]
+void choiceViewsBothWays
+
 // An App's session pane and the drawing view: the public props are the ones the host draws,
 // field for field (a field missing on the host side is one the pane never gets).
 type PublicSessionAppProps = import('../../packages/plugin-api/src/web.js').SessionAppProps

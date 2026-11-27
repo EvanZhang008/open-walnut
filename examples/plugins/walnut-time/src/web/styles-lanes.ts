@@ -27,7 +27,7 @@ export const LANES_CSS = `
   position: absolute;
   top: 7px;
   transform: translateX(-50%);
-  font-size: 11px;
+  font-size: var(--font-size-xs, 11px);
   color: var(--fg-muted);
   white-space: nowrap;
 }
@@ -66,13 +66,13 @@ export const LANES_CSS = `
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 13px;
+  font-size: var(--font-size-md, 13px);
 }
 
 .wt-tl-tt {
   color: var(--fg-muted);
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: var(--font-size-sm, 12px);
   font-variant-numeric: tabular-nums;
   flex: none;
 }

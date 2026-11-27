@@ -242,6 +242,14 @@ width); it never gives them a fill, border, corner or size of its own, and never
 | Nav item | `.wn-nav-item` (`styles/pick-and-nav.css`) | the rail, the sidebar, a section list (Settings, the notification panel's filters) | one row in every nav list: 32 px tall, padding 0 10 px, 8 px from its icon (16 px), 13 px weight 400 `--fg-secondary`, `--bg-hover` under the pointer; a list may indent a sub-level row or draw a collapsed rail as round keys, never its own type size or padding; the page you are on: `--accent-subtle` fill, `--accent-text`, weight 500; a key that opens a pane beside the page (the task panel): a quiet `--bg-tertiary` fill and `--fg`, so the current page and an open pane never look the same | `aria-current="page"`; an open pane `aria-pressed="true"` |
 | Option card | `.wn-option-card` | one of a few large side-by-side choices with a title and a line of words (New task or Quick question) | every card the same 1 px `--border` and 16 px padding, its name in `.wn-option-card-title` (`--font-size-lg`, 600) and its line in `.wn-option-card-desc`; the picked one a half-accent hairline and `--accent-subtle`; the focus ring only on `:focus-visible` | `aria-checked` (on `role=radio`) or `aria-pressed` |
 
+A plugin's page (the store's in `plugin-store/`, the examples in `examples/plugins/`, Time among
+them) is the console's too: it draws its tabs, segmented controls and checkboxes with
+`walnut.ui.views.Tabs`, `Segmented` and `Checkbox` (the components above, handed over by the host)
+and its keys with `.btn`, never copies of its own; the ratchets read those folders as they read
+`web/src` (2026-11-27 UI audit: the Time page's square-cornered tabs and day keys beside the
+Calendar's round ones). A pick that only an on-class of its own turns on, with no ARIA state, is
+counted too (`pick`).
+
 Every fold mark is a `DisclosureChevron` and every menu key's caret a `MenuCaret`, never a typed
 triangle or angle quote, never a chevron SVG or component a file draws for itself; a direction (back,
 next, a row that goes somewhere, a sort order) is `ICON_CHEVRON_LEFT` / `ICON_CHEVRON_RIGHT` from

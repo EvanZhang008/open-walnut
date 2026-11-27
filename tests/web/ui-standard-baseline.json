@@ -96,7 +96,10 @@
     "styles/voice-conversation.css": 1,
     "styles/walnut-agent.css": 5,
     "styles/worker-fold.css": 2,
-    "styles/workspaces.css": 5
+    "styles/workspaces.css": 5,
+    "../../examples/plugins/walnut-demo/src/web/styles.ts": 2,
+    "../../examples/plugins/walnut-time/src/web/styles-base.ts": 1,
+    "../../examples/plugins/walnut-time/src/web/styles-task.ts": 2
   },
   "rawAccent": {
     "components/apps-page/builtin-apps.ts": 2,
@@ -156,6 +159,9 @@
     "styles/unpaired-notice.css": 9,
     "styles/usage-breakdown.css": 3,
     "styles/walnut-agent.css": 6,
+    "../../examples/plugins/walnut-time/src/web/styles-base.ts": 1,
+    "../../examples/plugins/walnut-time/src/web/styles-task.ts": 1,
+    "../../examples/plugins/walnut-time/src/web/styles-views.ts": 2,
     "../../plugin-store/notes-import/src/web/styles.ts": 4
   },
   "radiusNotToken": {
@@ -253,6 +259,11 @@
     "styles/unpaired-notice.css": 1,
     "styles/walnut-agent.css": 3,
     "styles/workspaces.css": 3,
+    "../../examples/plugins/walnut-demo/src/web/styles.ts": 2,
+    "../../examples/plugins/walnut-time/src/web/styles-base.ts": 5,
+    "../../examples/plugins/walnut-time/src/web/styles-lanes.ts": 5,
+    "../../examples/plugins/walnut-time/src/web/styles-task.ts": 3,
+    "../../examples/plugins/walnut-time/src/web/styles-views.ts": 9,
     "../../plugin-store/notes-import/src/web/styles.ts": 8,
     "../../plugin-store/walnut-rhythm/src/web/styles.ts": 2
   },
@@ -342,8 +353,9 @@
     "styles/unpaired-notice.css": 3,
     "styles/walnut-agent.css": 1,
     "styles/workspaces.css": 1,
+    "../../examples/plugins/walnut-demo/src/web/styles.ts": 16,
     "../../plugin-store/notes-import/src/web/styles.ts": 17,
-    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 29
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 16
   },
   "shadowLiteral": {
     "apps/mail/mail-reader.css": 1,
@@ -380,7 +392,8 @@
     "styles/topics.css": 1,
     "styles/tree-split.css": 1,
     "styles/truncation-peek.css": 1,
-    "styles/walnut-agent.css": 1
+    "styles/walnut-agent.css": 1,
+    "../../examples/plugins/walnut-time/src/web/styles-views.ts": 1
   },
   "zIndexLiteral": {
     "apps/mail/mail-reader.css": 1,
@@ -437,7 +450,9 @@
     "styles/turn-snapshots.css": 1,
     "styles/unpaired-notice.css": 1,
     "styles/walnut-agent.css": 1,
-    "styles/workspaces.css": 1
+    "styles/workspaces.css": 1,
+    "../../examples/plugins/walnut-time/src/web/styles-lanes.ts": 1,
+    "../../examples/plugins/walnut-time/src/web/styles-views.ts": 1
   },
   "spacingOffGrid": {
     "apps/mail/mail-compose.css": 7,
@@ -547,10 +562,25 @@
     "styles/walnut-agent.css": 4,
     "styles/worker-fold.css": 1,
     "styles/workspaces.css": 8,
+    "../../examples/plugins/walnut-demo/src/web/styles.ts": 2,
+    "../../examples/plugins/walnut-time/src/web/styles-apps.ts": 3,
+    "../../examples/plugins/walnut-time/src/web/styles-base.ts": 2,
+    "../../examples/plugins/walnut-time/src/web/styles-lanes.ts": 1,
+    "../../examples/plugins/walnut-time/src/web/styles-task.ts": 4,
+    "../../examples/plugins/walnut-time/src/web/styles-views.ts": 2,
     "../../plugin-store/notes-import/src/web/styles.ts": 6,
-    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 3
+    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 2
   },
   "bareButton": {
+    "../../examples/plugins/walnut-demo/src/web/lifecycle-section.tsx": 1,
+    "../../examples/plugins/walnut-demo/src/web/registry-section.tsx": 1,
+    "../../examples/plugins/walnut-demo/src/web/ui-kit.tsx": 1,
+    "../../examples/plugins/walnut-demo/src/web/views-section.tsx": 2,
+    "../../examples/plugins/walnut-time/src/web/chapters.tsx": 1,
+    "../../examples/plugins/walnut-time/src/web/lanes.tsx": 1,
+    "../../examples/plugins/walnut-time/src/web/overview.tsx": 1,
+    "../../examples/plugins/walnut-time/src/web/task-page.tsx": 3,
+    "../../examples/plugins/walnut-time/src/web/task-slots.tsx": 2,
     "apps/mail/AddAccountDialog.tsx": 1,
     "apps/mail/MailAccountFolders.tsx": 3,
     "apps/mail/MailAccountsPane.tsx": 1,
@@ -935,6 +965,8 @@
     "styles/thread-stack-page.css": 1,
     "styles/thread-stack.css": 1,
     "styles/top-thread.css": 2,
+    "../../examples/plugins/walnut-time/src/web/styles-base.ts": 1,
+    "../../examples/plugins/walnut-time/src/web/styles-views.ts": 2,
     "../../plugin-store/notes-import/src/web/styles.ts": 1,
     "../../plugin-store/walnut-rhythm/src/web/styles.ts": 2
   },
@@ -948,8 +980,7 @@
     "styles/passwords.css": 2,
     "styles/quickbar.css": 2,
     "styles/unpaired-notice.css": 1,
-    "../../plugin-store/notes-import/src/web/styles.ts": 8,
-    "../../plugin-store/walnut-rhythm/src/web/styles.ts": 1
+    "../../plugin-store/notes-import/src/web/styles.ts": 8
   },
   "fieldText": {
     "apps/mail/mail-compose.css": 2,
@@ -989,6 +1020,9 @@
     "styles/todo-search.css": 1,
     "styles/topics.css": 2,
     "styles/walnut-agent.css": 1,
+    "../../examples/plugins/walnut-demo/src/web/styles.ts": 2,
+    "../../examples/plugins/walnut-time/src/web/styles-task.ts": 4,
+    "../../examples/plugins/walnut-time/src/web/styles-views.ts": 1,
     "../../plugin-store/notes-import/src/web/styles.ts": 4,
     "../../plugin-store/walnut-rhythm/src/web/styles.ts": 2
   },

@@ -10,6 +10,7 @@ import {
   TREND_DAYS, WINDOW_DAYS, daysInScope, scopeHint, type Scope, type ScopeMode,
 } from './time-scope'
 import { TimeTimeline } from './timeline'
+import { Tabs } from './controls'
 
 /**
  * The app shell: one page, four tabs, one data load.
@@ -194,21 +195,13 @@ export function TimeApp({ api, log, useView = useStateView, basePath, subpath, n
         </button>
       </header>
 
-      <nav className="wt-tabs" role="tablist" aria-label="Time views">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={t.id === tab}
-            className={`wt-tab${t.id === tab ? ' is-active' : ''}`}
-            data-testid={`time-app-tab-${t.id}`}
-            onClick={() => openTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
+      <Tabs
+        className="wt-tabs"
+        aria-label="Time views"
+        value={tab}
+        items={TABS.map((t) => ({ value: t.id, label: t.label, testId: `time-app-tab-${t.id}` }))}
+        onChange={openTab}
+      />
 
       {/* Mounted only once the window is known, for the same reason the timeline is:
           an unbounded nav renders with both arrows dead. */}

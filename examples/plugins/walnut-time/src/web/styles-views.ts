@@ -27,26 +27,11 @@ export const VIEWS_CSS = `
 
 .wt-tt-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
-.wt-tt-nav-btn, .wt-tt-nav-reset {
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--fg);
-  border-radius: 8px;
-  height: 28px;
-  min-width: 28px;
-  padding: 0 9px;
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-.wt-tt-nav-btn { display: inline-flex; align-items: center; justify-content: center; }
-.wt-tt-nav-btn .wn-dir-mark { margin: 0; }
-
-.wt-tt-nav-btn:hover:not(:disabled), .wt-tt-nav-reset:hover:not(:disabled) { background: var(--bg-hover); }
-.wt-tt-nav-btn:disabled, .wt-tt-nav-reset:disabled { opacity: 0.4; cursor: default; }
+/* Previous, next and Today are the console's keys (day-nav.tsx): an icon key and a small key. */
+.wt-tt-nav .btn-icon .wn-dir-mark { margin: 0; }
 
 .wt-tt-nav-date {
-  font-size: 16px;
+  font-size: var(--font-size-lg, 15px);
   font-weight: 650;
   display: inline-flex;
   align-items: baseline;
@@ -54,7 +39,7 @@ export const VIEWS_CSS = `
 }
 
 .wt-tt-nav-today {
-  font-size: 10.5px;
+  font-size: var(--font-size-xs, 11px);
   font-weight: 700;
   letter-spacing: 0.4px;
   text-transform: uppercase;
@@ -62,57 +47,21 @@ export const VIEWS_CSS = `
   font-style: normal;
 }
 
-/* A segmented control: one visible group, not three loose buttons. */
-.wt-tt-switch {
-  display: inline-flex;
-  margin-left: auto;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 2px;
-  gap: 2px;
-}
-
-.wt-tt-switch-btn {
-  border: 0;
-  background: transparent;
-  color: var(--fg-secondary);
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 5px 12px;
-  border-radius: 7px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.wt-tt-switch-btn:hover { color: var(--fg); }
-
-.wt-tt-switch-btn.is-active {
-  background: var(--bg-elevated);
-  color: var(--fg);
-  box-shadow: var(--card-shadow);
-}
-
-.wt-tt-agents-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
+/* The view switch (the console's Segmented, controls.tsx) and its Lanes options, one group at the
+   end of the nav's line; where the line wraps (a phone) the group starts at the left, together. */
+.wt-tt-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-left: auto; min-width: 0; }
+@media (max-width: 600px) { .wt-tt-tools { margin-left: 0; } }
 
 .wt-tt-totals {
   display: flex;
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
-  font-size: 13px;
+  font-size: var(--font-size-md, 13px);
 }
 
 .wt-tt-total { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
-.wt-tt-total-side { color: var(--fg-muted); font-size: 12.5px; }
+.wt-tt-total-side { color: var(--fg-muted); font-size: var(--font-size-sm, 12px); }
 
 .wt-tt-swatch { width: 9px; height: 9px; border-radius: 3px; flex: none; }
 .wt-tt-swatch-human { background: var(--wt-human); }
@@ -128,7 +77,7 @@ export const VIEWS_CSS = `
 .wt-tt-swatch-screen { background: var(--wt-screen); }
 .wt-tt-total-screen { color: var(--wt-screen); }
 
-.wt-tt-unplaced { color: var(--fg-muted); font-size: 12px; margin-left: auto; }
+.wt-tt-unplaced { color: var(--fg-muted); font-size: var(--font-size-sm, 12px); margin-left: auto; }
 
 /* A full page, not a 740px panel: the plot gets the viewport's height, with a floor
    so a short window still shows a usable slab of the day. */
@@ -157,7 +106,7 @@ export const VIEWS_CSS = `
   position: absolute;
   right: 8px;
   transform: translateY(-50%);
-  font-size: 11px;
+  font-size: var(--font-size-xs, 11px);
   color: var(--fg-muted);
   white-space: nowrap;
 }
@@ -188,7 +137,7 @@ export const VIEWS_CSS = `
   gap: 8px;
   padding: 0 14px;
   color: #fff;
-  font-size: 12px;
+  font-size: var(--font-size-sm, 12px);
   font-weight: 600;
   line-height: 1.15;
   overflow: hidden;
@@ -240,7 +189,7 @@ export const VIEWS_CSS = `
   position: absolute;
   right: 6px;
   top: -16px;
-  font-size: 11px;
+  font-size: var(--font-size-xs, 11px);
   font-weight: 700;
   color: var(--error);
 }
@@ -257,7 +206,7 @@ export const VIEWS_CSS = `
 
 .wt-tp-rank h4 {
   margin: 2px 0 8px;
-  font-size: 11px;
+  font-size: var(--font-size-xs, 11px);
   letter-spacing: 0.5px;
   text-transform: uppercase;
   color: var(--fg-muted);
@@ -270,7 +219,7 @@ export const VIEWS_CSS = `
   gap: 10px;
   padding: 7px 8px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: var(--font-size-md, 13px);
   /* Pinned, not inherited: a 1.5 body line-height made a one-line row 31px tall,
      which is indistinguishable from a wrapped row when measured. */
   line-height: 1.35;
@@ -299,19 +248,7 @@ export const VIEWS_CSS = `
 
 .wt-tp-rrow.is-quick .wt-tp-rname { color: var(--fg-muted); }
 
-.wt-tp-more {
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-size: 12.5px;
-  padding: 5px 8px;
-  cursor: pointer;
-  text-align: left;
-  display: block;
-}
-
-.wt-tp-more:hover { text-decoration: underline; }
+.wt-tp-more { margin-top: 4px; }
 
 /* ══ View B: chapters ══ */
 
@@ -330,14 +267,14 @@ export const VIEWS_CSS = `
 .wt-tc-hour {
   padding-top: 12px;
   text-align: right;
-  font-size: 11px;
+  font-size: var(--font-size-xs, 11px);
   color: var(--fg-muted);
   white-space: nowrap;
 }
 
 .wt-tc-idle {
   margin: 4px 0 4px 86px;
-  font-size: 11.5px;
+  font-size: var(--font-size-xs, 11px);
   color: var(--fg-muted);
   opacity: 0.75;
 }
@@ -375,7 +312,7 @@ export const VIEWS_CSS = `
 .wt-tc-head:hover { background: var(--bg-hover); }
 
 .wt-tc-when {
-  font-size: 11.5px;
+  font-size: var(--font-size-xs, 11px);
   font-weight: 600;
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
@@ -386,12 +323,12 @@ export const VIEWS_CSS = `
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 15px;
+  font-size: var(--font-size-lg, 15px);
   font-weight: 700;
 }
 
 .wt-tc-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
-.wt-tc-glyph { font-style: normal; font-size: 13px; color: var(--fg-muted); flex: none; }
+.wt-tc-glyph { font-style: normal; font-size: var(--font-size-md, 13px); color: var(--fg-muted); flex: none; }
 
 .wt-tc-title {
   min-width: 0;
@@ -402,7 +339,7 @@ export const VIEWS_CSS = `
 
 .wt-tc-tag {
   font-style: normal;
-  font-size: 10.5px;
+  font-size: var(--font-size-xs, 11px);
   font-weight: 700;
   letter-spacing: 0.3px;
   text-transform: uppercase;
@@ -423,7 +360,7 @@ export const VIEWS_CSS = `
 .wt-tc-comp i { display: block; height: 100%; min-width: 2px; }
 
 .wt-tc-parts {
-  font-size: 12px;
+  font-size: var(--font-size-sm, 12px);
   color: var(--fg-muted);
   overflow: hidden;
   white-space: nowrap;

@@ -37,7 +37,7 @@ export const BASE_CSS = `
 
 .wt-root *, .wt-root *::before, .wt-root *::after { box-sizing: border-box; }
 .wt-root h1 { margin: 4px 0 6px; } /* its type is the console's page title (.page-title) */
-.wt-root h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.wt-root h2 { margin: 0; font-size: var(--font-size-lg, 15px); font-weight: 600; }
 .wt-root h4 { margin: 0; }
 .wt-root p { margin: 0; }
 
@@ -58,44 +58,19 @@ export const BASE_CSS = `
 
 .wt-kicker {
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-size-xs, 11px);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-/* ── Tabs (the page's own three views) ── */
+/* ── Tabs, the range and the kind: the console's own Tabs and Segmented (controls.tsx); these
+   classes only place them. ── */
 
-.wt-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  width: fit-content;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-sm, 8px);
-  margin-bottom: 18px;
-}
+.wt-tabs { margin-bottom: 18px; }
 
-.wt-tab {
-  border: 0;
-  background: transparent;
-  padding: 7px 18px;
-  border-radius: 6px;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--fg-secondary);
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-}
-
-.wt-tab:hover { color: var(--fg); }
-
-.wt-tab.is-active {
-  background: var(--card-bg);
-  color: var(--fg);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
+/* The fallback on a host without those views: a row of plain keys. */
+.wt-key-row { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 
 /* ── Filters ── */
 
@@ -107,37 +82,8 @@ export const BASE_CSS = `
   margin-bottom: 22px;
 }
 
-.wt-pills {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-sm, 8px);
-  width: fit-content;
-}
-
-.wt-pill {
-  border: 0;
-  background: transparent;
-  padding: 6px 14px;
-  border-radius: 6px;
-  font: inherit;
-  font-size: 13px;
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-
-.wt-pill:hover { color: var(--fg); }
-
-.wt-pill.is-active {
-  background: var(--card-bg);
-  color: var(--fg);
-  font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
 .wt-filter-field { display: inline-flex; align-items: center; gap: 6px; }
-.wt-filter-label { font-size: 12px; color: var(--fg-secondary); }
+.wt-filter-label { font-size: var(--font-size-sm, 12px); color: var(--fg-secondary); }
 
 /* The Project pick-one is the console's own small field (its fill, grey focus edge and chevron):
    no look of its own here. */
@@ -149,10 +95,10 @@ export const BASE_CSS = `
   border-left: 3px solid var(--warning);
   border-radius: var(--radius-sm, 8px);
   color: var(--fg-secondary);
-  font-size: 13px;
+  font-size: var(--font-size-md, 13px);
 }
 
-.wt-empty, .wt-section-hint { font-size: 12px; color: var(--fg-muted); }
+.wt-empty, .wt-section-hint { font-size: var(--font-size-sm, 12px); color: var(--fg-muted); }
 
 /* ── Report stats + bars ── */
 
@@ -175,14 +121,14 @@ export const BASE_CSS = `
 }
 
 .wt-stat-value {
-  font-size: 26px;
+  font-size: 26px; /* size: the headline number of a report card, above the type scale on purpose */
   font-weight: 600;
   letter-spacing: -0.02em;
 }
 
 /* A task title, not a number: smaller and clipped to one line. */
 .wt-stat-value.is-text {
-  font-size: 15px;
+  font-size: var(--font-size-lg, 15px);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -190,13 +136,13 @@ export const BASE_CSS = `
 
 .wt-stat-human .wt-stat-value { color: var(--wt-human); }
 .wt-stat-agent .wt-stat-value { color: var(--wt-agent); }
-.wt-stat-label { font-size: 12px; color: var(--fg-secondary); }
-.wt-stat-hint { font-size: 11px; color: var(--fg-muted); }
+.wt-stat-label { font-size: var(--font-size-sm, 12px); color: var(--fg-secondary); }
+.wt-stat-hint { font-size: var(--font-size-xs, 11px); color: var(--fg-muted); }
 
 /* The second lane on a card. Deliberately much smaller than the headline: it is the
    same question about a different actor, not half of one total. */
 .wt-stat-sub {
-  font-size: 12.5px;
+  font-size: var(--font-size-sm, 12px);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -206,7 +152,7 @@ export const BASE_CSS = `
 /* The parallel-agents caption. Never a headline number. */
 .wt-agent-note {
   margin: -10px 0 22px;
-  font-size: 12px;
+  font-size: var(--font-size-sm, 12px);
   color: var(--fg-secondary);
 }
 
@@ -220,18 +166,7 @@ export const BASE_CSS = `
 }
 
 /* A pointer to another tab, not an action: reads as a link, sits at the far end. */
-.wt-section-link {
-  margin-left: auto;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  font: inherit;
-  font-size: 12px;
-  color: var(--accent);
-  cursor: pointer;
-}
-
-.wt-section-link:hover { text-decoration: underline; }
+.wt-section-link { margin-left: auto; }
 
 .wt-bars { display: flex; flex-direction: column; gap: 6px; }
 
@@ -248,7 +183,7 @@ export const BASE_CSS = `
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 13px;
+  font-size: var(--font-size-md, 13px);
 }
 
 .wt-bar-track {
@@ -264,7 +199,7 @@ export const BASE_CSS = `
 
 .wt-bar-value {
   text-align: right;
-  font-size: 13px;
+  font-size: var(--font-size-md, 13px);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -337,7 +272,7 @@ export const BASE_CSS = `
 
 .wt-trend-label {
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--font-size-xs, 11px);
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -348,7 +283,7 @@ export const BASE_CSS = `
   display: flex;
   gap: 16px;
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm, 12px);
   color: var(--fg-secondary);
 }
 

@@ -72,7 +72,7 @@ export function TimeTape({ slices, rows, axis, minuteOf, nowMin, labelFor }: {
           <RankRow key={row.taskId} row={row} hoverTaskId={hoverTaskId} onHover={setHoverTaskId} />
         ))}
         {groups.hidden.length > 0 && !expanded && (
-          <button className="wt-tp-more" data-testid="time-app-tape-more" onClick={() => setExpanded(true)}>
+          <button type="button" className="btn btn-sm wt-tp-more" data-testid="time-app-tape-more" onClick={() => setExpanded(true)}>
             +{groups.hidden.length} more · {formatDuration(groups.hiddenMs)}
           </button>
         )}
@@ -80,7 +80,7 @@ export function TimeTape({ slices, rows, axis, minuteOf, nowMin, labelFor }: {
           <RankRow key={row.taskId} row={row} hoverTaskId={hoverTaskId} onHover={setHoverTaskId} />
         ))}
         {expanded && (
-          <button className="wt-tp-more" onClick={() => setExpanded(false)}>Show fewer</button>
+          <button type="button" className="btn btn-sm wt-tp-more" onClick={() => setExpanded(false)}>Show fewer</button>
         )}
         {groups.quick.length > 0 && (
           <div className="wt-tp-rrow is-quick" data-testid="time-app-tape-quick">
@@ -165,6 +165,7 @@ export function Ribbon({ slices, axis, minuteOf, nowMin, labelFor, hoverTaskId, 
             ].filter(Boolean).join(' ')}
             data-time-task-id={taskId}
             data-testid="time-app-tape-seg"
+            data-choice-exempt="a piece of the ribbon of the day, drawn in the colour of its task, not a control"
             style={{ top: seg.topPx, height: seg.heightPx, background: taskColor(taskId) }}
             title={`${title} · ${from}–${to} · ${formatDuration(seg.slice.trackedMs)}`}
             onMouseEnter={() => onHover(taskId)}

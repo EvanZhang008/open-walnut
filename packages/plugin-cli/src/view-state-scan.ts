@@ -163,6 +163,8 @@ export function setterUses(src: string, setter: string): SetterUse[] {
 function textElement(src: string, i: number): boolean {
   const { tag, attrs } = elementBefore(src, i)
   if (/^select$/i.test(tag)) return false
+  // Walnut's choice controls (walnut.ui.views.Segmented, Tabs, Checkbox and the host's own) pick a value: no text is typed.
+  if (/^(?:Segmented|SegmentedControl|Tabs|Tab|Checkbox|Radio|Chip|ToggleSwitch)$/.test(tag)) return false
   if (/type\s*=\s*["'{]?\s*["']?(?:checkbox|radio|range|color|file)\b/.test(attrs)) return false
   return true
 }

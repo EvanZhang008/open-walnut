@@ -10,9 +10,10 @@ import { PluginSettingsForm } from '@/components/settings/PluginSettingsForm'
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
 import { ContentActionButtons } from '@/components/content/ContentActionButtons'
 import { RouteLine } from '@/components/router/RouteLine'
+import { Checkbox, SegmentedControl, Tabs } from '@/components/controls'
 import type { ContentItem } from '@/utils/content-actions'
 import { lazy, Suspense, useCallback, useRef, type RefObject } from 'react'
-import type { DrawingViewProps } from '../../../packages/plugin-api/src/web'
+import type { CheckboxViewProps, DrawingViewProps, SegmentedViewProps, TabsViewProps } from '../../../packages/plugin-api/src/web'
 import { LoadingState } from '@/components/common/EmptyState'
 
 const DrawingWorkspace = lazy(() => import('@/components/drawing/DrawingWorkspace').then((module) => ({ default: module.DrawingWorkspace })))
@@ -30,6 +31,23 @@ import type {
   TaskViewProps,
   TerminalViewProps,
 } from './types'
+
+/**
+ * The shared choice controls for a plugin's page (standard.md, "Choice controls"): the components
+ * themselves, so a plugin's segmented track, tabs and checkbox can never drift from the console's
+ * (2026-11-27 UI audit: the Time page drew all three of its own).
+ */
+function SegmentedView(props: SegmentedViewProps) {
+  return <SegmentedControl {...props} />
+}
+
+function TabsView(props: TabsViewProps) {
+  return <Tabs {...props} />
+}
+
+function CheckboxView({ className, ...props }: CheckboxViewProps) {
+  return <Checkbox {...props} rowClassName={className} />
+}
 
 function CalendarView() {
   return <CalendarPage />
@@ -166,6 +184,9 @@ export function createPluginViews(pluginId: string): PluginViews {
     ContentActions,
     DrawingView,
     RouteLine,
+    Segmented: SegmentedView,
+    Tabs: TabsView,
+    Checkbox: CheckboxView,
   }
 }
 

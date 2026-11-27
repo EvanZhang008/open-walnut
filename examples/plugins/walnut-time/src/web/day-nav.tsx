@@ -44,7 +44,7 @@ export function DayNav({ date, today, oldest, newest, label, testIds, onDate, ch
     <div className="wt-tt-nav">
       <button
         type="button"
-        className="wt-tt-nav-btn"
+        className="btn btn-ghost btn-icon"
         data-testid={testIds.prev}
         aria-label="Previous day"
         disabled={date <= oldest}
@@ -58,7 +58,7 @@ export function DayNav({ date, today, oldest, newest, label, testIds, onDate, ch
       </span>
       <button
         type="button"
-        className="wt-tt-nav-btn"
+        className="btn btn-ghost btn-icon"
         data-testid={testIds.next}
         aria-label="Next day"
         disabled={date >= newest}
@@ -68,7 +68,7 @@ export function DayNav({ date, today, oldest, newest, label, testIds, onDate, ch
       </button>
       <button
         type="button"
-        className="wt-tt-nav-reset"
+        className="btn btn-sm"
         data-testid={testIds.today}
         disabled={isToday}
         onClick={() => onDate(today)}

@@ -43,14 +43,14 @@ export const TASK_CSS = `
   gap: 3px;
   padding: 1px 7px;
   font: inherit;
-  font-size: 10px;
+  font-size: var(--font-size-xs, 11px);
   font-weight: 500;
   line-height: 1.6;
   white-space: nowrap;
   color: var(--fg-muted);
   background: transparent;
   border: none;
-  border-radius: 999px;
+  border-radius: var(--radius-full, 999px);
   cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
@@ -80,7 +80,7 @@ export const TASK_CSS = `
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm, 12px);
   color: var(--fg-muted);
 }
 .wt-crumb {
@@ -89,7 +89,7 @@ export const TASK_CSS = `
   font-weight: 600;
   letter-spacing: 0.3px;
   text-transform: uppercase;
-  font-size: 11px;
+  font-size: var(--font-size-xs, 11px);
   color: var(--accent);
   background: none;
   border: 0;
@@ -103,7 +103,7 @@ export const TASK_CSS = `
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  font-size: 12px;
+  font-size: var(--font-size-sm, 12px);
   color: var(--fg-secondary);
 }
 .wt-task-lane b { font-size: var(--font-size-xl, 17px); font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -153,7 +153,7 @@ export const TASK_CSS = `
   width: 100%;
   padding: 8px 12px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md, 13px);
   text-align: left;
   color: var(--fg);
   background: none;

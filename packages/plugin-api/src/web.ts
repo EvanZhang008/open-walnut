@@ -532,7 +532,82 @@ export interface WebUiService {
      * shows. It renders nothing for an item no router reads. Optional on the views object: feature-detect.
      */
     RouteLine?: PluginComponent<RouteLineViewProps>
+    /**
+     * Walnut's own choice controls, so a pick in your App looks and works as every other one in the
+     * console (one look per kind: a round segmented track, round tabs, the one checkbox). Draw these
+     * instead of your own; a class of yours passed as `className` only places them. Optional on the
+     * views object: feature-detect (an older host has none of them).
+     */
+    Segmented?: PluginComponent<SegmentedViewProps>
+    Tabs?: PluginComponent<TabsViewProps>
+    Checkbox?: PluginComponent<CheckboxViewProps>
   }
+}
+
+/**
+ * One value of a `SegmentedView` (a picker of one of 2 to 6 values inline: a range, a view mode) or
+ * one tab of a `TabsView` (switching between the pages of your App).
+ */
+export interface ChoiceItem<V extends string = string> {
+  value: V
+  label: ReactNode
+  /** A number after a tab's label, muted (tabs only). */
+  count?: ReactNode
+  /** The accessible name when the label is not text. */
+  ariaLabel?: string
+  title?: string
+  testId?: string
+  /** This one value cannot be picked now (say why in `title`). */
+  disabled?: boolean
+}
+
+/**
+ * Walnut's segmented control: a round track with the picked value a lifted thumb, arrow keys move
+ * and pick, the thumb slides. One of 2 to 6 short values of a setting or a view mode. It never runs
+ * past its container (it scrolls). `size="sm"` in a menu row or a popover; `fill` makes the values
+ * equal across the line. `value={null}` picks nothing. `className` places it (margin, flex), never a look.
+ */
+export interface SegmentedViewProps<V extends string = string> {
+  value: V | null
+  options: ReadonlyArray<ChoiceItem<V>>
+  onChange(value: V): void
+  'aria-label': string
+  size?: 'md' | 'sm'
+  fill?: boolean
+  wrap?: boolean
+  disabled?: boolean
+  className?: string
+  'data-testid'?: string
+}
+
+/**
+ * Walnut's tabs: a strip of round tabs at the top of a pane, the selected one in the accent's tint,
+ * a line under the strip (`flush` drops it under a header with its own); arrow keys, Home and End
+ * move and select. For switching between the pages or panels of one view; for a value or a mode of
+ * the same content use `SegmentedView`.
+ */
+export interface TabsViewProps<V extends string = string> {
+  value: V
+  items: ReadonlyArray<ChoiceItem<V>>
+  onChange(value: V): void
+  'aria-label': string
+  flush?: boolean
+  className?: string
+  'data-testid'?: string
+}
+
+/** Walnut's checkbox: the native box drawn as everywhere else, with its label as one clickable row. */
+export interface CheckboxViewProps {
+  checked: boolean
+  onChange(checked: boolean): void
+  label?: ReactNode
+  /** A muted line under the label. */
+  detail?: ReactNode
+  disabled?: boolean
+  title?: string
+  /** Placement of the row (margin, flex), never a look. */
+  className?: string
+  'data-testid'?: string
 }
 
 /** One item as your plugin entered it into the router: its kind, account and message id. */

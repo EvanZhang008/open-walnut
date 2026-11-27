@@ -126,7 +126,7 @@ export function OverviewReport({
           <span className="wt-section-hint">
             {agentTop.length === 0 ? 'nothing here' : `top ${agentTop.length} by runtime`}
           </span>
-          <button type="button" className="wt-section-link" data-testid="time-app-open-agents" onClick={onOpenAgents}>
+          <button type="button" className="btn btn-link wt-section-link" data-testid="time-app-open-agents" onClick={onOpenAgents}>
             All agent runs →
           </button>
         </div>
@@ -163,6 +163,7 @@ function LaneTrend({ lanes, today, selected, onPick }: {
             key={lane.date}
             className={`wt-trend-day${lane.date === today ? ' is-today' : ''}${isSelected ? ' is-selected' : ''}`}
             data-testid="time-app-trend-day"
+            data-choice-exempt="the bars of one day in the 7-day chart: a press reads that day"
             data-date={lane.date}
             aria-pressed={isSelected}
             title={`${lane.date}: you ${formatDuration(lane.humanMs)}, agents ${formatDuration(lane.agentMs)}`}

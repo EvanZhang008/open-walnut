@@ -18,6 +18,9 @@
  *            state drawn by its own class (a Chip, a segment, or the button family's Tool role)
  *   disclose has aria-expanded and a class ending -toggle / -fold / -disclosure / -chevron / -caret /
  *            -expand / -collapse / -collapser
+ *   pick     is a <button> that turns an on-class of its own on and off (`${on ? ' is-active' : ''}`)
+ *            with no role and no ARIA state: a pick nobody can hear, drawn by its class (the Time
+ *            page's Day / 7 days, 2026-11-27)
  * An element that only looks like one to this scan says so with data-choice-exempt="<why>".
  * And, in the stylesheets, `ownLook` counts rules that give a -tab / -tabs / -seg / -segment /
  * -segmented / -switch class its own fill, border or corner, plus every `accent-color` (a native box
@@ -26,6 +29,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { walk, scanCss, type Decl } from './css-scan';
+import { PLUGIN_SRCS, pluginStyles } from './ui-standard-scan';
 
 export const WEB_SRC = path.join(__dirname, '../../web/src');
 
@@ -38,8 +42,8 @@ export const HOMES = [
   'styles/choice-controls.css',
 ];
 
-export type Kind = 'tab' | 'segment' | 'switch' | 'check' | 'chip' | 'pressed' | 'disclose';
-export const KINDS: Kind[] = ['tab', 'segment', 'switch', 'check', 'chip', 'pressed', 'disclose'];
+export type Kind = 'tab' | 'segment' | 'switch' | 'check' | 'chip' | 'pressed' | 'disclose' | 'pick';
+export const KINDS: Kind[] = ['tab', 'segment', 'switch', 'check', 'chip', 'pressed', 'disclose', 'pick'];
 
 export interface Member { file: string; line: number; kind: Kind; tag: string; what: string }
 
@@ -77,6 +81,8 @@ export function openingTags(text: string): Array<{ tag: string; attrs: string; i
   }
   return out;
 }
+/** A class that a condition turns on: `${on ? ' is-active' : ''}`, `on ? 'is-on' : ''`, `cx({ active: on })`. */
+const ON_CLASS_SWITCHED = /\?\s*['"`]\s*(is-active|active|is-selected|selected|is-on|on|is-current|current)\s*['"`]\s*:/;
 const CLASS_ATTR = /className=(?:"([^"]*)"|\{((?:[^{}]|\{[^{}]*\})*)\})/g;
 
 const isHome = (rel: string) => HOMES.some((h) => rel.startsWith(h));
@@ -114,6 +120,7 @@ export function kindsOf(tag: string, attrs: string): Array<{ kind: Kind; what: s
   // A button that keeps its own on-class beside aria-pressed draws an on state of its own: a second
   // active-state name (the audit found five: .active, .on, .is-on, .is-active, .selected).
   if (/\baria-pressed\b/.test(attrs) && (/\b(active|on|is-on|is-active|selected|is-selected)\b/.test(cls) || /[a-z]-(on|active|selected)\b/.test(cls))) add('pressed', 'aria-pressed with its own on-class');
+  if (tag === 'button' && !role && !out.length && !/\baria-(pressed|checked|selected|current)\b/.test(attrs) && ON_CLASS_SWITCHED.test(cls)) add('pick', 'an on-class of its own, no ARIA');
   if (/\baria-expanded\b/.test(attrs)) {
     const fold = [...words].find((w) => /-(toggle|fold|disclosure|chevron|caret|expand|collapse|collapser)$/.test(w));
     if (fold) add('disclose', `.${fold}`);
@@ -121,10 +128,15 @@ export function kindsOf(tag: string, attrs: string): Array<{ kind: Kind; what: s
   return out;
 }
 
-/** Every hand-built member in web/src's TSX, outside the components' own home. */
+/**
+ * Every hand-built member in web/src's TSX, outside the components' own home, and in the shipped
+ * plugins' (plugin-store, examples/plugins), keyed from web/src as `../../plugin-store/...`: a
+ * plugin's page is the console's too and takes the same components through `walnut.ui.views`
+ * (2026-11-27 UI audit: the Time page drew its own tabs and three segmented tracks).
+ */
 export function members(): Member[] {
   const out: Member[] = [];
-  for (const file of walk(WEB_SRC, ['.tsx']).sort()) {
+  for (const file of [...walk(WEB_SRC, ['.tsx']).sort(), ...PLUGIN_SRCS.flatMap((dir) => walk(dir, ['.tsx'])).sort()]) {
     const rel = path.relative(WEB_SRC, file);
     if (isHome(rel)) continue;
     const text = fs.readFileSync(file, 'utf8');
@@ -144,11 +156,12 @@ const CHOICE_CLASS = /\.[A-Za-z0-9_-]+-(tabs?|seg|segment|segmented|switch)(?![\
 /** Stylesheet rules that draw a choice control of their own, per file. */
 export function ownLooks(): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const file of walk(WEB_SRC, ['.css']).sort()) {
+  const sheets: [string, string][] = [...walk(WEB_SRC, ['.css']).sort().map((f) => [f, fs.readFileSync(f, 'utf8')] as [string, string]), ...pluginStyles()];
+  for (const [file, text] of sheets) {
     const rel = path.relative(WEB_SRC, file);
     if (isHome(rel)) continue;
     const rules = new Map<string, Decl[]>();
-    for (const d of scanCss(rel, fs.readFileSync(file, 'utf8'))) {
+    for (const d of scanCss(rel, text)) {
       const key = d.selectors.join(', ');
       rules.set(key, [...(rules.get(key) ?? []), d]);
     }

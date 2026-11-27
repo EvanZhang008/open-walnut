@@ -1302,7 +1302,9 @@ Home, Tasks, Notes, Calendar, Routines, and Settings are the Core Apps. Home's C
 
 ### Stable Views
 
-`walnut.ui.views` hands you host-owned React facades: `CalendarView`, `FileView`, `NoteView`, `TerminalView`, `SessionView`, `TaskView`, `ChatView`, `MicButton` (dictation into your own text box, below; optional), and `PluginSettingsView` (your plugin's generated settings form, for `settingsIn: 'app'`; optional, since an older host does not have it). These are stable contracts, unlike private component imports.
+`walnut.ui.views` hands you host-owned React facades: `CalendarView`, `FileView`, `NoteView`, `TerminalView`, `SessionView`, `TaskView`, `ChatView`, `MicButton` (dictation into your own text box, below; optional), `PluginSettingsView` (your plugin's generated settings form, for `settingsIn: 'app'`; optional, since an older host does not have it), and the console's own choice controls `Segmented`, `Tabs` and `Checkbox` (optional). These are stable contracts, unlike private component imports.
+
+Draw every pick on your page with those three, never a tab bar, segmented track or checkbox of your own: a round track with a sliding thumb for one of a few values (`Segmented`), round tabs for the pages of your App (`Tabs`), the one checkbox (`Checkbox`), each with the console's keys and ARIA. A class you pass as `className` only places them (margin, flex). A plain action is the console's key, `<button className="btn">` (`btn-sm`, `btn-primary`, `btn-ghost btn-icon`, `btn-link`), never a button style of your own. Time (`examples/plugins/walnut-time/src/web/controls.tsx`) shows the pattern, with a fallback to plain keys for a host older than the views. The repo's UI ratchets (`tests/web/choice-controls-ratchet.test.ts`, `tests/web/ui-standard-ratchet.test.ts`) read the plugins in `plugin-store/` and `examples/plugins/` too.
 
 ```tsx compile=web-views
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'

@@ -417,7 +417,7 @@ test('the Overview answers both clocks at once and switches days like the timeli
   await seededBar.click()
   await expect(label).toContainText(navLabel(scopedDay))
   await expect(seededBar).toHaveClass(/is-selected/)
-  await expect(page.getByTestId('time-app-scope-day')).toHaveClass(/is-active/)
+  await expect(page.getByTestId('time-app-scope-day')).toHaveAttribute('aria-checked', 'true')
   // Two bars per day, one per lane, so the day the fixture seeded has both drawn.
   await expect(seededBar.locator('.wt-trend-bar-human')).toHaveCount(1)
   await expect(seededBar.locator('.wt-trend-bar-agent')).toHaveCount(1)

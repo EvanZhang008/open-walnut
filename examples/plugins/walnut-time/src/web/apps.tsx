@@ -5,6 +5,7 @@ import { DayNav, type DayNavTestIds } from './day-nav'
 import { Stat } from './reports'
 import { ScreenTimeSection, useScreenTime } from './screentime'
 import { dayLabel, formatDuration } from './time-timeline'
+import { Segmented } from './controls'
 
 /**
  * Apps — where the REST of the screen time went: which Mac app, and for a browser,
@@ -141,18 +142,14 @@ export function TimeApps({ api, log, dates, today }: {
       {/* Only shown once there IS another device: a lone "This Mac" chip is a
           control with nothing to choose. */}
       {screenDevices.length > 0 && (
-        <div className="wt-ap-devices" role="tablist" data-testid="time-app-apps-devices">
-          <DeviceChip id="mac" label="This Mac" active={device === 'mac'} onPick={setDevice} />
-          {screenDevices.map((d) => (
-            <DeviceChip
-              key={d.deviceId}
-              id={d.deviceId}
-              label={d.deviceName}
-              active={device === d.deviceId}
-              onPick={setDevice}
-            />
-          ))}
-        </div>
+        <Segmented
+          aria-label="Device"
+          data-testid="time-app-apps-devices"
+          value={device}
+          options={[{ value: 'mac', label: 'This Mac' }, ...screenDevices.map((d) => ({ value: d.deviceId, label: d.deviceName }))]
+            .map((o) => ({ ...o, testId: 'time-app-apps-device' }))}
+          onChange={setDevice}
+        />
       )}
 
       {device === 'mac' ? (
@@ -196,27 +193,6 @@ export function TimeApps({ api, log, dates, today }: {
   )
 }
 
-function DeviceChip({ id, label, active, onPick }: {
-  id: string
-  label: string
-  active: boolean
-  onPick: (id: string) => void
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      className={`wt-ap-device${active ? ' is-active' : ''}`}
-      data-testid="time-app-apps-device"
-      data-device={id}
-      onClick={() => onPick(id)}
-    >
-      {label}
-    </button>
-  )
-}
-
 /** Narrow the day to ONE device, keeping every other field (access state, the
  *  snapshot receipt) so the section can still explain itself. */
 function onlyDevice(day: ReturnType<typeof useScreenTime>['day'], deviceId: string) {
@@ -244,7 +220,7 @@ function AppsInvite({ busy, onEnable }: { busy: boolean; onEnable: () => void })
       </ul>
       <button
         type="button"
-        className="wt-ap-enable"
+        className="btn btn-primary"
         data-testid="time-app-apps-enable"
         disabled={busy}
         onClick={onEnable}
@@ -313,7 +289,7 @@ function AppsDay({ day, date, busy, onPause }: {
 
       <button
         type="button"
-        className="wt-ap-pause"
+        className="btn btn-sm wt-ap-pause"
         data-testid="time-app-apps-pause"
         disabled={busy}
         onClick={onPause}
@@ -343,7 +319,7 @@ function AppRow({ app, totalMs }: { app: OutsideApp; totalMs: number }) {
       <div className="wt-bar-row">
         <div className="wt-bar-label" title={app.app}>
           <span className="wt-bar-title">{app.app}</span>
-          {app.walnut && <em className="wt-ap-chip" data-testid="time-app-apps-chip">Walnut</em>}
+          {app.walnut && <span className="badge badge-accent wt-ap-chip" data-testid="time-app-apps-chip">Walnut</span>}
         </div>
         <div className="wt-bar-track">
           <div className="wt-bar-fill wt-ap-fill" style={{ width: share(app.ms, totalMs) }} />
@@ -357,7 +333,7 @@ function AppRow({ app, totalMs }: { app: OutsideApp; totalMs: number }) {
           {(hidden > 0 || expanded) && (
             <button
               type="button"
-              className="wt-ap-more"
+              className="btn btn-sm wt-ap-more"
               data-testid="time-app-apps-more"
               onClick={() => setExpanded((prev) => !prev)}
             >

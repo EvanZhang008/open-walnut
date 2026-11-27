@@ -66,6 +66,19 @@ describe('choice controls: one component per kind', () => {
     expect(k('Checkbox', ' checked={on}')).toEqual([]);
     expect(k('div', ' role="radio" data-choice-exempt="a menu row that runs a command"')).toEqual([]);
     expect(k('div', ' role="radio" data-choice-exempt="x"')).toEqual(['segment']);
+    // A pick drawn only by an on-class of its own, with nothing a screen reader hears (the Time
+    // page's Day / 7 days, 2026-11-27); with an ARIA state it is one of the kinds above.
+    expect(k('button', ' className={`wt-pill${on ? \' is-active\' : \'\'}`} onClick={pick}')).toEqual(['pick']);
+    expect(k('button', ' aria-current={on} className={`nav${on ? " is-current" : ""}`}')).toEqual([]);
+  });
+
+  it('reads the shipped plugins too (their pages take the components through walnut.ui.views)', () => {
+    const files = new Set(members().map((m) => m.file));
+    expect([...files].some((f) => f.startsWith('../../plugin-store/'))).toBe(true);
+    // The Time page draws no tab bar, segmented track, checkbox or pick of its own on its main page:
+    // the task page's session picker (task-page.tsx) is the one left, in the baseline.
+    const time = members().filter((m) => m.file.startsWith('../../examples/plugins/walnut-time/') && !m.file.endsWith('task-page.tsx'));
+    expect(time.map((m) => `${m.file}:${m.line} ${m.what}`)).toEqual([]);
   });
 
   it('the standard names the components and this test', () => {

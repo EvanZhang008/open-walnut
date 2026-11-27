@@ -18,7 +18,7 @@ export const APPS_CSS = `
    independent questions. */
 .wt-ap-strip { margin-bottom: 0; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .wt-ap-strip .wt-stat { padding: 12px 14px; }
-.wt-ap-strip .wt-stat-value { font-size: 21px; }
+.wt-ap-strip .wt-stat-value { font-size: 21px; } /* size: a stat number of the Apps strip, above the type scale on purpose */
 
 /* ── Disabled: the invitation ── */
 
@@ -30,7 +30,7 @@ export const APPS_CSS = `
   max-width: 74ch;
 }
 
-.wt-ap-invite h2 { font-size: 17px; margin-bottom: 12px; }
+.wt-ap-invite h2 { font-size: var(--font-size-xl, 17px); margin-bottom: 12px; }
 
 .wt-ap-invite ul {
   margin: 0 0 18px;
@@ -39,24 +39,9 @@ export const APPS_CSS = `
   flex-direction: column;
   gap: 6px;
   color: var(--fg-secondary);
-  font-size: 13px;
+  font-size: var(--font-size-md, 13px);
   line-height: 1.5;
 }
-
-.wt-ap-enable {
-  padding: 8px 18px;
-  border: 0;
-  border-radius: var(--radius-sm, 8px);
-  background: var(--accent);
-  color: #fff;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.wt-ap-enable:hover:not(:disabled) { background: var(--accent-hover); }
-.wt-ap-enable:disabled { opacity: 0.5; cursor: default; }
 
 /* ── The Automation grant hint ── */
 
@@ -66,7 +51,7 @@ export const APPS_CSS = `
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-sm, 8px);
   color: var(--fg-secondary);
-  font-size: 12.5px;
+  font-size: var(--font-size-sm, 12px);
   line-height: 1.5;
   max-width: 82ch;
 }
@@ -79,18 +64,8 @@ export const APPS_CSS = `
    the Overview's own lane would say it was. */
 .wt-ap-fill { background: color-mix(in srgb, var(--fg-secondary) 62%, transparent); }
 
-.wt-ap-chip {
-  flex: none;
-  font-style: normal;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 1px 6px;
-  border-radius: 999px;
-  color: var(--wt-human);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
+/* The "Walnut" mark on an app row is the console's label (badge badge-accent); this only keeps it whole. */
+.wt-ap-chip { flex: none; }
 
 /* Indented, quieter, and scaled inside its app: a breakdown of the row above it. */
 .wt-ap-sites {
@@ -102,39 +77,16 @@ export const APPS_CSS = `
   border-left: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.wt-ap-site .wt-bar-title { font-size: 12px; color: var(--fg-secondary); }
+.wt-ap-site .wt-bar-title { font-size: var(--font-size-sm, 12px); color: var(--fg-secondary); }
 .wt-ap-site .wt-bar-track { height: 8px; }
-.wt-ap-site .wt-bar-value { font-size: 12px; font-weight: 500; color: var(--fg-secondary); }
+.wt-ap-site .wt-bar-value { font-size: var(--font-size-sm, 12px); font-weight: 500; color: var(--fg-secondary); }
 .wt-ap-fill-site { background: color-mix(in srgb, var(--fg-muted) 55%, transparent); }
 
-.wt-ap-more {
-  align-self: flex-start;
-  border: 0;
-  background: transparent;
-  padding: 2px 0;
-  font: inherit;
-  font-size: 12px;
-  color: var(--accent);
-  cursor: pointer;
-}
+/* Show all and Fewer are the console's small keys (btn btn-sm); this only places them. */
+.wt-ap-more { align-self: flex-start; }
 
-.wt-ap-more:hover { text-decoration: underline; }
-
-/* Quiet on purpose: turning this off should be easy to find and impossible to hit by
-   accident, so it is a text button at the end rather than a button beside the data. */
-.wt-ap-pause {
-  align-self: flex-start;
-  border: 0;
-  background: transparent;
-  padding: 4px 0;
-  font: inherit;
-  font-size: 12px;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-
-.wt-ap-pause:hover:not(:disabled) { color: var(--fg); text-decoration: underline; }
-.wt-ap-pause:disabled { opacity: 0.5; cursor: default; }
+/* Turning tracking off is the last thing in the day, a small key of the console's own (btn btn-sm). */
+.wt-ap-pause { align-self: flex-start; }
 `
 
 /**
@@ -143,37 +95,11 @@ export const APPS_CSS = `
  * Appended here rather than given its own file because it shares the Apps tab's whole
  * vocabulary: the same `wt-bar-*` row geometry, the same invite shell, the same stat
  * strip. Only two things are genuinely new, and both encode a rule from the component:
- * the device chips (a switch, never a merge), and a distinct fill hue for Apple's rows
+ * the device switch (one device at a time, never a merge), and a distinct fill hue for Apple's rows
  * so an hour-resolution bar is never mistaken for a five-second one at a glance.
  */
 export const SCREENTIME_CSS = `
-/* ── The device switch ── */
-
-.wt-ap-devices {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.wt-ap-device {
-  padding: 4px 12px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-
-.wt-ap-device:hover:not(.is-active) { color: var(--fg); border-color: var(--fg-muted); }
-
-.wt-ap-device.is-active {
-  color: var(--fg);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
+/* The device switch is the console's Segmented (controls.tsx): one device at a time, never a merge. */
 
 /* ── Apple Screen Time ── */
 
@@ -187,7 +113,7 @@ export const SCREENTIME_CSS = `
   max-width: 74ch;
 }
 
-.wt-st-invite h2 { font-size: 17px; margin-bottom: 12px; }
+.wt-st-invite h2 { font-size: var(--font-size-xl, 17px); margin-bottom: 12px; }
 
 .wt-st-invite ul {
   margin: 0 0 18px;
@@ -196,24 +122,9 @@ export const SCREENTIME_CSS = `
   flex-direction: column;
   gap: 6px;
   color: var(--fg-secondary);
-  font-size: 13px;
+  font-size: var(--font-size-md, 13px);
   line-height: 1.5;
 }
-
-.wt-st-enable {
-  padding: 8px 18px;
-  border: 0;
-  border-radius: var(--radius-sm, 8px);
-  background: var(--accent);
-  color: #fff;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.wt-st-enable:hover:not(:disabled) { background: var(--accent-hover); }
-.wt-st-enable:disabled { opacity: 0.5; cursor: default; }
 
 /* The guided permission card. Warm-bordered rather than red: nothing is broken, there
    is one manual step left, and an alarm colour would suggest a fault the user caused. */
@@ -224,12 +135,12 @@ export const SCREENTIME_CSS = `
   border-radius: var(--radius-md, 12px);
   background: color-mix(in srgb, var(--warning, #d08770) 6%, var(--bg-elevated));
   max-width: 74ch;
-  font-size: 13px;
+  font-size: var(--font-size-md, 13px);
   line-height: 1.55;
   color: var(--fg-secondary);
 }
 
-.wt-st-grant h3 { font-size: 14px; color: var(--fg); margin-bottom: 8px; }
+.wt-st-grant h3 { font-size: var(--font-size-lg, 15px); color: var(--fg); margin-bottom: 8px; }
 .wt-st-grant p { margin: 0 0 10px; }
 .wt-st-grant strong { color: var(--fg); }
 
@@ -252,35 +163,20 @@ export const SCREENTIME_CSS = `
   border-radius: var(--radius-sm, 8px);
   background: var(--bg-base);
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-size: var(--font-size-sm, 12px);
   color: var(--fg);
   overflow-x: auto;
   white-space: pre;
   user-select: all;
 }
 
-.wt-st-retry {
-  border: 0;
-  background: transparent;
-  padding: 2px 0;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--accent);
-  cursor: pointer;
-}
-
-.wt-st-retry:hover:not(:disabled) { text-decoration: underline; }
-.wt-st-retry:disabled { opacity: 0.5; cursor: default; }
-
 /* The real action first, the re-check second and quieter: one of them does the work
    and the other only confirms it. */
 .wt-st-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.wt-st-actions .wt-st-enable { padding: 7px 14px; }
 
 .wt-st-device { display: flex; flex-direction: column; gap: 12px; }
 .wt-st-list { display: flex; flex-direction: column; gap: 6px; }
-.wt-st-list h3 { font-size: 13px; font-weight: 600; color: var(--fg); }
+.wt-st-list h3 { font-size: var(--font-size-md, 13px); font-weight: 600; color: var(--fg); }
 
 /* Apple's rows get their own hue: the same shape as a Walnut-sampled bar would imply
    the same precision, and these are hour-resolution. */
@@ -288,7 +184,7 @@ export const SCREENTIME_CSS = `
 
 .wt-st-meta {
   font-style: normal;
-  font-size: 11px;
+  font-size: var(--font-size-xs, 11px);
   color: var(--fg-muted);
   white-space: nowrap;
 }

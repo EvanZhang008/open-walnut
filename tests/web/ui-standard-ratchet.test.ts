@@ -154,6 +154,7 @@ describe('UI standard: one look per kind of control', () => {
     expect(isSquareKey('.my-chip', 'var(--label-radius)', new Set())).toBe(false);
     const keys = new Set(['org-ask-tool']);
     expect(isSquareKey('.my-thing-btn', '6px', keys)).toBe(true);
+    expect(isSquareKey('.my-thing-btn', 'var(--radius-full, 999px)', keys)).toBe(false);
     expect(isSquareKey('.org-ask-tool:hover', 'var(--radius-sm)', keys)).toBe(true);
     expect(isSquareKey('.scope .btn', '8px', keys)).toBe(true);
     // A pressable named like a menu is the key that opens it; a menu that is no key keeps its corner.

@@ -13,6 +13,7 @@ import { TimeTape } from './tape'
 import { TimeChapters } from './chapters'
 import { TimeLanes } from './lanes'
 import { useScreenTime } from './screentime'
+import { Checkbox, Segmented } from './controls'
 
 /**
  * Timeline — "how did my day actually go?", in three switchable readings of the
@@ -341,45 +342,33 @@ export function TimeTimeline({ api, log, dates, today, titleFor }: {
         testIds={TIMELINE_NAV_IDS}
         onDate={setDate}
       >
-        <div className="wt-tt-switch" role="tablist" aria-label="Timeline view">
-          {VIEWS.map((v) => (
-            <button
-              key={v.key}
-              role="tab"
-              aria-selected={view === v.key}
-              className={`wt-tt-switch-btn${view === v.key ? ' is-active' : ''}`}
-              data-testid={`time-app-view-${v.key}`}
-              title={v.hint}
-              onClick={() => pickView(v.key)}
-            >
-              {v.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Shown only where they do something: both exist in the swimlanes only. */}
-        {view === 'lanes' && (
-          <>
-            <label className="wt-tt-agents-toggle">
-              <input
-                type="checkbox"
+        <div className="wt-tt-tools">
+          {/* Shown only where they do something: both exist in the swimlanes only. Before the
+              picker, so the picker keeps its place at the end of the line when they appear. */}
+          {view === 'lanes' && (
+            <>
+              <Checkbox
                 data-testid="time-app-agents-toggle"
                 checked={showAgents}
                 onChange={toggleAgents}
+                label="Include agents"
               />
-              <span>Include agents</span>
-            </label>
-            <label className="wt-tt-agents-toggle" title="Rows for the Mac apps you used outside Walnut, plus a row per device Apple Screen Time syncs here (both are enabled on the Apps tab)">
-              <input
-                type="checkbox"
+              <Checkbox
                 data-testid="time-app-screen-toggle"
+                title="Rows for the Mac apps you used outside Walnut, plus a row per device Apple Screen Time syncs here (both are enabled on the Apps tab)"
                 checked={showScreen}
                 onChange={toggleScreen}
+                label="Screen time"
               />
-              <span>Screen time</span>
-            </label>
-          </>
-        )}
+            </>
+          )}
+          <Segmented
+            aria-label="Timeline view"
+            value={view}
+            options={VIEWS.map((v) => ({ value: v.key, label: v.label, title: v.hint, testId: `time-app-view-${v.key}` }))}
+            onChange={pickView}
+          />
+        </div>
       </DayNav>
 
       {drawn && day && (
