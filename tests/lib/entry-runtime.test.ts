@@ -25,12 +25,14 @@ function firstImport(file: string): string | undefined {
   return fs.readFileSync(path.join(ROOT, file), 'utf8').split('\n').find((line) => /^import\s/.test(line))
 }
 
-/** entry-runtime.ts as plain JS, the way a bundle carries it. */
+/** entry-runtime.ts as plain JS, the way a bundle carries it, beside the one module it imports. */
 function builtModule(): string {
   const Transpiler = (globalThis as unknown as { Bun: { Transpiler: new (o: { loader: string }) => { transformSync(code: string): string } } }).Bun.Transpiler
-  const js = new Transpiler({ loader: 'ts' }).transformSync(fs.readFileSync(path.join(ROOT, 'src/lib/entry-runtime.ts'), 'utf8'))
-  const file = path.join(tmp, 'entry-runtime.mjs')
-  fs.writeFileSync(file, js)
+  const transpile = (name: string) => new Transpiler({ loader: 'ts' }).transformSync(fs.readFileSync(path.join(ROOT, `src/lib/${name}.ts`), 'utf8'))
+  fs.writeFileSync(path.join(tmp, 'package.json'), '{"type":"module"}\n')
+  fs.writeFileSync(path.join(tmp, 'jsc-ram-hint.js'), transpile('jsc-ram-hint'))
+  const file = path.join(tmp, 'entry-runtime.js')
+  fs.writeFileSync(file, transpile('entry-runtime'))
   return file
 }
 
@@ -46,9 +48,10 @@ describe('the CLI entries run only on bun', () => {
   it('is the first import of src/cli.ts and src/cli-fast.ts, so it runs before any other module', () => {
     expect(firstImport('src/cli.ts')).toBe("import './lib/entry-runtime.js';")
     expect(firstImport('src/cli-fast.ts')).toBe("import './lib/entry-runtime.js';")
-    // It must not depend on a Walnut module, which would load first.
+    // It must not depend on a Walnut module, which would load first: only the RAM hint,
+    // which imports nothing of Walnut itself (tests/lib/jsc-ram-hint.test.ts).
     const imports = fs.readFileSync(path.join(ROOT, 'src/lib/entry-runtime.ts'), 'utf8').match(/^import .*$/gm) ?? []
-    expect(imports).toEqual(["import fs from 'node:fs'"])
+    expect(imports).toEqual(["import fs from 'node:fs'", "import { startWithRamHint } from './jsc-ram-hint.js'"])
   })
 
   it('has a real Node to run on where one is required', () => {
@@ -84,5 +87,23 @@ describe('the CLI entries run only on bun', () => {
     const r = spawnSync(process.execPath, ['-e', probe], { encoding: 'utf8', env: { ...process.env, BUN_BE_BUN: '1' } })
     expect(r.status, r.stderr).toBe(0)
     expect(JSON.parse(r.stdout.trim())).toEqual({ own: null, child: false })
+  })
+
+  it("takes the RAM hint a re-run set out of the env, so a child it starts has none; the person's own stays", () => {
+    // A real process started as the re-run starts the server (the variable and its marker);
+    // children through child_process and Bun.$ read process.env, which no longer has them.
+    const probe = `await import(${JSON.stringify(builtModule())});` +
+      "const { spawnSync } = await import('node:child_process');" +
+      "const child = spawnSync('/usr/bin/env', [], { encoding: 'utf8' }).stdout;" +
+      "const shell = await Bun.$`/usr/bin/env`.text();" +
+      "const has = (t) => /^(BUN_JSC_forceRAMSize|WALNUT_JSC_RAM_HINT_APPLIED)=/m.test(t);" +
+      "console.log(JSON.stringify({ own: process.env.BUN_JSC_forceRAMSize ?? null, child: has(child), shell: has(shell) }))"
+    const run = (extra: NodeJS.ProcessEnv) => {
+      const r = spawnSync(process.execPath, ['-e', probe], { encoding: 'utf8', env: { ...process.env, ...extra } })
+      expect(r.status, r.stderr).toBe(0)
+      return JSON.parse(r.stdout.trim())
+    }
+    expect(run({ BUN_JSC_forceRAMSize: '4294967296', WALNUT_JSC_RAM_HINT_APPLIED: '4294967296' })).toEqual({ own: null, child: false, shell: false })
+    expect(run({ BUN_JSC_forceRAMSize: '1073741824' })).toEqual({ own: '1073741824', child: true, shell: true })
   })
 })

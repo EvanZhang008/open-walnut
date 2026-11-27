@@ -13,11 +13,17 @@
  * bun calls, so `node dist/cli-fast.js` does nothing; the bin entry refuses
  * Node before it loads it.
  *
- * It also drops BUN_BE_BUN from this process's env (dropBunBeBun below).
+ * It then settles the JS engine's RAM hint (src/lib/jsc-ram-hint.ts): the compiled
+ * file's server start re-runs itself with it, which its main.ts already did before
+ * loading this CLI (here it only reads what that found); a start from a script never
+ * re-runs, and this records why for the server's start line. It also drops
+ * BUN_BE_BUN from this process's env (dropBunBeBun below).
  *
- * Keep this file free of Walnut imports: it must run before them.
+ * Keep this file free of Walnut imports: it must run before them (jsc-ram-hint.ts
+ * imports nothing of Walnut either).
  */
 import fs from 'node:fs'
+import { startWithRamHint } from './jsc-ram-hint.js'
 
 /** Why this process cannot run Walnut, in one line, or null when it can. */
 export function runtimeRefusal(versions: NodeJS.ProcessVersions = process.versions): string | null {
@@ -45,4 +51,6 @@ if (refusal) {
   fs.writeSync(2, `${refusal}\n`)
   process.exit(1)
 }
+// Before dropBunBeBun: a re-run gets the env exactly as this process started.
+startWithRamHint()
 dropBunBeBun()

@@ -101,6 +101,9 @@ if (first === '__selftest') {
     && ((sub !== undefined && LITE.has(sub)) || (!sub && (userArgs.includes('--version') || userArgs.includes('-V'))))
   if (fast) await import('../cli-fast.js')
   else {
+    // A server start re-runs itself with the engine's RAM hint (src/lib/jsc-ram-hint.ts)
+    // here, before the CLI and the daemon runtime load; entry-runtime.ts then reads the result.
+    ;(await import('../lib/jsc-ram-hint.js')).startWithRamHint()
     // A server this file runs can run its daemon in its own process (in-process-daemon.ts): it
     // takes the daemon this file carries, the build `walnut __daemon` runs.
     ;(await import('../providers/in-process-daemon.js')).provideDaemonRuntime(() => import('../providers/daemon-standalone.js'))

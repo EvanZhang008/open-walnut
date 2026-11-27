@@ -5151,6 +5151,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // -- Catch a memory jump while it happens (memory-ledger.ts, startMemoryBurstProbe) --
     const { startMemoryBurstProbe } = await import('../core/observability/memory-ledger.js')
     stopMemoryBurstProbe = startMemoryBurstProbe()
+    // Whether the engine plans its collections for a small machine (src/lib/jsc-ram-hint.ts).
+    const { ramHintSummary } = await import('../lib/jsc-ram-hint.js')
+    log.obs.info('memory engine ram hint', ramHintSummary())
 
     // -- Keep each session's first-paint view current (history-ready-refresh.ts) --
     // After every turn and when a host comes back, the session's daemon is asked for its ready
