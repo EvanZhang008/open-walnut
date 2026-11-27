@@ -127,11 +127,19 @@ describe('standby runner', () => {
     const carry = async () => { if (fail) throw new Error('no records now'); return { root: eng, place, stagingDir: path.join(sb.root, 'carry-staging') } }
     runner = startStandbyRunner({ settings: async () => ({ on: true, home: sb.home, dir: sb.target, intervalSeconds: 3600 }), notify: async () => true, carry })
     await runner.reconcile()
-    expect((await runner.runOnce())?.ok).toBe(true)
+    const first = await runner.runOnce()
+    expect(first?.ok).toBe(true)
+    // The carry that rode the batch comes with its outcome, and its state is there for the switch's preflight.
+    expect(first?.carry?.ok).toBe(true)
+    expect(runner.carryState().last).toMatchObject({ ok: true })
+    expect(runner.carryState().underWaySince).toBeUndefined()
     expect((await standbyStatus(path.join(sb.target, 'carry'))).batch).toBeGreaterThanOrEqual(1)
     expect(fs.readFileSync(path.join(sb.target, 'carry', 'copy', 'projects', '-f', '00000000-0000-4000-8000-000000000001.jsonl'), 'utf8')).toBe('{"t":1}\n')
     fail = true
-    expect((await runner.runOnce())?.ok).toBe(true)
+    const second = await runner.runOnce()
+    expect(second?.ok).toBe(true)
+    expect(second?.carry).toMatchObject({ ok: false, reason: 'no records now' })
+    expect(runner.carryState().last).toMatchObject({ ok: false, reason: 'no records now' })
     runner.stop()
 
     const host = fakeStandbyHost(sb.root)

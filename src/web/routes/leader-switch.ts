@@ -210,6 +210,13 @@ async function stopSessionsInHome(home: string, sw: import('../../core/leader/sw
   }
 }
 
+/** Whether the sessions' records are behind on the standby, said with a catch-up's refusal (session-carry.ts carryBehind). */
+async function carryBehindNow(runner: import('../../core/standby/runner.js').StandbyRunner | null, batches: ReadonlyArray<{ ms: number; sentBytes: number }>): Promise<string | null> {
+  if (!runner) return null
+  const [{ carryBehind }, { WALNUT_HOME }] = await Promise.all([import('../../core/leader/switch/session-carry.js'), import('../../constants.js')])
+  return carryBehind(WALNUT_HOME, runner.carryState(), batches)
+}
+
 /**
  * Once this home carries no marker of `switchId` any more (its source job removed it after a take-back), the
  * sessions its stop ended go on here (home-session-runtime.ts settleAfterRollback, tried until done). Waits as long
@@ -363,7 +370,7 @@ leaderSwitchRouter.post('/switch/final-stop', thisMachineOnly, async (req, res) 
   ])
   const window = readHomeSwitchConfig(WALNUT_HOME).settings?.commitWindowMs ?? Math.max(0, begun.sw.commitDeadline - Date.now())
   const runner = standbyRunner()
-  const look = await lastLook({ runOnce: () => (runner ? runner.runOnce() : Promise.resolve(null)), commitWindowMs: window })
+  const look = await lastLook({ runOnce: () => (runner ? runner.runOnce() : Promise.resolve(null)), commitWindowMs: window, behind: (b) => carryBehindNow(runner, b) })
   log.web[look.ok ? 'info' : 'warn'](`leader switch: the last look before the stop ${look.ok ? 'found the standby caught up' : 'found the standby behind; the stop is refused'}`, { switchId, ms: look.ms, budgetMs: look.budgetMs, batches: look.batches, ...(look.ok ? {} : { why: look.why }) })
   if (!look.ok) {
     abandonSwitchStop(begun.sw)
@@ -511,7 +518,7 @@ leaderSwitchRouter.post('/switch/catch-up', thisMachineOnly, async (req, res) =>
   const gitSync = await import('../../integrations/git-sync.js')
   if (gitSync.compactionInProgress) { res.status(409).json({ ok: false, why: 'a history rewrite or gc of the data repo runs now (minutes): switch once it ended' }); return }
   const runner = standbyRunner()
-  const r = await catchUpStandby({ runOnce: () => (runner ? runner.runOnce() : Promise.resolve(null)), commitWindowMs: cfg.settings.commitWindowMs })
+  const r = await catchUpStandby({ runOnce: () => (runner ? runner.runOnce() : Promise.resolve(null)), commitWindowMs: cfg.settings.commitWindowMs, behind: (b) => carryBehindNow(runner, b) })
   log.web.info(`leader switch: the standby ${r.ok ? 'caught up' : 'did not catch up'}`, { switchId, ms: r.ms, budgetMs: r.budgetMs, batches: r.batches, ...(r.ok ? {} : { why: r.why }) })
   res.status(r.ok ? 200 : 409).json(r)
 })

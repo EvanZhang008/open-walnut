@@ -167,6 +167,8 @@ export function planLine(p: HomeSessionsPlan): string {
 export interface HomeStopDeps {
   list(): Promise<SessionRecord[]>
   save(sid: string, patch: Partial<SessionRecord>): Promise<void>
+  /** Many rows' patches at once (one transaction), when the store has it. */
+  saveMany?(patches: ReadonlyArray<{ sid: string; patch: Partial<SessionRecord> }>): Promise<void>
   /** Whether this machine's runtime supervises a session cron of `sid` (false when it keeps none). */
   supervised(sid: string): Promise<boolean>
   /** Stop `sid` through this machine's own session runtime, reason leader_switch: resolves once its process is gone. */
@@ -188,8 +190,20 @@ export interface HomeStopResult {
   ends: Array<{ sid: string; why: string }>
   /** Processes still in the home after the stops that are no session of this server's (a person's shell): named. */
   others: Array<{ pid: number; name: string }>
+  /** Of `ms`: reading and writing the rows' marks, before the stops. */
+  stampMs?: number
   ms: number
   why?: string
+}
+
+/** How many runtime calls (supervision reads, stops) the switch stop has in flight at once. */
+export const STOP_PARALLEL = 16
+
+/** `fn` over `items`, at most `limit` at a time. */
+export async function eachBounded<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0
+  const lane = async () => { while (next < items.length) { const i = next++; await fn(items[i]!) } }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane))
 }
 
 /**
@@ -229,31 +243,36 @@ export async function stopHomeSessions(o: { switchId: string; home: string; mach
   }
   // The rows first, then the stops: a stop's death edge finds the plan, and a turn that dies is a restart loss
   // (state pending: the next lead of the session, there or here, resumes it).
-  await Promise.all(targets.map(async ({ rec }) => {
+  // A home holds hundreds of rows (653 on the user's Mac, 2026-11-26): every runtime call is bounded in parallel.
+  await eachBounded(targets, STOP_PARALLEL, async ({ rec }) => {
     const stamp = stamps.get(rec.claudeSessionId)!
     if (stamp.supervised === undefined) stamp.supervised = await o.deps.supervised(rec.claudeSessionId).catch(() => false)
     // Whether the engine keeps its history here (the new leader then checks it found it): read before the stop.
     if (stamp.transcript === undefined && stamp.engineFolder && o.deps.transcriptExists) {
       stamp.transcript = await o.deps.transcriptExists(stamp.engineFolder, rec.claudeSessionId).catch(() => true)
     }
-  }))
-  for (const { rec } of targets) {
+  })
+  const patches = targets.map(({ rec }) => {
     const stamp = stamps.get(rec.claudeSessionId)!
     const patch: Partial<SessionRecord> = { leaderSwitch: stamp }
     if (stamp.stopped === 'turn' && !(rec.restartLoss?.cause === 'leader_switch' && rec.restartLoss.state === 'pending')) patch.restartLoss = turnLoss(rec, at)
-    await o.deps.save(rec.claudeSessionId, patch)
-  }
-  const deadline = t0 + o.budgetMs
+    return { sid: rec.claudeSessionId, patch }
+  })
+  if (o.deps.saveMany) await o.deps.saveMany(patches)
+  else for (const x of patches) await o.deps.save(x.sid, x.patch)
+  out.stampMs = o.deps.now() - t0
+  // The stops' budget starts once the rows are marked: the marks of many rows never eat the time a CLI has to end.
+  const deadline = o.deps.now() + o.budgetMs
   const failed: string[] = []
   const name = (rec: SessionRecord) => `${rec.title ?? rec.claudeSessionId} (${rec.claudeSessionId})`
-  await Promise.all(targets.map(async ({ rec }) => {
+  await eachBounded(targets, STOP_PARALLEL, async ({ rec }) => {
     const stamp = stamps.get(rec.claudeSessionId)!
     const left = Math.max(1, deadline - o.deps.now())
     const r = await withDeadline(o.deps.stop(rec, stamp.stopRequestId!), left, () => ({ ok: false as const, why: `it did not end within ${Math.round(o.budgetMs / 1000)} s` }))
       .catch((err: unknown) => ({ ok: false as const, why: err instanceof Error ? err.message : String(err) }))
     if (!r.ok) failed.push(`${name(rec)}: ${r.why}`)
     else if (stamp.stopped !== 'none') out.stopped[stamp.stopped]++
-  }))
+  })
   // What is still in the home. A process of the class fails the stop: its pid is a row's, or its command line names a
   // session of the class (a CLI whose row lost its pid, an ACP worker, which records none). Anything else is named.
   // A scan that could not read the processes fails it too: the stop must not pass on a list it never saw.
@@ -315,7 +334,7 @@ export interface RollbackDeps {
    * could not be asked (the runtime not connected: tried again); resolves with the runtime's refusal, which asking
    * again would not change, or nothing when it is on.
    */
-  reenable(sid: string): Promise<string | void>
+  reenable(sid: string, stopFence?: string): Promise<string | void>
   /** Restart recovery's pass over pending losses (session-auto-recover.ts resumeUnfinished). */
   resume(): Promise<void>
   /** Release the messages held for the move (engine-switch-io.ts releaseMoveHeldRows). */
@@ -344,9 +363,16 @@ export async function settleHomeSessionsAfterRollback(o: { home: string; isOpenS
   for (const { rec } of homeSessionRows(await o.deps.list(), o.home)) {
     const st = rec.leaderSwitch
     if (!st || st.rolledBack || st.moved || o.isOpenSwitch(st.switchId)) continue
-    if (st.supervised) {
+    // A stop the user asked for since the switch's stop is theirs: its supervision stays off (named).
+    const user = rec.stopRequest
+    const userSince = user && Date.parse(user.requestedAt) >= Date.parse(st.at)
+    if (st.supervised && userSince) {
+      out.unsupervised.push({ sid: rec.claudeSessionId, ...(rec.title ? { title: rec.title } : {}), why: 'the user stopped it while the switch ran, so its cron supervision stays off' })
+    } else if (st.supervised) {
       try {
-        const refused = await o.deps.reenable(rec.claudeSessionId)
+        // A user's stop confirmed before the switch fenced its supervision: turned on again under that fence (the
+        // runtime keeps it), as the user's own re-enable did.
+        const refused = await o.deps.reenable(rec.claudeSessionId, user?.state === 'confirmed' ? user.id : undefined)
         if (refused) out.unsupervised.push({ sid: rec.claudeSessionId, ...(rec.title ? { title: rec.title } : {}), why: refused })
       } catch (err) {
         out.failed.push({ sid: rec.claudeSessionId, ...(rec.title ? { title: rec.title } : {}), why: `its cron supervision could not be turned on again: ${err instanceof Error ? err.message : String(err)}` })

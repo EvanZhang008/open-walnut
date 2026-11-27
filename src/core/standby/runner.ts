@@ -183,12 +183,25 @@ export function afterSwitchCleanup(): AfterSwitchCleanup {
   return Object.assign(fn, { whenIdle: async () => { await inFlight } })
 }
 
+/** A runner's batch: the home's outcome, and the carry batch that rode it (when one did). */
+export type RunnerOutcome = BatchOutcome & { carry?: BatchOutcome }
+
+/** The carry's last batch and the one under way, for the switch's preflight (is the carry behind?). */
+export interface CarryState {
+  /** When the carry batch under way started (ms), if one runs. */
+  underWaySince?: number
+  /** The last carry batch that ended: when, and how. */
+  last?: { at: number; ok: boolean; unchanged?: boolean; sentBytes?: number; totalMs?: number; reason?: string }
+}
+
 export interface StandbyRunner {
   stop(): void
   reconcile(): Promise<void>
   running(): boolean
   /** Take one batch now (with its retries and verify pass); resolves with the last outcome. */
-  runOnce(): Promise<BatchOutcome | null>
+  runOnce(): Promise<RunnerOutcome | null>
+  /** The carry's state (none while no carry rides the batches). */
+  carryState(): CarryState
 }
 
 let running: StandbyRunner | null = null
@@ -204,7 +217,7 @@ export function standbyRunner(): StandbyRunner | null {
 
 export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
   let stopped = false
-  let live: { stop: () => void; runOnce: () => Promise<BatchOutcome | null> } | null = null
+  let live: { stop: () => void; runOnce: () => Promise<RunnerOutcome | null>; carryState: () => CarryState } | null = null
   let liveKey = ''
   let chain: Promise<void> = Promise.resolve()
   const depsReady = deps ? Promise.resolve(deps) : defaultStandbyDeps()
@@ -277,7 +290,10 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
         if (now !== undefined) known = now
       }
       if (out?.ok && !ended) await d.afterBatch?.(s.home, out.manifest.takenAt).catch((err) => log.session.warn('standby: after-batch cleanup failed', { error: String(err) }))
-      if (out?.ok && !ended && !away && d.carry) await carryOnce(d.carry)
+      if (out?.ok && !ended && !away && d.carry) {
+        const c = await carryOnce(d.carry)
+        if (c) (out as RunnerOutcome).carry = c
+      }
       const status = known
       const stale = old(status)
       // A batch that just landed is progress, even one that took long to send: never a new "behind".
@@ -298,19 +314,30 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
       }
       return out
     }
-    /** One batch of the carry source, if there is one now; its failure is only logged. */
-    const carryOnce = async (carry: NonNullable<StandbyRunnerDeps['carry']>): Promise<void> => {
+    const carry: CarryState = {}
+    /** One batch of the carry source, if there is one now; its failure is only logged (and kept in carryState). */
+    const carryOnce = async (src0: NonNullable<StandbyRunnerDeps['carry']>): Promise<BatchOutcome | null> => {
+      const t0 = Date.now()
       try {
-        const src = await carry(s.home)
-        if (!src || ended) return
+        const src = await src0(s.home)
+        if (!src || ended) return null
+        carry.underWaySince = t0
         const c = await site.carry(src)
-        if (c.ok) log.session.debug('standby: carry batch committed', { batch: c.manifest.batch, files: c.stats.files, unchanged: c.commit.unchanged })
+        const st = c.stats as Partial<BatchStats>
+        carry.last = { at: Date.now(), ok: c.ok, ...(c.ok ? { unchanged: c.commit.unchanged } : { reason: c.reason }), ...(st.sentBytes !== undefined ? { sentBytes: st.sentBytes } : {}), totalMs: st.totalMs ?? Date.now() - t0 }
+        if (c.ok) log.session.debug('standby: carry batch committed', { batch: c.manifest.batch, files: st.files, unchanged: c.commit.unchanged, totalMs: st.totalMs, sentBytes: st.sentBytes })
         else log.session.info('standby: carry batch void', { reason: c.reason })
+        return c
       } catch (err) {
-        log.session.warn('standby: carry batch failed', { error: err instanceof Error ? err.message : String(err) })
+        const why = err instanceof Error ? err.message : String(err)
+        carry.last = { at: Date.now(), ok: false, reason: why, totalMs: Date.now() - t0 }
+        log.session.warn('standby: carry batch failed', { error: why })
+        return { ok: false, reason: why, stats: {} as BatchStats }
+      } finally {
+        delete carry.underWaySince
       }
     }
-    const runOnce = (): Promise<BatchOutcome | null> => {
+    const runOnce = (): Promise<RunnerOutcome | null> => {
       running ??= once().finally(() => { running = null })
       return running
     }
@@ -321,6 +348,7 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
     void runOnce().finally(() => { if (!ended) loop() })
     return {
       runOnce,
+      carryState: () => ({ ...carry, ...(carry.last ? { last: { ...carry.last } } : {}) }),
       stop: () => {
         ended = true
         if (timer) clearTimeout(timer)
@@ -361,6 +389,7 @@ export function startStandbyRunner(deps?: StandbyRunnerDeps): StandbyRunner {
     reconcile,
     running: () => live !== null,
     runOnce: () => live ? live.runOnce() : Promise.resolve(null),
+    carryState: () => live ? live.carryState() : {},
     stop() {
       stopped = true
       live?.stop()

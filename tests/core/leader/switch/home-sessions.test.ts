@@ -169,6 +169,32 @@ describe('the old leader\'s stop', () => {
     expect(s.byId.get(sid(1))!.leaderSwitch!.engineFolder).toBeUndefined()
   })
 
+  it('hundreds of rows: the marks are written before the stops\' budget starts, and the runtime calls go at most 16 at a time', async () => {
+    const home = path.join(root, 'home')
+    const rows = Array.from({ length: 300 }, (_, i) => rec(i + 1, i % 2 ? home : path.join(home, `notes/f${i % 37}`)))
+    const s = fakeStore(rows)
+    let inFlight = 0
+    let most = 0
+    const call = async () => { inFlight++; most = Math.max(most, inFlight); await new Promise((r) => setTimeout(r, 2)); inFlight-- }
+    let batches = 0
+    const r = await stopHomeSessions({
+      switchId: 'S1', home, machine: 'machine-a', budgetMs: 2_000,
+      deps: {
+        ...s, now: Date.now, processesInHome: async () => [],
+        supervised: async () => { await call(); return false },
+        stop: async () => { await call(); return { ok: true } },
+        // Marks that take longer than the whole budget: the stops still get theirs.
+        saveMany: async (patches) => { batches++; await new Promise((res) => setTimeout(res, 2_500)); for (const x of patches) await s.save(x.sid, x.patch) },
+      },
+    })
+    expect(r.ok).toBe(true)
+    expect(batches).toBe(1)
+    expect(r.stampMs).toBeGreaterThanOrEqual(2_500)
+    expect(most).toBeLessThanOrEqual(16)
+    expect(most).toBeGreaterThan(1)
+    expect([...s.byId.values()].every((x) => x.leaderSwitch?.switchId === 'S1')).toBe(true)
+  })
+
   it('a stop that never answers fails within its budget', async () => {
     const home = path.join(root, 'home')
     const s = fakeStore([rec(1, home, { process_status: 'running' })])
@@ -220,6 +246,21 @@ describe('a rollback', () => {
     expect(released).toEqual([])
     expect(await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: deps(false) })).toEqual({ settled: 1, unsupervised: [], failed: [] })
     expect(released).toEqual([sid(1)])
+  })
+
+  it('a session the user stopped and then re-enabled gets its supervision back under the user\'s own fence; one the user stopped during the switch keeps it off, named', async () => {
+    const home = path.join(root, 'home')
+    const stamp = { switchId: 'S1', plan: 'move', from: { machine: 'a', home, cwd: home }, rel: '', stopped: 'idle', at: '2026-11-26T10:00:00.000Z', supervised: true } as never
+    const s = fakeStore([
+      rec(1, home, { leaderSwitch: stamp, stopRequest: { id: 'user-fence-1', requestedAt: '2026-11-20T10:00:00.000Z', state: 'confirmed' } }),
+      rec(2, home, { leaderSwitch: stamp, stopRequest: { id: 'user-fence-2', requestedAt: '2026-11-26T10:00:05.000Z', state: 'confirmed' } }),
+      rec(3, home, { leaderSwitch: stamp }),
+    ])
+    const calls: string[] = []
+    const r = await settleHomeSessionsAfterRollback({ home, isOpenSwitch: () => false, deps: { ...s, reenable: async (id, fence) => { calls.push(`${id} ${fence ?? 'none'}`) }, release: async () => {}, resume: async () => {} } })
+    expect(calls).toEqual([`${sid(1)} user-fence-1`, `${sid(3)} none`])
+    expect(r.settled).toBe(3)
+    expect(r.unsupervised).toEqual([{ sid: sid(2), title: 's2', why: expect.stringMatching(/the user stopped it while the switch ran/) }])
   })
 
   it('a re-enable the runtime refuses (asking again would not change it) settles the session, named, instead of holding it for good', async () => {

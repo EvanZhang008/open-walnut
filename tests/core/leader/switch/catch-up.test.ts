@@ -33,6 +33,45 @@ function runner(list: Array<BatchOutcome | null>) {
   }
 }
 
+describe('the sessions\' records carried beside the copy count in the catch-up', () => {
+  const withCarry = (home: BatchOutcome, carry: BatchOutcome) => Object.assign({}, home, { carry }) as BatchOutcome & { carry: BatchOutcome }
+
+  it('a pass is the home\'s batch and the carry that rode it: a carry not caught up keeps the switch from starting, said with its size', async () => {
+    // The first carry of 2 GB of records: 120 s with the home's batch at 2 s. Then both caught up.
+    const r = runner([withCarry(batch(2_000, 1 << 20), batch(120_000, 2 << 30)), withCarry(batch(1_500, 0, true), batch(4_000, 0, true))])
+    const ok = await catchUpStandby({ runOnce: r.runOnce, commitWindowMs: WINDOW, now: r.now })
+    expect(ok.ok).toBe(true)
+    expect(ok.batches[0]).toMatchObject({ ms: 122_000, carry: { ms: 120_000 } })
+    expect(ok.batches[1]).toMatchObject({ ms: 5_500, unchanged: true, carry: { unchanged: true } })
+    // A carry that stays over the budget and grows: refused, with what the preflight's hook says of the records.
+    const slow = runner([withCarry(batch(1_000, 0, true), batch(60_000, 300 << 20)), withCarry(batch(1_000, 0, true), batch(80_000, 400 << 20))])
+    const no = await catchUpStandby({ runOnce: slow.runOnce, commitWindowMs: WINDOW, now: slow.now, behind: async () => 'The sessions\' records in the data home (2.1 GB in 700 files) are not all on the standby yet' })
+    expect(no.ok).toBe(false)
+    expect(!no.ok && no.why).toMatch(/falls further behind.*\. The sessions' records in the data home \(2\.1 GB in 700 files\)/)
+  })
+
+  it('a void carry makes the pass void', async () => {
+    const r = runner([withCarry(batch(1_000, 0, true), { ok: false, reason: 'the engine dir could not be read', stats: { totalMs: 10 } as never }), withCarry(batch(1_000, 0, true), batch(1_000, 0, true))])
+    const out = await catchUpStandby({ runOnce: r.runOnce, commitWindowMs: WINDOW, now: r.now, voidPauseMs: 0 })
+    expect(out.batches[0]).toMatchObject({ ok: false, reason: 'the sessions\' records: the engine dir could not be read' })
+    expect(out.ok).toBe(true)
+  })
+})
+
+describe('what the preflight says when the records are behind (session-carry.ts carryBehindLine)', () => {
+  it('nothing when the last carry found nothing to send; else the size, how it stands, and the time at the link\'s rate', async () => {
+    const { carryBehindLine } = await import('../../../../src/core/leader/switch/session-carry.js')
+    const size = { bytes: 2.1 * (1 << 30), files: 700 }
+    expect(carryBehindLine({ size, state: { last: { at: 0, ok: true, unchanged: true } }, rate: 0 })).toBeNull()
+    const line = carryBehindLine({ size, state: { underWaySince: 0 }, rate: 40 * (1 << 20) / 1000, now: 300_000 })!
+    expect(line).toMatch(/2\.1 GB in 700 files/)
+    expect(line).toMatch(/a carry of them has run for 5 min and has not ended/)
+    expect(line).toMatch(/at the 40\.0 MB\/s the copy link carried, sending them all takes about 54 s/)
+    expect(carryBehindLine({ size, state: {}, rate: 0 })).toMatch(/none has been carried yet\. Run the switch again/)
+    expect(carryBehindLine({ size, state: { last: { at: 0, ok: false, reason: 'link lost' } }, rate: 0 })).toMatch(/did not finish \(link lost\)/)
+  })
+})
+
 describe('the standby caught up before the handover', () => {
   it('the budget is what the switch\'s timeline leaves a batch: 50 s of the default 300 s', () => {
     const b = catchUpBudgetMs(WINDOW)

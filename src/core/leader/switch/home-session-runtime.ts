@@ -98,12 +98,12 @@ export async function rollbackDeps(): Promise<RollbackDeps> {
   return {
     list: listSessions,
     save,
-    reenable: async (sid) => {
+    reenable: async (sid, stopFence) => {
       if (judgeOf(sid) === 'host') throw new Error('a host judges this session, so this machine\'s runtime does not supervise it')
       const conn = getConnectedDaemonConnection('__local__')
       if (!conn?.connected) throw new Error('this machine\'s session runtime is not connected')
-      // The switch's stop turned supervision off with no fence (the handed-over home refused starts): none to name.
-      const reply = await conn.send('cron.supervision', { sid, enabled: true }, 5_000)
+      // The switch's stop turned supervision off with no fence of its own; a user's earlier stop left its fence there.
+      const reply = await conn.send('cron.supervision', { sid, enabled: true, ...(stopFence ? { stopFence } : {}) }, 5_000)
       // The runtime's own refusal (no saved launch settings, say): asking again would not change it.
       if (reply.ok !== true) return `the runtime would not turn its cron supervision on again: ${String(reply.error ?? 'refused')}`
     },
@@ -147,14 +147,19 @@ async function sessionsNote(home: string, switchId: string, machine: string, ste
   } catch { /* a note is only what --status prints */ }
 }
 
-/** Runs `attempt` until it says done, waiting longer each time (at most RETRY_MAX_MS), never giving up. */
-export async function untilDone(attempt: () => Promise<{ done: true } | { done: false; why: string }>, o: { firstMs?: number; maxMs?: number; onWait?: (why: string, n: number) => Promise<void> | void; sleep?: (ms: number) => Promise<void> } = {}): Promise<void> {
+/**
+ * Runs `attempt` until it says done (true), waiting longer each time (at most RETRY_MAX_MS), or until it gives a final
+ * answer (false): a failure or a not-yet is tried again, never given up.
+ */
+export async function untilDone(attempt: () => Promise<{ done: true } | { done: false; why: string; final?: boolean }>, o: { firstMs?: number; maxMs?: number; onWait?: (why: string, n: number) => Promise<void> | void; onFinal?: (why: string) => Promise<void> | void; sleep?: (ms: number) => Promise<void> } = {}): Promise<boolean> {
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => { const t = setTimeout(r, ms); t.unref?.() }))
   let every = o.firstMs ?? 1_000
   for (let n = 1; ; n++) {
-    let r: { done: true } | { done: false; why: string }
+    let r: { done: true } | { done: false; why: string; final?: boolean }
     try { r = await attempt() } catch (err) { r = { done: false, why: err instanceof Error ? err.message : String(err) } }
-    if (r.done) return
+    if (r.done) return true
+    // A final answer (asking again would not change it): no more tries.
+    if (r.final) { await o.onFinal?.(r.why); return false }
     await o.onWait?.(r.why, n)
     await sleep(every)
     every = Math.min(o.maxMs ?? RETRY_MAX_MS, Math.round(every * 1.5))
@@ -261,13 +266,19 @@ export async function placeAfterCommit(home: string, switchId: string, c: { stan
   let noted = false
   await untilDone(async () => {
     const v = await (o.committed ?? committedHere)(home, switchId)
-    if (v !== true) return { done: false, why: v === false ? 'no permit leads in this process above the handover yet' : 'the commit is not known here yet' }
+    // No permit in this process, or one that stopped: it will not lead above the handover; the next lead places them.
+    if (v === false) return { done: false, final: true, why: 'no permit leads in this process above the handover' }
+    if (v !== true) return { done: false, why: 'the commit is not known here yet' }
     await place()
     if (noted) await sessionsNote(home, switchId, machine, 'sessions-settled')
     return { done: true }
   }, {
     firstMs: 250,
     ...(o.sleep ? { sleep: o.sleep } : {}),
+    onFinal: async (why) => {
+      log.session.warn('leader switch: this process will not place the moved sessions\' records; they stay held until a server here leads above the switch', { switchId, why })
+      await sessionsNote(home, switchId, machine, 'sessions-held', `the moved sessions stay held until a server here leads: ${why}`)
+    },
     onWait: async (why, n) => {
       // The first waits are the commit's own few seconds: said after a minute or so.
       if (n === 12 || (n > 12 && n % 10 === 0)) {

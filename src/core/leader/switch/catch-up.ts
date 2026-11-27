@@ -61,6 +61,8 @@ export interface CatchUpBatch {
   /** Nothing changed since the last batch (its time is still a whole walk of the home: the final batch ends on one). */
   unchanged?: boolean
   reason?: string
+  /** Of `ms` and `sentBytes`: the carry batch of the sessions' records that rode it (the final batch sends one too). */
+  carry?: { ms: number; sentBytes: number; unchanged?: boolean }
 }
 
 export type CatchUpOutcome =
@@ -76,8 +78,10 @@ const said = (b: CatchUpBatch) => b.ok ? `${s(b.ms)}, ${mb(b.sentBytes)} sent` :
  * caught up, within `maxMs` (default: one commit window). Never throws.
  */
 export async function catchUpStandby(o: {
-  runOnce: () => Promise<BatchOutcome | null>
+  runOnce: () => Promise<(BatchOutcome & { carry?: BatchOutcome }) | null>
   commitWindowMs: number
+  /** What is behind, in plain words with its size and an estimate (the sessions' records not carried yet), said with a refusal. */
+  behind?: (batches: readonly CatchUpBatch[]) => Promise<string | null>
   maxMs?: number
   now?: () => number
   /** Between a void round and the next (default VOID_PAUSE_MS; tests shorten it). */
@@ -88,12 +92,15 @@ export async function catchUpStandby(o: {
   const maxMs = o.maxMs ?? o.commitWindowMs
   const start = now()
   const batches: CatchUpBatch[] = []
-  const refuse = (why: string): CatchUpOutcome => ({ ok: false, why, batches, ms: now() - start, budgetMs })
+  const refuse = async (why: string): Promise<CatchUpOutcome> => {
+    const behind = await o.behind?.(batches).catch(() => null)
+    return { ok: false, why: behind ? `${why}. ${behind}` : why, batches, ms: now() - start, budgetMs }
+  }
   for (;;) {
     const left = start + maxMs - now()
     if (left <= 0) return refuse(`no standby batch took at most ${s(budgetMs)} (the budget the commit window leaves a batch) within ${s(maxMs)}; the last: ${batches.length ? said(batches.at(-1)!) : 'none'}`)
     const t0 = now()
-    const out = await withDeadline<BatchOutcome | null | 'late'>(
+    const out = await withDeadline<(BatchOutcome & { carry?: BatchOutcome }) | null | 'late'>(
       o.runOnce().catch((err: unknown) => ({ ok: false as const, reason: err instanceof Error ? err.message : String(err), stats: {} as never })),
       left, () => 'late',
     )
@@ -107,6 +114,17 @@ export async function catchUpStandby(o: {
       sentBytes: Number.isFinite(st.sentBytes) ? st.sentBytes! : 0,
       ...(out.ok && out.commit.unchanged ? { unchanged: true } : {}),
       ...(!out.ok ? { reason: out.reason } : {}),
+    }
+    // The carry that rode it counts too: the final batch sends the home's and then the records', within the same window.
+    const c = out.carry
+    if (c) {
+      const cs = (c.stats ?? {}) as Partial<{ totalMs: number; sentBytes: number }>
+      const carry = { ms: Number.isFinite(cs.totalMs) ? cs.totalMs! : 0, sentBytes: Number.isFinite(cs.sentBytes) ? cs.sentBytes! : 0, ...(c.ok && c.commit.unchanged ? { unchanged: true } : {}) }
+      b.carry = carry
+      b.ms += carry.ms
+      b.sentBytes += carry.sentBytes
+      if (!c.ok) { b.ok = false; b.reason = `the sessions' records: ${c.reason}` }
+      else if (!carry.unchanged) delete b.unchanged
     }
     batches.push(b)
     // The time counts even for a batch that found nothing: the final batch ends on such a pass, often after a changed one.
@@ -163,6 +181,6 @@ export async function whenStandbyIdle<T>(op: () => Promise<T>, o: { untilMs: num
  * handover back (the old leader leads again at once). Without it, a final batch past the window rolls back only
  * at the commit deadline: minutes with no leader (the 2026-11-24 rehearsal: 6 min 9 s).
  */
-export function lastLook(o: { runOnce: () => Promise<BatchOutcome | null>; commitWindowMs: number; now?: () => number; voidPauseMs?: number }): Promise<CatchUpOutcome> {
+export function lastLook(o: { runOnce: () => Promise<(BatchOutcome & { carry?: BatchOutcome }) | null>; commitWindowMs: number; now?: () => number; voidPauseMs?: number; behind?: (batches: readonly CatchUpBatch[]) => Promise<string | null> }): Promise<CatchUpOutcome> {
   return catchUpStandby({ ...o, maxMs: catchUpBudgetMs(o.commitWindowMs) })
 }

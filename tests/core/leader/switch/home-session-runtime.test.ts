@@ -69,7 +69,7 @@ describe('placeAfterCommit', () => {
   it('waits for the commit, places once it stands, and tries again after a failure, never giving up', async () => {
     const home = path.join(root, 'home')
     fs.mkdirSync(home, { recursive: true })
-    const answers: Array<boolean | 'wait'> = ['wait', false, 'wait', ...Array(20).fill(false), true]
+    const answers: Array<boolean | 'wait'> = [...Array(23).fill('wait'), true]
     const calls: string[] = []
     let places = 0
     const sleeps: number[] = []
@@ -85,6 +85,20 @@ describe('placeAfterCommit', () => {
     expect(sleeps[0]).toBe(250)
     expect(Math.max(...sleeps)).toBeLessThanOrEqual(5 * 60_000)
     expect(sleeps[sleeps.length - 1]).toBeGreaterThan(sleeps[0]!)
+  })
+
+  it('a final answer (no permit will lead above the handover in this process) ends the tries; the sessions stay held', async () => {
+    const home = path.join(root, 'home')
+    fs.mkdirSync(home, { recursive: true })
+    let asked = 0
+    let placed = false
+    await placeAfterCommit(home, 'S1', { standbyDir: '/sb', homeFolder: '-a' }, 'machine-b', {
+      committed: async () => { asked++; return asked < 3 ? 'wait' : false },
+      place: async () => { placed = true },
+      sleep: async () => {},
+    })
+    expect(asked).toBe(3)
+    expect(placed).toBe(false)
   })
 
   it('untilDone retries a throw like a not-done answer', async () => {
@@ -148,5 +162,9 @@ describe('a session whose home carries a switch\'s marker is held (switch-hold.t
     expect(heldByHomeMarker(r(`${home}-c`), home)).toBe(false)
     expect(heldByHomeMarker(r(home, { archived: true }), home)).toBe(false)
     expect(heldByHomeMarker(r(home), '')).toBe(false)
+    // A host's session whose folder has the same path on its own machine is not this home's.
+    expect(heldByHomeMarker(r(home, { host: 'machine-h' }), home)).toBe(false)
+    expect(heldByHomeMarker(r(home, { host: '__local__' }), home)).toBe(true)
+    expect(heldByHomeMarker(r(home, { host: 'machine-h', judge: 'host' } as never), home)).toBe(false)
   })
 })

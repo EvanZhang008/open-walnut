@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { SessionRecord } from '../types.js'
 import { LEADER_SWITCH_MARKER_REL } from '../../lib/leader-home-gate.js'
+import { execHostOf, judgedByHost } from './session-row-owner.js'
 
 export function heldBySwitch(r: Pick<SessionRecord, 'leaderSwitch' | 'archived'> | null | undefined): boolean {
   const st = r?.leaderSwitch
@@ -20,9 +21,13 @@ export function heldBySwitch(r: Pick<SessionRecord, 'leaderSwitch' | 'archived'>
   return !st.moved || st.moved.records === 'pending'
 }
 
-/** Whether `r` works in `home` (by folder) while that home carries a switch's marker. One existsSync with no marker. */
-export function heldByHomeMarker(r: Pick<SessionRecord, 'cwd' | 'archived'> | null | undefined, home: string): boolean {
+/**
+ * Whether `r`, a session of this machine's own daemon, works in `home` (by folder) while that home carries a switch's
+ * marker. A host's session whose folder has the same path on its own machine is not held. One existsSync.
+ */
+export function heldByHomeMarker(r: Pick<SessionRecord, 'cwd' | 'archived' | 'host' | 'judge'> | null | undefined, home: string): boolean {
   if (!home || !r?.cwd || r.archived || !path.isAbsolute(r.cwd)) return false
+  if (execHostOf(r) !== undefined || judgedByHost(r)) return false
   const rel = path.relative(path.resolve(home), path.resolve(r.cwd))
   if (rel.startsWith('..') || path.isAbsolute(rel)) return false
   return fs.existsSync(path.join(home, LEADER_SWITCH_MARKER_REL))
