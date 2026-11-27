@@ -9,6 +9,7 @@ import { ApiError } from './api-error';
 import { isBrowserNetworkMessage } from '../utils/operation-error-words';
 import { quietRetryDelays, quietlyRetryable } from './background-retry';
 import { deadlineSignal } from '../utils/deadline-signal';
+import { isComingBackAnswer } from './coming-back-codes';
 
 
 // ── Fetch admission control ────────────────────────────────────────────────
@@ -585,8 +586,11 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     // quietStatuses: statuses the caller EXPECTS in some environments (e.g. a
     // 503 "feature disabled") — warn keeps them out of the error-log audit.
     // A sign-in that ran out is renewed and sent again below: expected, not an error.
+    // A 503 that says it is coming back (a host reconnecting, a plugin starting): the page
+    // keeps what it shows and asks again (api/coming-back-codes.ts).
     const quiet = (extra?.quietStatuses?.includes(res.status) ?? false)
-      || (res.status === 401 && (errBody as { code?: unknown } | undefined)?.code === 'token_expired');
+      || (res.status === 401 && (errBody as { code?: unknown } | undefined)?.code === 'token_expired')
+      || isComingBackAnswer(res.status, errBody);
     (quiet ? console.warn : console.error)(`[api] ${method} ${path} → ${res.status} in ${elapsed}ms: ${message}`);
     if (res.status === 401 && deviceToken && !extra?.tokenRetried) {
       const code = (errBody as { code?: unknown } | undefined)?.code;
