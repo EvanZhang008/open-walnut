@@ -17,8 +17,11 @@ const ports = portsFrom(0)
 
 describe('the manual leader switch, real servers: switch and back', () => {
   it('switches under load, keeps every acknowledged write, never has two leaders, keeps the old home as a standby that leads nothing and changes nothing (witnesses online and unreachable), and switches back with A leading again', async () => {
-    const r = await rehearseSwitchAndBack(path.join(root, 'main'), () => {}, ports())
-    expect(failed(r.checks.all)).toEqual([])
+    // The rehearsal's own lines, kept so a red run names its failed checks in full and shows what led to them.
+    const lines: string[] = []
+    const r = await rehearseSwitchAndBack(path.join(root, 'main'), () => {}, { ...ports(), log: (line) => { lines.push(line) } })
+    const red = failed(r.checks.all)
+    expect(red, red.length ? `failed checks:\n${red.join('\n')}\n--- rehearsal log, last 80 lines ---\n${lines.slice(-80).join('\n')}` : '').toEqual([])
     expect(r.checks.all.length).toBeGreaterThan(20)
     expect(r.downtimeMs).toBeGreaterThan(0)
   }, 600_000)
