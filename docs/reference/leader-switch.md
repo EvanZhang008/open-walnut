@@ -540,8 +540,13 @@ holds `/a/b/c`, never `/a/b-c`). A VP or lead runs in its own task folder and is
 - **Records** (the engine's own: transcripts, subagent transcripts, large tool results, the folder's memory, the task
   list) travel with the standby copy into `<standby dir>/carry` ([Standby copy](./standby-copy.md), a carry), never
   into the new machine's engine dir before the commit. The final batch sends them until unchanged after the home's,
-  and the final mark names that batch; the new leader refuses to promote without it. A folder under the home that is a
-  link out of it is not the home's: its session ends instead of moving, and its records are never carried.
+  and the final mark names that batch; the new leader refuses to promote without it. The catch-up before the
+  handover and the last look count the carry that rides each batch, so a carry that has not caught up (the first one
+  sends every record: 2.2 GB took 59 s on one machine's disk, a link is slower) refuses the switch before anything
+  stops, saying the records' size, how the carry stands and about how long sending them takes. A folder under the
+  home that is a link out of it is not the home's: its session ends instead of moving, and its records are never
+  carried. At the density of a real home (653 rows, 2.2 GB of records: `scripts/leader-switch/measure-home-scale.ts`
+  on synthetic data) the stop of the sessions took 1.5 s and the final carry 2.2 s.
 - **Promotion** moves each row (archived ones too) to the same place in the new home on the new leader's own daemon
   (the place the old leader's stamp names), or ends it on the old machine with why (another engine, a machine runtime
   folder, a folder name longer than Claude Code names a folder by, a folder that leads out of the home).
