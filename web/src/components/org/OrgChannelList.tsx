@@ -186,12 +186,30 @@ export const OrgChannelList = memo(function OrgChannelList({ main, rows, routers
     onSelect(next);
     listRef.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(next)}"]`)?.focus();
   };
+  // On a phone the row is narrow: its words fit beside the mic, and the label names VPs and routers.
+  const orgSearch = (
+    <SearchField data-no-draft="search"
+      className="org-search"
+      fieldClassName="org-search-field"
+      type="search"
+      value={query}
+      placeholder={phone ? 'Search org' : 'Search VPs and routers…'}
+      aria-label="Search VPs and routers"
+      data-testid="org-search"
+      setText={onQuery}
+      onClear={() => onQuery('')}
+    />
+  );
   return (
     <aside className="org-list" aria-label={orgName.settings.name}>
-      <header className="org-list-head" data-fit-header="">
+      {/* On a phone the bar names the page, so the head is the page's search row: the search joins
+          the two keys there instead of sitting under a row of their own (page-head.css,
+          .page-search-row). */}
+      <header className={`org-list-head${phone ? ' page-search-row' : ''}`} data-fit-header="">
         <h1 className="pane-title page-name org-list-title" data-fit-title="">
           {phone ? orgName.settings.name : <OrgEditableName value={orgName.settings.name} label="the org" onSave={(v) => orgName.save({ name: v })} testId="org-name" />}
         </h1>
+        {phone && orgSearch}
         <span className="org-list-actions" data-fit-actions="">
           {/* Org chart is an icon with its name on hover (2026-11-21, the user: "org chart need to
               be an icon with hover over"); New router lives in the Routers heading ("no new
@@ -201,17 +219,7 @@ export const OrgChannelList = memo(function OrgChannelList({ main, rows, routers
           <OrgSettingsMenu />
         </span>
       </header>
-      <SearchField data-no-draft="search"
-        className="org-search"
-        fieldClassName="org-search-field"
-        type="search"
-        value={query}
-        placeholder="Search VPs and routers…"
-        aria-label="Search VPs and routers"
-        data-testid="org-search"
-        setText={onQuery}
-        onClear={() => onQuery('')}
-      />
+      {!phone && orgSearch}
       <OrgReorgReminder vps={vps} onOpenChart={onOpenChart} />
       <div
         ref={listRef}

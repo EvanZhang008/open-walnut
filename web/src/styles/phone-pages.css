@@ -139,11 +139,25 @@
   .app-shell-navigation .todo-panel .todo-panel-board {
     min-width: 44px;
   }
+  /* A filter's count sits on Display's corner, so the key stays a 44 px circle and the row stays whole
+     (2026-11-27 review: one filter widened it to 59 px and pushed Board into the row's 16 px). */
+  .app-shell-navigation .todo-panel .dm-display-btn { position: relative; width: 44px; }
+  .app-shell-navigation .todo-panel .dm-display-btn .tp-badge { position: absolute; top: 2px; right: 0; }
 
   /* A phone types in its full-screen search layer, never in the row's field, so the row
      keeps its fixed fold (useToolbarFit stays off): under 420px Display shows its icon alone. */
   @container todo-toolbar (max-width: 419px) {
     .app-shell-navigation .todo-panel .tp-btn-label { display: none; }
+  }
+  /* The row (16 px in, page-head.css) needs 369 px for the 148 px field (box-mic.css), New task's
+     words, Display and Board. Narrower (the scope is the row's full width), New task shows its plus
+     alone, a round 44 px key, and the field gives up a little, so the field and all three keys stay
+     on one row, whole, down to 320 px (2026-11-27 review: Board was cut at 337 px and wrapped to a
+     row of its own at 320). */
+  @container todo-toolbar (max-width: 368px) {
+    .app-shell-navigation .todo-panel .new-launcher-label { display: none; }
+    .app-shell-navigation .todo-panel .new-launcher-btn { width: 44px; min-width: 44px; }
+    .app-shell-navigation .todo-panel .todo-panel-toolbar .todo-search-bar { min-width: 136px; }
   }
 
   /* Section and project headings: the whole row is the fold target, so the

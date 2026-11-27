@@ -168,7 +168,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
 
   return (
     <section className="mail-list-pane" data-testid="mail-message-list">
-      <div className="mail-pane-head">
+      <div className="mail-pane-head page-search-row">
         {narrow && (
           <button
             type="button"

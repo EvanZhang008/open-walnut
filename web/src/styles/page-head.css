@@ -80,3 +80,29 @@
   color: var(--fg);
   text-transform: none;
 }
+
+/* A phone page whose head is a search (Home, Mail, Settings, Memory, Org, Notes): one row, 8 px under
+   the top bar and 16 px in from each side of the page; the field grows, and the page's
+   own keys sit in the same row at a finger's 44 px, 4 px apart, never on a row of their own above it,
+   and no rule draws under it (the field's own fill marks it).
+   2026-11-27, the audit at 390 px: the field sat 7, 9, 12, 16, 48 or 52 px under the bar, 11 to 28 px
+   from the sides, and Org and Notes put two 28 px keys on a row of their own above it. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell.app-shell-navigation .page-search-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    box-sizing: border-box;
+    height: auto;
+    margin: 0;
+    border-bottom: 0;
+    /* A side notch is the page's (phone-layout.css pads .main-content by the safe area). */
+    padding: 8px 16px;
+  }
+  .app-shell.app-shell-navigation .page-search-row > :has(input) { flex: 1 1 auto; margin: 0; }
+  /* Weak on purpose: a page that keeps its field readable (Home's 148 px at 320, box-mic.css) wins. */
+  :where(.app-shell.app-shell-navigation .page-search-row) > :has(input) { min-width: 0; }
+  .app-shell.app-shell-navigation .page-search-row > :not(:has(input)) { flex: none; }
+  .app-shell.app-shell-navigation .page-search-row .btn-icon { width: 44px; min-width: 44px; }
+  .app-shell.app-shell-navigation .page-search-row :is(button, a.btn):not(.wn-field *) { min-height: 44px; }
+}

@@ -8155,7 +8155,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, loa
       onPointerDownCapture={endLocateHold} onKeyDownCapture={endLocateHold}
       onWheelCapture={endLocateHold} onTouchStartCapture={endLocateHold}>
       <div className="fb-toolbar-scope">
-      <div className="todo-panel-toolbar" ref={toolbarRef}>
+      <div className="todo-panel-toolbar page-search-row" ref={toolbarRef}>
         <TodoSearchBar
           query={searchQuery}
           resetVersion={searchReset}

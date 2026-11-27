@@ -305,9 +305,7 @@
     flex: none;
     overflow: visible;
   }
-  .app-shell-navigation .notes-tree-pane .notes-tree-header {
-    justify-content: flex-end;
-  }
+  /* Its head is the page's search row on a phone (page-head.css, .page-search-row). */
   .app-shell-navigation .notes-tree-pane :is(.notes-tree-item, .notes-bookmark-row, .notes-bookmarks-header) {
     min-height: 44px;
     font-size: var(--font-size-lg);

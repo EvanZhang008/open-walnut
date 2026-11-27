@@ -216,6 +216,9 @@ test('a phone held sideways is still a phone, and the drawer stays open across t
   const b = await rect(page, '.phone-topbar')
   const slot = await rect(page, '.phone-topbar-right')
   expect(slot.x + slot.width).toBeLessThanOrEqual(b.width - 47 + 0.5)
+  // The search row keeps its 16 px inside the notch's inset, once (the page pads by the inset).
+  const field = await rect(page, '.todo-panel-toolbar.page-search-row > :first-child')
+  expect(Math.abs(field.x - (47 + 16))).toBeLessThanOrEqual(1)
   await expectNoHorizontalOverflow(page)
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-landscape.png`, scale: 'css' })
 })
@@ -370,4 +373,116 @@ test('the org is renamed in Org settings on a phone, and the bar follows its nam
   await field.fill('Org')
   await field.press('Enter')
   await expect(bar).toHaveText('Org')
+})
+
+// Standard "Page heads", the search row: on a phone a page whose head is a search field has one
+// row 8 px under the bar, the page's 16 px from each side, its keys in that row at 44 px, and no
+// key on a row of its own above the field (2026-11-27 at 390 px: the field sat 7 to 52 px under
+// the bar, 12 to 28 px from the sides, and Org and Notes put their keys on a row above it). The
+// pages come from the drawer and from Settings' list, so a new page whose head is a search is
+// checked too.
+test('a page whose head is a search keeps one row under the bar: 8 px down, 16 px in, keys at 44 px', async ({ page }) => {
+  test.setTimeout(120_000)
+  await bootHome(page)
+  const measure = () => page.evaluate(() => {
+    const bar = document.querySelector('.phone-topbar')!.getBoundingClientRect().bottom
+    const seen = (e: Element) => {
+      const r = e.getBoundingClientRect()
+      if (!(r.width > 4 && r.height > 4 && r.top >= bar - 1 && r.top < bar + 80)) return false
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      return !!hit && (e === hit || e.contains(hit) || hit.contains(e))
+    }
+    const field = [...document.querySelectorAll('main .wn-field')].filter((e) => e.querySelector('input')).find(seen)
+    if (!field) return null
+    const f = field.getBoundingClientRect()
+    const row = field.closest('.page-search-row')
+    const above = [...document.querySelectorAll('main button, main a.btn')].filter((e) => {
+      const r = e.getBoundingClientRect()
+      return r.width > 4 && r.height > 4 && r.top >= bar - 1 && r.bottom <= f.top + 1 && !!document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('button, a')
+    }).map((e) => e.getAttribute('aria-label') || (e.textContent || '').trim())
+    if (!row) return { inRow: false, above }
+    const gutter = (e: Element | null) => {
+      let g = 0
+      for (; e && e !== document.documentElement; e = e.parentElement) {
+        const cs = getComputedStyle(e)
+        g += (e as HTMLElement).offsetWidth - e.clientWidth - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth)
+      }
+      return g
+    }
+    const kids = [...row.children].filter((e) => getComputedStyle(e).position !== 'absolute').map((e) => e.getBoundingClientRect()).filter((r) => r.width > 2)
+    const gaps = kids.slice(1).map((r, i) => Math.round(r.left - kids[i].right))
+    const keys = [...row.querySelectorAll('button, a.btn')].filter((e) => !field.contains(e))
+      .map((e) => ({ name: e.getAttribute('aria-label') || (e.textContent || '').trim(), h: Math.round(e.getBoundingClientRect().height), w: Math.round(e.getBoundingClientRect().width) }))
+      .filter((k) => k.w > 0)
+    return {
+      inRow: true, above, keys, gaps,
+      top: Math.round(f.top - bar),
+      left: Math.round(Math.min(...kids.map((r) => r.left))),
+      // Less a scroller's scrollbar gutter around it: Chromium keeps one (6 px on Memory) where a
+      // phone's overlay scrollbar takes none.
+      right: Math.round(innerWidth - Math.max(...kids.map((r) => r.right)) - gutter(row)),
+      rule: getComputedStyle(row).borderBottomWidth,
+    }
+  })
+  const checked: string[] = []
+  // A link to the page already open leaves the drawer open; a second Menu tap would shut it.
+  const drawer = async () => { if (!(await page.locator('.sidebar.open').isVisible())) await openDrawer(page) }
+  const check = async (name: string) => {
+    await page.waitForTimeout(400)
+    let m = await measure()
+    await expect.poll(async () => (m = await measure()) !== null, { timeout: 3_000 }).toBe(true).catch(() => {})
+    if (!m) return
+    checked.push(name)
+    expect(m.inRow, `${name}: its search is not in .page-search-row`).toBe(true)
+    if (!m.inRow) return
+    expect(m.above, `${name}: keys above the search`).toEqual([])
+    expect(Math.abs(m.top! - 8), `${name}: field ${m.top} px under the bar`).toBeLessThanOrEqual(1)
+    expect(Math.abs(m.left! - 16), `${name}: row ${m.left} px from the left`).toBeLessThanOrEqual(1)
+    expect(Math.abs(m.right! - 16), `${name}: row ${m.right} px from the right`).toBeLessThanOrEqual(1)
+    expect(m.rule, `${name}: a line under the search row`).toBe('0px')
+    for (const k of m.keys!) {
+      expect(k.h, `${name}: key ${k.name} is ${k.w}x${k.h}`).toBeGreaterThanOrEqual(44)
+      expect(k.w, `${name}: key ${k.name} is ${k.w}x${k.h}`).toBeGreaterThanOrEqual(44)
+    }
+    for (const g of m.gaps!) expect(Math.abs(g - 4), `${name}: ${g} px between the row's parts`).toBeLessThanOrEqual(1)
+  }
+  await check('Home')
+  await drawer()
+  const links = await page.locator('#primary-sidebar a[href^="/"]').evaluateAll((as) => [...new Set(as.map((a) => (a.getAttribute('aria-label') || a.textContent || '').trim()).filter(Boolean))])
+  for (const name of links) {
+    await drawer()
+    const link = page.locator('#primary-sidebar a[href^="/"]').filter({ hasText: name }).first()
+    if (!(await link.isVisible())) continue
+    await link.click()
+    await check(name)
+  }
+  await drawer()
+  await page.locator('[data-testid="sidebar-org"]').click()
+  await check('Org')
+  for (const id of ['memory', 'agents', 'commands']) {
+    await drawer()
+    await page.locator('#primary-sidebar').getByRole('link', { name: 'Settings' }).click()
+    await page.locator(`[data-testid="settings-nav-${id}"]`).click()
+    await check(id)
+  }
+  // Home's row at the widths where it folds: the field and its three keys stay whole on one row.
+  for (const width of [369, 368, 337, 320]) {
+    await page.setViewportSize({ width, height: 844 })
+    await drawer()
+    await page.locator('#primary-sidebar a[href="/"]').first().click()
+    await check(`Home@${width}`)
+    // A filter's count on Display (as DisplayMenu draws it) keeps the key 44 px wide.
+    await page.locator('.dm-display-btn').evaluate((b) => {
+      if (b.querySelector('.tp-badge')) return
+      const s = document.createElement('span'); s.className = 'badge badge-accent badge-count tp-badge'; s.textContent = '12'; b.appendChild(s)
+    })
+    await check(`Home@${width} with a filter`)
+    const keys = await page.locator('.todo-panel-toolbar.page-search-row').locator('button:visible').evaluateAll((bs) =>
+      bs.filter((b) => !b.closest('.wn-field')).map((b) => b.getBoundingClientRect()).filter((r) => r.width > 0).map((r) => ({ top: Math.round(r.top), right: Math.round(r.right) })))
+    expect(keys.length, `Home@${width}: keys in the row`).toBeGreaterThanOrEqual(3)
+    expect(Math.max(...keys.map((k) => k.right)), `Home@${width}: a key past the 16 px edge`).toBeLessThanOrEqual(width - 15)
+    expect(new Set(keys.map((k) => k.top)).size, `Home@${width}: keys on more than one row`).toBe(1)
+  }
+  // The pages this rule was written for are among those measured.
+  for (const name of ['Home', 'Notes', 'Settings', 'Org', 'memory']) expect(checked, `${name} was not measured`).toContain(name)
 })

@@ -569,6 +569,15 @@ around it.
   "Walnut" for a page that has a name). A title that is the page's name wears `.page-name`, and
   `page-head.css` keeps it for screen readers only there: the page never says its name twice. Its
   sentence and keys stay, the New key at the end of the sentence's first line.
+- On a phone a page whose head is a search (Home, Mail, Settings, Memory, Org, Notes) has one search
+  row, `.page-search-row` (`page-head.css`): 8 px under the bar, 16 px in from each side of the page,
+  the field growing, the page's own keys in that row at 44 px, 4 px apart,
+  and no line under it at rest (a list that scrolls under it may draw its edge). No key sits on a row of its own between the bar and the search (a pane
+  head whose title the bar now says puts its search in the head instead). Guard:
+  `tests/e2e/browser/phone-shell.spec.ts` ("a page whose head is a search keeps one row"), which
+  measures every page the drawer and Settings' list open. Source: the audit at 390 px on
+  2026-11-27, when the field sat 7 to 52 px under the bar, 11 to 28 px from the sides, and Org and
+  Notes put two 28 px keys on a row above it.
 - Guard: `tests/web/page-head-guard.test.ts` (every `h1` in the console and the shipped plugins is a
   page or pane title, no other stylesheet sets their type, no typed "+" or Title Case create key;
   every routed page has a bar name, every title that is a page's name is a `.page-name`, and no

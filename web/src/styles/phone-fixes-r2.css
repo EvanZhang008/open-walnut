@@ -340,11 +340,15 @@
 }
 
 /* The top bar names the page (page-head.css, .page-name): a head whose title was the name keeps
-   only what else it holds. Org's list keeps its two keys at the right; Memory's list head held
-   only its title, so it closes to nothing (the title stays for screen readers) and the filter
-   starts the pane. */
+   only what else it holds. Memory's list head holds only its title there, so it closes to nothing
+   (the title stays for screen readers) and the filter starts the pane. Org's head is its search
+   row (page-head.css, .page-search-row). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .app-shell-navigation .org-list-head { justify-content: flex-end; }
   .app-shell-navigation .memory-tree-header:has(> .page-name:only-child) { padding: 0; height: 0; border-bottom: 0; }
-  .app-shell-navigation .memory-tree-header:has(> .page-name:only-child) + .memory-tree-filter { padding-top: 0; }
+  /* Memory is drawn inside the page's 16 px padding, which already gives its search row its sides:
+     the page drops its top padding and the row its side padding, so the row sits where every page's
+     search row does (page-head.css, .page-search-row) and nothing of it is clipped by the list's
+     scroller. */
+  .app-shell-navigation .app-content-area:has(> .memory-split-view) { padding-top: 0; }
+  .app-shell.app-shell-navigation .memory-tree-panel > .memory-tree-filter.page-search-row { padding-left: 0; padding-right: 0; }
 }

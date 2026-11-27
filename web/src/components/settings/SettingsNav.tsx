@@ -384,7 +384,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
       >
         <SettingsIcon glyph="magnifier" size={16} />
       </button>
-      <div className="settings-filter-wrap">
+      <div className="settings-filter-wrap page-search-row">
         <SearchField small
           ref={inputRef}
           type="search"

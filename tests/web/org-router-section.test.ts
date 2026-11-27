@@ -135,7 +135,7 @@ describe('the Routers section in the Org list', () => {
   })
 
   it('searches VPs and routers', () => {
-    expect(listCode).toContain('placeholder="Search VPs and routers…"')
+    expect(listCode).toContain("'Search VPs and routers…'")
   })
 
   it('is not a VP row: router rows never go through the VP Row or its VP-only parts', () => {

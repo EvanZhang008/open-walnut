@@ -16,6 +16,7 @@ import { SearchField } from '@/components/common/SearchField';
 import '@/styles/header-fit.css';
 import { folderNoteOf, visibleFolderChildren, folderOfFolderNote, folderRowClickAction, isAttachmentFolder } from './folder-note';
 import { EmptyState } from '@/components/common/EmptyState';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { DisclosureChevron } from '@/components/controls';
 import { useNotesListCorpus } from '@/stores/notes-corpus-store';
 
@@ -173,6 +174,8 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   onStartSession,
   onStartAgentChat,
 }: NotesTreePanelProps) {
+  // A phone: the bar names the page, so the search joins the head's keys (page-head.css).
+  const phone = usePhoneLayout();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
   /** This replica's copy leaves notes out: the server's sentence, above the results. */
@@ -964,10 +967,28 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     </div>
   );
 
+  const notesSearch = (
+    <SearchField data-no-draft="search"
+      type="text"
+      placeholder="Search notes..."
+      value={searchQuery}
+      setText={handleSearchChange}
+      onKeyDown={handleSearchKeyDown}
+      className="notes-search-input"
+      aria-label="Search notes"
+      onClear={() => handleSearchChange('')}
+      clearLabel="Clear search (Esc)"
+      clearClassName="notes-search-clear"
+    />
+  );
   return (
     <div className="notes-tree-panel">
-      <div className="notes-tree-header" data-fit-header="">
+      {/* On a phone the bar names the page, so the head is the page's search row: the search joins
+          the two keys there instead of sitting under a row of their own (page-head.css,
+          .page-search-row). */}
+      <div className={`notes-tree-header${phone ? ' page-search-row' : ''}`} data-fit-header="">
         <h3 className="pane-title page-name" data-fit-title="">Notes</h3>
+        {phone && notesSearch}
         <div className="notes-tree-actions" data-fit-actions="">
           <button
             className="btn btn-icon btn-sm btn-ghost notes-tree-action-btn"
@@ -988,20 +1009,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
         </div>
       </div>
 
-      <div className="notes-tree-search">
-        <SearchField data-no-draft="search"
-          type="text"
-          placeholder="Search notes..."
-          value={searchQuery}
-          setText={handleSearchChange}
-          onKeyDown={handleSearchKeyDown}
-          className="notes-search-input"
-          aria-label="Search notes"
-          onClear={() => handleSearchChange('')}
-          clearLabel="Clear search (Esc)"
-          clearClassName="notes-search-clear"
-        />
-      </div>
+      {!phone && <div className="notes-tree-search">{notesSearch}</div>}
 
       {/* Bookmarks group (§2.6) — collapsible, at the TOP of the tree. Hidden while
           searching (search owns the body) and when there are no favorited notes. */}
