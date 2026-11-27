@@ -15,7 +15,7 @@ const NINE = new Date(2026, 8, 25, 9, 0).getTime()
 const OLD_FOCUS_DONE = {
   kind: 'reminder' as const,
   title: 'Focus block done, 10 min break',
-  body: '45 min. Stand up and move; the break ends at 14:50.',
+  body: '45 min. Stand up and move; the break ends at 2:50 PM.',
   dedupKey: 'focus-done',
   severity: 'success' as const,
   actions: [

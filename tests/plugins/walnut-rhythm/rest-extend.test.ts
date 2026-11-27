@@ -38,7 +38,7 @@ describe('Rest now during a block', () => {
     h.clock.t += 12 * MIN
     const rested = await actions.focusRest(runtime, {})
     await runtime.dnd.settled()
-    expect(rested.message).toBe('Block ended early. Rest for 8 min, until 09:20.')
+    expect(rested.message).toBe('Block ended early. Rest for 8 min, until 9:20 AM.')
     expect(runtime.focus).toMatchObject({ phase: 'break', breakKind: 'short', startedAt: NINE + 12 * MIN, endsAt: NINE + 20 * MIN })
     expect(ourHold(h)).toEqual({ type: 'quiet.clear' })
     expect(runsOf(h)).toEqual([SHORTCUT_ON, SHORTCUT_OFF])
@@ -67,7 +67,7 @@ describe('Rest from off', () => {
     const { h, runtime } = await boot()
     const rested = await actions.focusRest(runtime, { minutes: 10 })
     await runtime.dnd.settled()
-    expect(rested.message).toBe('Rest started: 10 min, until 09:10. Then Rhythm asks about the next block.')
+    expect(rested.message).toBe('Rest started: 10 min, until 9:10 AM. Then Rhythm asks about the next block.')
     expect(runtime.focus).toMatchObject({ phase: 'break', runStartedAt: NINE, endsAt: NINE + 10 * MIN })
     expect(h.calls.filter((call) => call.type === 'quiet.set')).toHaveLength(0)
     expect(runsOf(h)).toEqual([])
@@ -81,7 +81,7 @@ describe('Rest from off', () => {
     const { runtime } = await boot({ macos_focus_shortcuts: false })
     await actions.focusRest(runtime, { minutes: 10 })
     const ring = rhythmStatusItem(buildPublicState(runtime, runtime.now()))!
-    expect(ring).toMatchObject({ title: 'Break · {remaining} left', detail: 'Break ends 09:10, then Rhythm asks before the next block.' })
+    expect(ring).toMatchObject({ title: 'Break · {remaining} left', detail: 'Break ends 9:10 AM, then Rhythm asks before the next block.' })
     expect(ring.actions?.map((action) => action.label)).toEqual(['Focus now', '+5 min break', 'End break'])
   })
 
@@ -100,7 +100,7 @@ describe('Extend', () => {
     h.clock.t += 20 * MIN
     const more = await actions.focusExtend(runtime, { minutes: 10 })
     await runtime.dnd.settled()
-    expect(more.message).toBe('The block runs 10 min more, until 09:35.')
+    expect(more.message).toBe('The block runs 10 min more, until 9:35 AM.')
     expect(runtime.focus).toMatchObject({ phase: 'focus', endsAt: NINE + 35 * MIN, minutes: 25 })
     expect(runsOf(h)).toEqual([SHORTCUT_ON, SHORTCUT_ON])
     expect(h.mac.input).toBe('2026-11-01 09:35:00')
@@ -146,7 +146,7 @@ describe('Extend', () => {
     expect(runtime.focus.phase).toBe('idle')
     await actions.focusRest(runtime, { minutes: 5 })
     const more = await actions.focusExtend(runtime, {})
-    expect(more.message).toBe('The break runs 5 min more, until 09:10.')
+    expect(more.message).toBe('The break runs 5 min more, until 9:10 AM.')
     expect(runtime.focus).toMatchObject({ phase: 'break', endsAt: NINE + 10 * MIN })
   })
 
@@ -165,7 +165,7 @@ describe('Extend', () => {
     expect(revised[1]!.notice).toMatchObject({
       update: true,
       title: 'Focus block done, 10 min break',
-      body: '25 min. Stand up and move; the break ends at 09:35.',
+      body: '25 min. Stand up and move; the break ends at 9:35 AM.',
     })
     expect(revised[1]!.notice.actions!.map((a) => [a.label, a.expiresAt])).toEqual([['End break', NINE + 35 * MIN], ['Another block', NINE + 35 * MIN]])
     // Revised, never re-raised: the old one was not dismissed for it (a dismiss then notify alerts again).

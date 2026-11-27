@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { recentActivityTime, recentActivityTitle } from '../../web/src/components/tasks/recent-activity-time';
+import { fullTime } from '../../web/src/utils/time';
 
 const base = {
   created_at: '2026-04-20T10:00:00.000Z',
@@ -71,7 +72,7 @@ describe('recentActivityTime', () => {
 describe('recentActivityTitle', () => {
   it('names the clock and spells the full local date; invalid dates give nothing', () => {
     const at = '2026-09-04T08:00:00.000Z';
-    expect(recentActivityTitle({ at, kind: 'updated' })).toBe(`Updated ${new Date(at).toLocaleString()}`);
+    expect(recentActivityTitle({ at, kind: 'updated' })).toBe(`Updated ${fullTime(at)}`);
     expect(recentActivityTitle({ at, kind: 'session' }).startsWith('Session activity ')).toBe(true);
     expect(recentActivityTitle({ at, kind: 'completed' }).startsWith('Completed ')).toBe(true);
     expect(recentActivityTitle({ at: '', kind: 'created' })).toBe('');

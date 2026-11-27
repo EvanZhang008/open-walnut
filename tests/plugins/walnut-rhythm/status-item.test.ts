@@ -54,7 +54,7 @@ describe('the ring', () => {
     const focus = ring(runtime)!
     expect(focus).toMatchObject({
       title: 'Focus · {remaining} left',
-      detail: 'Spec review. Started 09:05, ends 09:30. Walnut is quiet until it ends.',
+      detail: 'Spec review. Started 9:05 AM, ends 9:30 AM. Walnut is quiet until it ends.',
       tone: 'accent',
       timer: { startedAt: NINE + 5 * MIN, endsAt: NINE + 30 * MIN, mode: 'drain' },
     })
@@ -68,7 +68,7 @@ describe('the ring', () => {
     const rest = ring(runtime)!
     expect(rest).toMatchObject({
       title: 'Break · {remaining} left',
-      detail: 'Block 09:05 to 09:30. Break ends 09:35, then Rhythm asks before the next block.',
+      detail: 'Block 9:05 AM to 9:30 AM. Break ends 9:35 AM, then Rhythm asks before the next block.',
       tone: 'success',
       timer: { startedAt: NINE + 30 * MIN, endsAt: NINE + 35 * MIN, mode: 'drain' },
     })
@@ -82,7 +82,7 @@ describe('the ring', () => {
     await h.tick(runtime, 5 * MIN)
     expect(ring(runtime)).toMatchObject({
       title: 'Rhythm is off',
-      detail: 'Last run 09:05 to 09:35. Nothing runs until you start a block.',
+      detail: 'Last run 9:05 AM to 9:35 AM. Nothing runs until you start a block.',
       glyph: 'pause',
       actions: [{ label: 'Start focus block (25 min)', op: 'focus_start', primary: true }, { label: 'Rest (5 min)', op: 'focus_rest' }],
     })
@@ -92,7 +92,7 @@ describe('the ring', () => {
   it('names the long break, and says nothing about quiet when a block does not quiet Walnut', async () => {
     const { h, runtime } = await boot({ focus_quiets_walnut: false, long_break_every: 1 })
     await actions.focusStart(runtime, {})
-    expect(ring(runtime)).toMatchObject({ detail: 'Started 09:00, ends 09:25.' })
+    expect(ring(runtime)).toMatchObject({ detail: 'Started 9:00 AM, ends 9:25 AM.' })
     await h.tick(runtime, 25 * MIN + 1)
     expect(ring(runtime)).toMatchObject({ title: 'Long break · {remaining} left' })
   })

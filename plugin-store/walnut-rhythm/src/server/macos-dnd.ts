@@ -28,6 +28,7 @@
 import type { PluginLogger } from '@open-walnut/plugin-api/server'
 import type { FocusDetailRead, LiveAssertion } from './macos-focus'
 import type { ShortcutsView } from './macos-bridge'
+import { clockTime } from './clock'
 import { NO_END } from './dnd-words'
 import { SHORTCUT_OFF, SHORTCUT_ON, runShortcut } from './macos-shortcuts'
 import type { Runner } from './exec'
@@ -280,7 +281,7 @@ export class DndController {
     const running = this.deps.running()
     if (!r || r.status !== 'on' || !running || running.startedAt !== r.block || running.endsAt - r.until <= MOVE_SLACK_MS || r.moveTried === running.endsAt) return
     const until = running.endsAt
-    const was = new Date(r.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    const was = clockTime(r.until)
     const stuck = (why: string) => {
       this.deps.log.warn('Do Not Disturb kept its old end time', { why })
       // Still Rhythm's: it ends at the old time by itself, or at the block's end.
@@ -329,7 +330,7 @@ export class DndController {
     const ran = await runShortcut(this.deps.run, SHORTCUT_OFF)
     // Only an off that ran tells the mirror to read macOS as off; a failed one leaves it reading the truth.
     if (ran.ok) this.deps.assumeOff(this.deps.now())
-    const until = new Date(r.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    const until = clockTime(r.until)
     const after = r.noEnd ? 'Turn it off in Control Center.' : `macOS ends it at ${until} by itself.`
     if (!ran.ok) {
       this.deps.log.warn('Do Not Disturb did not turn off', { error: ran.error })

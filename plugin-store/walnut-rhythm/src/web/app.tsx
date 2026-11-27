@@ -11,7 +11,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { FocusCard } from './focus-card'
-import { clockText, focusPhaseText, minutesText, runSpanText } from './format'
+import { clockTime } from '../server/clock'
+import { focusPhaseText, minutesText, runSpanText } from './format'
 import { MacCard } from './mac-card'
 import { MusicCard } from './music-card'
 import type { MusicPlayer } from './music'
@@ -37,7 +38,7 @@ function quietText(state: RhythmPublicState): string {
   return quiet.holds
     .map((hold) => {
       const label = hold.source === 'user' ? (hold.reason ? `You (${hold.reason})` : 'You') : hold.reason ?? hold.source
-      return hold.until ? `${label} until ${clockText(hold.until)}` : label
+      return hold.until ? `${label} until ${clockTime(hold.until)}` : label
     })
     .join(' · ')
 }

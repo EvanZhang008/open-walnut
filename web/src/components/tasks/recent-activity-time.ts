@@ -1,4 +1,5 @@
 import type { Task } from '@open-walnut/core';
+import { fullTime } from '@/utils/time';
 
 /**
  * Activity sort mode: 'updated' ranks by the latest activity of any kind, 'created'
@@ -50,9 +51,8 @@ const KIND_LABEL: Record<RecentActivityKind, string> = {
   completed: 'Completed',
 };
 
-/** Tooltip for the row's relative time: which clock it is, then the full local date. */
+/** Tooltip for the row's relative time: which clock it is, then the whole time ("Updated Fri, Nov 20, 2026, 5:49 AM"). */
 export function recentActivityTitle(activity: RecentActivity): string {
-  const t = new Date(activity.at);
-  if (isNaN(t.getTime())) return '';
-  return `${KIND_LABEL[activity.kind]} ${t.toLocaleString()}`;
+  const when = fullTime(activity.at);
+  return when ? `${KIND_LABEL[activity.kind]} ${when}` : '';
 }

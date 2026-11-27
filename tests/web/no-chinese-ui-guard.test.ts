@@ -4,7 +4,7 @@
  * plugin's view names and 16 more lines of its Timeline, Lanes and Chapters were Chinese.
  *
  * This finds CJK characters written as is in a string, a template or JSX text in web/src and every
- * plugin's web code (comments and `\u` escapes do not count). Code that must hold CJK characters to
+ * plugin's code (examples/plugins and plugin-store) (comments and `\u` escapes do not count). Code that must hold CJK characters to
  * work on them (a tokenizer, a highlighter) is named in ALLOWED with why.
  */
 import { describe, it, expect } from 'vitest';
@@ -46,7 +46,9 @@ export function cjkTexts(file: string, src: string): Array<{ line: number; text:
 }
 
 describe('UI text is English', () => {
-  const roots = [path.join(ROOT, 'web/src'), ...fs.readdirSync(path.join(ROOT, 'examples/plugins')).map((p) => path.join(ROOT, 'examples/plugins', p, 'src'))];
+  const pluginSrc = (base: string) => fs.existsSync(path.join(ROOT, base))
+    ? fs.readdirSync(path.join(ROOT, base)).map((p) => path.join(ROOT, base, p, 'src')) : [];
+  const roots = [path.join(ROOT, 'web/src'), ...pluginSrc('examples/plugins'), ...pluginSrc('plugin-store')];
   const hits: Record<string, Array<{ line: number; text: string }>> = {};
   for (const f of roots.flatMap(files)) {
     const rel = path.relative(ROOT, f).split(path.sep).join('/');

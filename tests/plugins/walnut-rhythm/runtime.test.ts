@@ -50,7 +50,7 @@ describe('a run the person starts', () => {
     expect(done).toHaveLength(1)
     expect(done[0]!.notice).toMatchObject({
       title: 'Focus block done, 5 min break',
-      body: '25 min on Draft the plan. Stand up and move; the break ends at 09:30.',
+      body: '25 min on Draft the plan. Stand up and move; the break ends at 9:30 AM.',
       taskId: 'task-7',
       actions: [
         { label: 'End break', op: 'break_skip' },

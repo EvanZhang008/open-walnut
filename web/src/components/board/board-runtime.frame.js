@@ -95,11 +95,14 @@
     var d = new Date(ts);
     if (isNaN(d.getTime())) return '';
     var now = new Date();
-    var clock = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/[\u202f\u00a0]/g, ' ');
-    if (d.toDateString() === now.toDateString()) return clock;
-    var day = d.toLocaleDateString('en-US', d.getFullYear() !== now.getFullYear()
-      ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' });
-    return day + ', ' + clock;
+    if (d.toDateString() === now.toDateString()) return clock(d);
+    var day = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+    return day + ', ' + clock(d);
+  }
+
+  /** "9:40 PM": the console's clockTime (12-hour, no leading zero, no seconds). */
+  function clock(d) {
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/[\u202f\u00a0]/g, ' ');
   }
 
   /** "key:Label,key:Label" → [{ key, label }]; an empty or broken list falls back. */
@@ -533,7 +536,7 @@
   // `richText` (the message renderer) is added by board-markdown.frame.js, `Remind` by board-items.frame.js.
   window.__wnBoardKit = {
     state: state, flags: flags, live: live, Base: Base, DEFAULT_LABELS: DEFAULT_LABELS,
-    send: send, request: request, trusted: trusted, nextId: nextId, esc: esc, hhmm: hhmm, when: when,
+    send: send, request: request, trusted: trusted, nextId: nextId, esc: esc, clock: clock, when: when,
     parsePairs: parsePairs, whoOf: whoOf, unreadIn: unreadIn, markSeen: markSeen, addMessage: addMessage,
     removeMessage: removeMessage, renderAll: renderAll, setHtml: setHtml, registerMessageRows: registerMessageRows, openAncestors: openAncestors, topSections: topSections,
     threadEls: threadEls, applyFilter: applyFilter, applyProjects: applyProjects, projectStatus: projectStatus,

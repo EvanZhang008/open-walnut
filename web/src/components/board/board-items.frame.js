@@ -165,8 +165,7 @@
     if (!r) {
       html = '<button type="button" class="wn-remind-btn"' + expanded + dis + '>Remind me</button>';
     } else {
-      var when = new Date(r.at);
-      var tip = (due ? 'Reminder was due ' : 'Reminder at ') + when.toLocaleString() + (r.note ? ': ' + r.note : '') + '. Click to change it.';
+      var tip = (due ? 'Reminder was due ' : 'Reminder at ') + kit.when(r.at) + (r.note ? ': ' + r.note : '') + '. Click to change it.';
       html = '<button type="button" class="wn-remind-btn ' + (due ? 'wn-remind-due' : 'wn-remind-on') + '"' + expanded + dis
         + ' title="' + esc(tip) + '">' + (due ? 'Reminder due' : 'Reminder ' + esc(kit.when(r.at))) + '</button>'
         + '<button type="button" class="wn-remind-clear" aria-label="Clear the reminder" title="Clear the reminder"' + dis + '>×</button>';
@@ -284,7 +283,7 @@
         if (!ack.ok) { self.wnSetStatus(ack.error || 'Not saved', true); return; }
         self.wnDirty = false;
         if (ack.mark) state.marks[self.wnId] = ack.mark; else delete state.marks[self.wnId];
-        self.wnSetStatus('Saved ' + kit.hhmm(new Date()));
+        self.wnSetStatus('Saved ' + kit.clock(new Date()));
       });
     }
     wnRender() {

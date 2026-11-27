@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
 import type { ImportStore, PublicState } from './store'
-import { inNotes, plural } from './words'
+import { inNotes, plural, pointWords } from './words'
 import { matchCase, safeFolder } from '../server/paths'
 import { folderScope, scopeIds, type FolderScope } from './folder-scope'
 import { diffNoteLines } from './line-diff'
@@ -18,12 +18,6 @@ type UseView = <T>(name: string, initial: T) => [T, Setter<T>]
 function whatIsIn(root: { count: number; databases?: number }): string {
   const databases = root.databases ?? 0
   return [root.count - databases ? plural(root.count - databases, 'page') : '', databases ? plural(databases, 'database') : ''].filter(Boolean).join(', ')
-}
-
-function when(iso: string | undefined): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
 export function ImportPanel(props: { walnut: WalnutWebApi; store: ImportStore; state: PublicState; useView: UseView; openNote(path: string): void; onPickFolder?(set: (folder: string) => void): void }) {
@@ -367,7 +361,7 @@ function RunCard({ job, store, openNote, quietFor, useView, locked, otherFolder 
         <div className="ni-row-copy">
           <span className="ni-run-title" data-testid="ni-run-headline">{headline}</span>
           <span className="ni-help" data-testid="ni-run-where">
-            {compact ? `The last import, into ${inNotes(job.folder)}, not the folder above` : inNotes(job.folder)}{job.endedAt ? ` · ${when(job.endedAt)}` : ` · started ${when(job.startedAt)}`}
+            {compact ? `The last import, into ${inNotes(job.folder)}, not the folder above` : inNotes(job.folder)}{job.endedAt ? ` · ${pointWords(job.endedAt)}` : ` · started ${pointWords(job.startedAt)}`}
           </span>
           {running && (
             <>

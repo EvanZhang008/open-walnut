@@ -1,6 +1,7 @@
 /**
  * How Rhythm's numbers read in the App. PURE.
  */
+import { clockTime } from '../server/clock'
 import type { RhythmPublicState } from './store'
 
 const MIN = 60_000
@@ -22,11 +23,6 @@ export function countdownText(ms: number): string {
   return h > 0 ? `${h}:${mm}:${String(s).padStart(2, '0')}` : `${mm}:${String(s).padStart(2, '0')}`
 }
 
-/** "09:05": 24-hour local time, the same clock the sidebar ring speaks. */
-export function clockText(epochMs: number): string {
-  const date = new Date(epochMs)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
 
 export function focusPhaseText(phase: RhythmPublicState['focus']['phase'], breakKind?: 'short' | 'long' | 'stand'): string {
   if (phase === 'focus') return 'Focus'
@@ -40,9 +36,9 @@ export function runText(focus: RhythmPublicState['focus']): string {
   if ((focus.phase === 'focus' || focus.phase === 'break') && focus.endsAt !== null) {
     const started = focus.runStartedAt ?? focus.startedAt
     const what = focus.phase === 'focus' ? 'ends' : 'break ends'
-    return started !== null ? `Started ${clockText(started)}, ${what} ${clockText(focus.endsAt)}` : `${what} ${clockText(focus.endsAt)}`
+    return started !== null ? `Started ${clockTime(started)}, ${what} ${clockTime(focus.endsAt)}` : `${what} ${clockTime(focus.endsAt)}`
   }
-  if (focus.lastRun) return `Last run ${clockText(focus.lastRun.startedAt)} to ${clockText(focus.lastRun.endedAt)}`
+  if (focus.lastRun) return `Last run ${clockTime(focus.lastRun.startedAt)} to ${clockTime(focus.lastRun.endedAt)}`
   return 'No run yet'
 }
 
@@ -50,8 +46,8 @@ export function runText(focus: RhythmPublicState['focus']): string {
 export function runSpanText(focus: RhythmPublicState['focus']): string {
   if ((focus.phase === 'focus' || focus.phase === 'break') && focus.endsAt !== null) {
     const started = focus.runStartedAt ?? focus.startedAt
-    return started !== null ? `${clockText(started)} to ${clockText(focus.endsAt)}` : `Until ${clockText(focus.endsAt)}`
+    return started !== null ? `${clockTime(started)} to ${clockTime(focus.endsAt)}` : `Until ${clockTime(focus.endsAt)}`
   }
-  if (focus.lastRun) return `${clockText(focus.lastRun.startedAt)} to ${clockText(focus.lastRun.endedAt)}`
+  if (focus.lastRun) return `${clockTime(focus.lastRun.startedAt)} to ${clockTime(focus.lastRun.endedAt)}`
   return 'None yet'
 }

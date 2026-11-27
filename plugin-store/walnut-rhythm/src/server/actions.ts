@@ -416,7 +416,7 @@ export async function dndSetting(runtime: RhythmRuntime, args: Record<string, un
 export function dndMessage(record: RhythmPublicState['dnd']['record']): string {
   if (!record) return 'Do Not Disturb is off.'
   switch (record.status) {
-    case 'on': return `Do Not Disturb is on until ${new Date(record.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}, then macOS turns it off.`
+    case 'on': return `Do Not Disturb is on until ${clockTime(record.until)}, then macOS turns it off.`
     case 'left-alone': return `${record.focusName ?? 'A Focus'} is already on, so Rhythm left it as it is.`
     case 'failed': return record.stillOn ? record.error ?? 'Do Not Disturb may still be on.' : `Do Not Disturb did not turn on. ${record.error ?? ''}`.trim()
     case 'turning-on': return 'Turning Do Not Disturb on…'

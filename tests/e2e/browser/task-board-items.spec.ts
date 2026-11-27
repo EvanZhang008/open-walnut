@@ -499,7 +499,7 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   const panelR = talk.locator('.wn-remind-panel')
   await expect(panelR).toBeVisible()
   await panelR.getByRole('button', { name: 'In 1 hour' }).click()
-  await expect(remind).toHaveText(/^Reminder (\w+ \d+ )?\d\d:\d\d$/, { timeout: 10_000 })
+  await expect(remind).toHaveText(/^Reminder (\w+ \d+, )?\d{1,2}:\d\d [AP]M$/, { timeout: 10_000 })
   await expect(panelR).toBeHidden()
   await expect(talk).toHaveAttribute('data-reminder', 'pending')
   const setAt = Date.parse((await getBoard(leader)).reminders['probe-talk'].at)
@@ -554,7 +554,7 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   await expect(note.locator('.wn-mark-state')).toHaveCount(0)
   await note.locator('.wn-mark-note-toggle').click()
   await note.locator('.wn-mark-note').fill('Looks right; ship after the window.')
-  await expect(note.locator('.wn-saved')).toHaveText(/^Saved \d\d:\d\d$/, { timeout: 10_000 })
+  await expect(note.locator('.wn-saved')).toHaveText(/^Saved \d{1,2}:\d\d [AP]M$/, { timeout: 10_000 })
   await expect.poll(async () => (await getBoard(leader)).marks.probe, { timeout: 10_000 })
     .toEqual({ note: 'Looks right; ship after the window.', updated_at: expect.any(String) })
 
@@ -576,7 +576,7 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   await api('POST', `/api/v1/tasks/${leader}/board/edits`, { edits: [{ old: 'Fix the probe today', new: 'Fix the probe now' }] }, asLeader)
   await expect(frame.locator('table.overview')).toContainText('Fix the probe now', { timeout: 15_000 })
   await expect.poll(async () => (await getBoard(leader)).marks.probe?.note, { timeout: 10_000 }).toBe(typed)
-  await expect(note.locator('.wn-saved')).toHaveText(/^Saved \d\d:\d\d$/)
+  await expect(note.locator('.wn-saved')).toHaveText(/^Saved \d{1,2}:\d\d [AP]M$/)
   await expect(note.locator('.wn-mark-note')).toHaveValue(typed)
   // Closing the Board saves what the page could not.
   blockMarks = true
@@ -795,7 +795,7 @@ test('a note docks Walnut\'s composer (voice included) through Dictate…', asyn
   await expect(dock).toHaveCount(0)
   await expect(field).toHaveValue(escaped, { timeout: 10_000 })
   await expect.poll(savedNote, { timeout: 10_000 }).toBe(escaped)
-  await expect(note.locator('.wn-saved')).toHaveText(/^Saved \d\d:\d\d$/, { timeout: 10_000 })
+  await expect(note.locator('.wn-saved')).toHaveText(/^Saved \d{1,2}:\d\d [AP]M$/, { timeout: 10_000 })
 
   step = 'typed-after'
   // ── The field and the box share one note: typing here after the box closed autosaves as before ──

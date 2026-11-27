@@ -5,12 +5,9 @@
  */
 import { useState } from 'react'
 import type { ImportStore, PublicState } from './store'
+import { dayWords, plural } from './words'
 
 export const NOTION_INTEGRATIONS_URL = 'https://www.notion.so/profile/integrations'
-
-function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n.toLocaleString()} ${n === 1 ? one : many}`
-}
 
 export function ConnectSteps({ store }: { store: ImportStore }) {
   const [secret, setSecret] = useState('')
@@ -153,5 +150,7 @@ export function ConnectedRow({ state, store }: { state: PublicState; store: Impo
 function checkedLine(at: string): string {
   const hours = (Date.now() - Date.parse(at)) / 3_600_000
   if (!(hours >= 1)) return ''
-  return hours < 24 ? ` Checked ${Math.floor(hours)} h ago.` : ` Checked on ${new Date(at).toLocaleDateString()}.`
+  if (hours < 24) return ` Checked ${plural(Math.floor(hours), 'hour')} ago.`
+  const day = dayWords(at)
+  return day === 'yesterday' ? ' Checked yesterday.' : ` Checked on ${day}.`
 }

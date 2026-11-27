@@ -8,7 +8,7 @@ import { ConnectedRow, ConnectSteps } from './connect'
 import { ImportPanel, organizingWords } from './import-panel'
 import { OrganizePanel } from './organize-panel'
 import type { ImportStore, PublicState } from './store'
-import { inNotes } from './words'
+import { inNotes, pointWords } from './words'
 import { folderScope, scopeIds } from './folder-scope'
 
 type Setter<T> = (next: T | ((prev: T) => T)) => void
@@ -82,7 +82,7 @@ function PastImports({ history, connected, lastFolder, navigate, store, running,
           <div className="ni-row" key={folder}>
             <div className="ni-row-copy">
               <span>{inNotes(folder)}</span>
-              <span className="ni-help">{byFolder.get(folder)!.stopped ? 'Stopped part way' : 'Last imported'} {new Date(byFolder.get(folder)!.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })} · {followsWords(folderScope(history, folder), rootTitles)}</span>
+              <span className="ni-help">{byFolder.get(folder)!.stopped ? 'Stopped part way' : 'Last imported'} {pointWords(byFolder.get(folder)!.at)} · {followsWords(folderScope(history, folder), rootTitles)}</span>
             </div>
             <div className="ni-row-actions">
               {connected && folder !== lastFolder && (

@@ -295,7 +295,7 @@ test('the Board tab: a lead only, live components, threads, re-render, marks and
   await expect(mark.locator('.wn-mark-note-toggle')).toHaveText('Add note')
   await mark.locator('.wn-mark-note-toggle').click()
   await mark.locator('.wn-mark-note').fill('Check the rollout tomorrow')
-  await expect(mark.locator('.wn-saved')).toHaveText(/^Saved \d\d:\d\d$/, { timeout: 10_000 })
+  await expect(mark.locator('.wn-saved')).toHaveText(/^Saved \d{1,2}:\d\d [AP]M$/, { timeout: 10_000 })
   await expect.poll(async () => (await getBoard(leader)).marks['area-a'], { timeout: 10_000 })
     .toEqual({ note: 'Check the rollout tomorrow', updated_at: expect.any(String) })
   await expect(mark.locator('.wn-mark-note-toggle')).toBeHidden()

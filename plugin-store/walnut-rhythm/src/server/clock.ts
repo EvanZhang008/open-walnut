@@ -16,8 +16,12 @@ export function localDayKey(now: number): string {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
-/** "10:05" (24-hour, local), for the sidebar's "Started 10:05, ends 10:30". */
+/**
+ * "10:05 AM" (local), for the sidebar's "Started 10:05 AM, ends 10:30 AM": the 12-hour clock with no
+ * leading zero that every other Walnut screen writes (web/src/utils/time.ts clockTime).
+ */
 export function clockTime(epochMs: number): string {
   const date = new Date(epochMs)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  const h = date.getHours()
+  return `${h % 12 || 12}:${String(date.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
 }

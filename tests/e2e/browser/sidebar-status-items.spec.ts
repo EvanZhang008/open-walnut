@@ -383,7 +383,7 @@ test('Rhythm: the off ring\'s panel picks the lengths and music, Start begins th
   await expect.poll(async () => (await rhythm.getAttribute('aria-label')) === `Focus · ${minutesLeft(endsAt)} min left`).toBe(true)
   await expect.poll(async () => (await rhythm.locator('svg text').textContent()) === String(minutesLeft(endsAt))).toBe(true)
   await rhythm.click()
-  await expect(popover(page).locator('.status-item-popover-detail')).toHaveText(/^Started \d\d:\d\d, ends \d\d:\d\d\. Walnut is quiet until it ends\.$/)
+  await expect(popover(page).locator('.status-item-popover-detail')).toHaveText(/^Started \d{1,2}:\d\d [AP]M, ends \d{1,2}:\d\d [AP]M\. Walnut is quiet until it ends\.$/)
   // While a block runs the panel says what plays and offers the music to switch, with its own Stop block.
   const runningPanel = popover(page).getByTestId('rhythm-running-panel')
   await expect(runningPanel).toBeVisible()
@@ -397,7 +397,7 @@ test('Rhythm: the off ring\'s panel picks the lengths and music, Start begins th
   await expect(popover(page)).toHaveCount(0)
   await expect(rhythm).toHaveAttribute('aria-label', 'Rhythm is off')
   await rhythm.click()
-  await expect(popover(page).locator('.status-item-popover-detail')).toHaveText(/^Last run \d\d:\d\d to \d\d:\d\d\. Nothing runs until you start a block\.$/)
+  await expect(popover(page).locator('.status-item-popover-detail')).toHaveText(/^Last run \d{1,2}:\d\d [AP]M to \d{1,2}:\d\d [AP]M\. Nothing runs until you start a block\.$/)
   await expect(popover(page).getByTestId('rhythm-start-focus-input')).toHaveValue('15')
   await expect(popover(page).getByTestId('rhythm-start-break-input')).toHaveValue('10')
   await page.keyboard.press('Escape')

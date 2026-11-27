@@ -60,7 +60,7 @@ describe('the block\'s goal', () => {
     const started = await actions.focusStart(runtime, { minutes: 25, goal: ' Write the release notes ' })
     expect(started.message).toContain('goal: Write the release notes')
     expect(started.state.focus.goal).toBe('Write the release notes')
-    expect(rhythmStatusItem(started.state)!.detail).toMatch(/^Goal: Write the release notes\. Started 09:00/)
+    expect(rhythmStatusItem(started.state)!.detail).toMatch(/^Goal: Write the release notes\. Started 9:00 AM/)
 
     const edited = await actions.focusGoal(runtime, { goal: 'Ship the notes' })
     expect(edited.state.focus.goal).toBe('Ship the notes')
