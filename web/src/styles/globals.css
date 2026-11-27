@@ -26805,6 +26805,11 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   color: var(--accent);
   font-size: var(--font-size-md);
 }
+/* Two links on a line of their own, not in a sentence: on a phone each takes a finger (C19: 44 px). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .create-plugin-links a { display: inline-flex; align-items: center; min-height: 44px; }
+  .app-shell-navigation .create-plugin-step > p.create-plugin-links { flex-wrap: wrap; column-gap: 16px; row-gap: 0; }
+}
 
 /* Direct child only: the Copy button inside the command bar must not inherit
    this offset (align-items:center would float it below the text). */

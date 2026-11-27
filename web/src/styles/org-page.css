@@ -526,3 +526,9 @@
 .org-locked-dock-label { writing-mode: vertical-rl; max-height: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-locked-dock-item:hover { background: var(--bg-hover); color: var(--fg); }
 .org-locked-dock-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* A row of the Org list takes a finger on a phone (C19: 44 px), as Home's and Mail's rows do; a
+   director's row was drawn 38 px (2026-11-27 audit at 390 wide). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .org-channel { min-height: 44px; }
+}

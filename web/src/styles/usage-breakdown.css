@@ -139,3 +139,9 @@
 .usage-ec-defs { margin: 6px 0 0; display: grid; gap: 6px; font-size: var(--font-size-sm); }
 .usage-ec-defs dt { font-weight: 600; color: var(--fg); }
 .usage-ec-defs dd { margin: 0; color: var(--fg-muted); }
+
+/* A task's name in the engines table opens it: on a phone it takes a finger (C19: 44 px), as a list
+   row does (2026-11-27 audit at 390 wide: 20 px). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .usage-ec-open { min-height: 44px; }
+}

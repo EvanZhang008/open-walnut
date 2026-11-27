@@ -531,3 +531,23 @@
 .apps-quick-pin { flex: none; margin-right: 8px; }
 /* The count belongs to the app: it follows the name in the flow, never floats at the tile's corner. */
 .apps-quick-open > .apps-card-badge { position: static; flex: none; border: none; }
+
+/* The idea and manual-step buttons on the Make an app card take a finger on a phone (C19: 44 px tall,
+   in hit testing) and keep their drawing, as a chip does (choice-controls.css): a centred ::before
+   44 px tall, and wrapped rows 44 px apart (2026-11-27 audit at 390 wide: 26 px). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .app-shell-navigation .apps-make-ideas { row-gap: 20px; }
+  /* A card's parts, each with its switch: a row 44 px tall, so two switches never share a tap. */
+  .app-shell-navigation .apps-card-part { min-height: 44px; }
+  .app-shell-navigation :is(.apps-make-ideas, .apps-make-manual-row) button { position: relative; }
+  .app-shell-navigation :is(.apps-make-ideas, .apps-make-manual-row) button::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: max(100%, 44px);
+    transform: translateY(-50%);
+    z-index: 1;
+  }
+}

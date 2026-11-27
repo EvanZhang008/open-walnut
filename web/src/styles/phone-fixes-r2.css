@@ -294,7 +294,7 @@
   /* N2-19: Routines on a phone. The bar already names the page, so the page's
      own title goes (routines-groups.css); every control takes a finger; badges read 12 px. */
   /* A box or a radio keeps its 16 px; its whole row is the finger's target (.cron-form-radio). */
-  .app-shell-navigation .routines-view :is(button, [role='button'], [role='switch'], input:not([type='hidden'], .wn-check, .wn-seg-input), select) {
+  .app-shell-navigation .routines-view :is(button, [role='button'], [role='switch'], input:not([type='hidden'], .wn-check, .wn-seg-input), select):not(.toggle-switch) {
     min-height: 44px;
     min-width: 44px;
     box-sizing: border-box;
@@ -351,4 +351,7 @@
      scroller. */
   .app-shell-navigation .app-content-area:has(> .memory-split-view) { padding-top: 0; }
   .app-shell.app-shell-navigation .memory-tree-panel > .memory-tree-filter.page-search-row { padding-left: 0; padding-right: 0; }
+  /* Memory's rows, folders and section heads take a finger (C19: 44 px), as Home's and Mail's rows do; they
+     were drawn 28 and 29 px (2026-11-27 audit at 390 wide). */
+  .app-shell-navigation :is(.memory-tree-item, .memory-tree-folder, .memory-tree-section-header) { min-height: 44px; }
 }

@@ -382,26 +382,12 @@
 
 /* N20: a Settings pane on a phone. The top bar already names the pane, so the
    pane's own heading stays for screen readers only (it is a .page-name: page-head.css),
-   and keeps its focus target; its tile goes with it. Switches take the iOS size, checkboxes a 22 px box whose label row
+   and keeps its focus target; its tile goes with it. Switches take the iOS size (choice-controls.css, for
+   every switch on a phone), checkboxes a 22 px box whose label row
    (the whole row toggles it) is at least 44 px tall. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane-header .settings-pane-tile {
     display: none;
-  }
-  .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch {
-    width: 51px;
-    height: 31px;
-    border-radius: var(--radius-lg);
-  }
-  .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch .toggle-thumb {
-    width: 27px;
-    height: 27px;
-  }
-  .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch.toggle-on .toggle-thumb {
-    transform: translateX(20px);
-  }
-  .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch::before {
-    inset: -7px -2px;
   }
   .app-shell-navigation .settings-layout[data-phone-settings] .settings-row.settings-checkbox-row {
     min-height: 44px;

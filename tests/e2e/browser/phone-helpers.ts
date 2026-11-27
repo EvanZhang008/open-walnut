@@ -24,8 +24,10 @@ export const TARGET_SELECTOR = 'button, a[href], [role=button], input, select, t
 // Message text renders under .markdown-body: its inline links are exempt too.
 const EXEMPT_SELECTOR = '.markdown a, .markdown-body a, .note-body a'
 
-export async function findSmallTargets(page: Page, root = 'body'): Promise<SmallTarget[]> {
-  return page.evaluate(({ sel, exempt, rootSel }) => {
+/** `covered`: also report a target whose centre another target's ::before reaches over from outside
+ *  its own box (the neighbour takes its tap); by default such a target is skipped as on another layer. */
+export async function findSmallTargets(page: Page, root = 'body', selector = TARGET_SELECTOR, opts: { covered?: boolean } = {}): Promise<SmallTarget[]> {
+  return page.evaluate(({ sel, exempt, rootSel, covered }) => {
     const out: SmallTarget[] = []
     const scope = document.querySelector(rootSel) ?? document.body
     const vw = window.innerWidth
@@ -43,7 +45,26 @@ export async function findSmallTargets(page: Page, root = 'body'): Promise<Small
       // Covered by another layer at its center: not reachable, so not a target now.
       const atCenter = document.elementFromPoint(Math.min(vw - 1, Math.max(0, cx)), Math.min(vh - 1, Math.max(0, cy)))
       const wrapAt = el instanceof HTMLInputElement ? el.closest('label') : null
-      if (!atCenter || !(el === atCenter || el.contains(atCenter) || atCenter.contains(el) || (!!wrapAt && wrapAt.contains(atCenter)))) continue
+      if (!atCenter || !(el === atCenter || el.contains(atCenter) || atCenter.contains(el) || (!!wrapAt && wrapAt.contains(atCenter)))) {
+        const by = atCenter?.closest(sel)
+        // Only a target the coverer reaches past its own box for (its ::before): one drawn over the
+        // centre is a layer above (a sticky head the list scrolls under), not a stolen tap.
+        const bb = by?.getBoundingClientRect()
+        const outset = !!bb && (cx < bb.left || cx > bb.right || cy < bb.top || cy > bb.bottom)
+        // A centre its own scroller has scrolled out of sight is not on screen to be tapped.
+        let shown = true
+        for (let a = el.parentElement; a && shown; a = a.parentElement) {
+          if (getComputedStyle(a).overflowY === 'visible') continue
+          const ab = a.getBoundingClientRect()
+          shown = cy >= ab.top && cy <= ab.bottom && cx >= ab.left && cx <= ab.right
+        }
+        if (covered && by && outset && shown && by !== el && !by.contains(el) && !by.closest('[aria-hidden="true"], [inert], dialog, [role=dialog], [role=menu]')) {
+          const label = (el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 40)
+          const byLabel = (by.getAttribute('aria-label') || by.textContent || '').trim().slice(0, 30)
+          out.push({ tag: el.tagName.toLowerCase() + ' covered by ' + by.tagName.toLowerCase(), label: `${label}" by "${byLabel}`, width: Math.round(r.width), height: Math.round(r.height), x: Math.round(r.left), y: Math.round(r.top) })
+        }
+        continue
+      }
       if (r.width >= 43.5 && r.height >= 43.5) continue
       const hits = (x: number, y: number) => {
         if (x < 0 || y < 0 || x >= vw || y >= vh) return true // off screen: not a defect of the box
@@ -61,7 +82,7 @@ export async function findSmallTargets(page: Page, root = 'body'): Promise<Small
       out.push({ tag: el.tagName.toLowerCase() + (el.className && typeof el.className === 'string' ? `.${el.className.split(' ')[0]}` : ''), label, width: Math.round(r.width), height: Math.round(r.height), x: Math.round(r.left), y: Math.round(r.top) })
     }
     return out
-  }, { sel: TARGET_SELECTOR, exempt: EXEMPT_SELECTOR, rootSel: root })
+  }, { sel: selector, exempt: EXEMPT_SELECTOR, rootSel: root, covered: !!opts.covered })
 }
 
 export interface SmallText { text: string; size: number; tag: string }

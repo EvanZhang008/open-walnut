@@ -151,15 +151,6 @@
     font-size: var(--font-size-lg);
     line-height: 20px;
   }
-
-  /* A 38x22 switch, a 46x46 finger target. z-index: the target reaches past
-     the row's 8 px padding, and the next row (positioned, later) would take it. */
-  .app-shell-navigation .settings-layout[data-phone-settings] .toggle-switch.settings-switch::before {
-    content: '';
-    position: absolute;
-    inset: -12px -4px;
-    z-index: 1;
-  }
 }
 
 /* Under 480 px a row stacks: label and help above, the control below at full width. */

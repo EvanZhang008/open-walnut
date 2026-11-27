@@ -739,8 +739,7 @@
   .app-shell-navigation .cal-toolbar .cal-nav-btns button,
   .app-shell-navigation .cal-toolbar .cal-today-btn,
   .app-shell-navigation .cal-toolbar .cal-rail-toggle,
-  .app-shell-navigation .cal-toolbar .cal-cals-btn,
-  .app-shell-navigation .cal-toolbar .cal-view-btn {
+  .app-shell-navigation .cal-toolbar .cal-cals-btn {
     min-width: 44px;
     min-height: 44px;
   }

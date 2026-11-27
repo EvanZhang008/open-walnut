@@ -1031,6 +1031,8 @@ fieldset:disabled .wn-seg-item {
   }
   .app-shell-navigation .wn-chip {
     position: relative;
+    min-width: 44px; /* a short word ("All") is 44 wide for real, as a key is (buttons.css) */
+    justify-content: center;
   }
   .app-shell-navigation .wn-chip::before {
     content: '';
@@ -1041,5 +1043,68 @@ fieldset:disabled .wn-seg-item {
     height: max(100%, 44px);
     transform: translateY(-50%);
     z-index: 1; /* above a neighbouring row that starts inside the 44 px */
+  }
+}
+
+/* Tabs, segments, disclosures and switches on a phone take a finger too (C19: 44 px each way), each
+   at its one definition here, not screen by screen (2026-11-27 audit at 390 wide: the Time page's
+   tabs took a 24 px tap and its segments 22, the Org list's "2 directors" lines 22, an Apps card's
+   switch 20). A tab and a segment stand in a strip that scrolls sideways and so clips anything drawn
+   past it: they are drawn 44 px tall, as Home's tabs and the Calendar's Day / Week / Month already
+   were (their own rules went with this one). A disclosure line in a list (and a <summary>) is a row, 44 px tall; the
+   chevron alone is a row's own fold and keeps its size (an outset took the tap meant for the line
+   under it, Home's "1 Needs you"); a disclosure inside a line of text is a link in a sentence and
+   keeps the line's height. A switch takes
+   the iOS size, 51x31, with a target 7 px past it each way (Settings and Routines had each drawn
+   it so on their own); a small one keeps its 28x16 and a 44x44 target; one drawn only as a picture
+   (aria-hidden, a menu row's) takes none, the row is the target. Guard: tests/web/phone-finger-targets.test.ts and
+   tests/e2e/browser/phone-finger-targets.spec.ts. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  :is(.app-shell-navigation, .is-phone-layer) .wn-tabs:not(.wn-tabs-tiles) {
+    min-height: 44px;
+  }
+  :is(.app-shell-navigation, .is-phone-layer) .wn-tabs:not(.wn-tabs-tiles) > .wn-tab,
+  :is(.app-shell-navigation, .is-phone-layer) .wn-seg-item {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+  :is(.app-shell-navigation, .is-phone-layer) .wn-disclosure:not(.wn-disclosure-inline, .wn-disclosure-icon) {
+    min-height: 44px;
+  }
+  /* A <summary> is a disclosure line too (a fold in a card, a settings "How this is counted"): a
+     row 44 px tall, its words in the middle. Its flex at zero specificity, so a summary laid out by
+     its own rule keeps that; never in a reply's words, where a summary is the model's HTML and a flex
+     line would drop the spaces between its inline words. */
+  :where(.app-shell-navigation, .is-phone-layer) :where(summary:not(.markdown-body summary, .markdown summary)) {
+    display: flex;
+    align-items: center;
+  }
+  :is(.app-shell-navigation, .is-phone-layer) summary:not(.markdown-body summary, .markdown summary) {
+    min-height: 44px;
+  }
+  :is(.app-shell-navigation, .is-phone-layer) .toggle-switch.settings-switch:not(.wn-switch-sm) {
+    min-width: 0;
+    min-height: 0;
+    width: 51px;
+    height: 31px;
+    border-radius: var(--radius-lg);
+  }
+  :is(.app-shell-navigation, .is-phone-layer) .toggle-switch.settings-switch:not(.wn-switch-sm) .toggle-thumb {
+    width: 27px;
+    height: 27px;
+  }
+  :is(.app-shell-navigation, .is-phone-layer) .toggle-switch.settings-switch:not(.wn-switch-sm)[aria-checked='true'] .toggle-thumb {
+    transform: translateX(20px);
+  }
+  :is(.app-shell-navigation, .is-phone-layer) .toggle-switch.settings-switch:not([aria-hidden='true'])::before {
+    content: '';
+    position: absolute;
+    inset: -7px -2px;
+    z-index: 1;
+  }
+  /* The small one (a dense row, a menu's) keeps its 28x16 drawing; its target is 44x44 round it. */
+  :is(.app-shell-navigation, .is-phone-layer) .toggle-switch.settings-switch.wn-switch-sm:not([aria-hidden='true'])::before {
+    inset: -14px -8px;
   }
 }

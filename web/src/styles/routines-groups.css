@@ -374,28 +374,8 @@
 }
 
 /* On a phone every control takes a finger (phone-fixes-r2.css N2-19 sizes them);
-   the switch keeps its own shape and gets a larger hit area instead. */
+   the switch keeps its own shape and its larger hit area (choice-controls.css). */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .app-shell-navigation .routines-view .toggle-switch.settings-switch {
-    min-width: 0;
-    min-height: 0;
-    width: 51px;
-    height: 31px;
-    border-radius: var(--radius-lg);
-  }
-  .app-shell-navigation .routines-view .toggle-switch.settings-switch .toggle-thumb {
-    width: 27px;
-    height: 27px;
-  }
-  .app-shell-navigation .routines-view .toggle-switch.settings-switch.toggle-on .toggle-thumb {
-    transform: translateX(20px);
-  }
-  .app-shell-navigation .routines-view .toggle-switch.settings-switch::before {
-    content: '';
-    position: absolute;
-    inset: -7px -2px;
-    z-index: 1;
-  }
   .app-shell-navigation .routines-view :is(.routine-row-timing, .routine-group-failing, .routine-row-error) {
     font-size: var(--font-size-md);
   }

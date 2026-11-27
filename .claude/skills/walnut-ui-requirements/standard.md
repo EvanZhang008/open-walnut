@@ -32,6 +32,16 @@ outlined pin. Both used the same `.btn` class, but each card restyled it in its 
    highlight blocks, at most one main action per card, the rest quiet.
 6. **Match the neighbours.** Before you add a view, open the views beside it; the same kind of
    thing looks the same in both.
+7. **A finger on a phone.** At a phone's width every control takes a 44 px tap each way, from the
+   rule at its component's one definition, never a screen's own: a key keeps its drawing and gets a
+   centred 44 px `::before` and a 44 px width (`buttons.css`, as the phone app's keys keep their
+   drawing); a tab and a segment are drawn 44 px tall, as their strip scrolls and clips an outset;
+   a disclosure line, a list row and a chip row are 44 px apart; a switch is 51x31 with a 45 px
+   target (`choice-controls.css`). A key draws no `::before` of its own (the outset takes it).
+   Guards: `tests/web/phone-finger-targets.test.ts` and
+   `tests/e2e/browser/phone-finger-targets.spec.ts` (every routed and plugin page, every screen
+   down it). Source: the audit at 390 px on 2026-11-27, when 63 of 210 taps on the first screens
+   were 36 px or less on Org, Memory, Agents, Commands, Apps and the Time page.
 
 ## The button family
 

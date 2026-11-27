@@ -74,8 +74,10 @@
     z-index: 9201;
   }
 
+  /* In the bar's row, not fixed as on a desktop; relative (never static), so its finger target
+     (buttons.css) stays on the key and never spreads over the bar. */
   .app-shell-navigation .phone-topbar .sidebar-toggle {
-    position: static;
+    position: relative;
     display: inline-flex;
   }
 

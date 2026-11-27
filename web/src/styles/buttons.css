@@ -262,3 +262,38 @@
 .btn-reserve::after { grid-area: 1 / 1; text-align: center; }
 .btn-reserve::before { content: attr(data-r1); visibility: hidden; }
 .btn-reserve::after { content: attr(data-r2); visibility: hidden; }
+
+/* ── On a phone every key takes a finger (C19: 44 px each way, in hit testing) and keeps its drawing,
+   as the phone app's keys do (standard.md, "Phone keys"): a centred ::before 44 px tall is part of
+   the key for hit testing, so a 28 px key stays 28 px and its row does not grow. A word key narrower
+   than 44 px is 44 wide for real, so keys side by side never share a probe; an icon key keeps its
+   square, and its ::before is 44 px wide too (the walk in phone-finger-targets.spec.ts fails where
+   two of them stand close enough to take each other's tap). One rule here, at the
+   family's definition, not screen by screen (2026-11-27 audit at 390 wide: the Org page's keys, the
+   Agents and Commands cards' menu keys and the Time page's keys took a 22 to 26 px tap). A key that
+   draws its own ::before keeps it (an ask card's option row, whose ::before is its detail line, a
+   row taller than 44 px); tests/web/phone-finger-targets.test.ts fails on a new one. ── */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  /* Zero specificity: a key its view places (absolute, sticky) keeps its place; it is still a box
+     the ::before can stand in. */
+  :where(.app-shell-navigation, .is-phone-layer) :where(.btn:not(.btn-link)) { position: relative; }
+  :is(.app-shell-navigation, .is-phone-layer) .btn:not(.btn-link, .btn-icon) { min-width: 44px; }
+  :is(.app-shell-navigation, .is-phone-layer) .btn:not(.btn-link, [data-detail])::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: max(100%, 44px);
+    transform: translateY(-50%);
+    z-index: 1; /* above a neighbouring row that starts inside the 44 px */
+  }
+  /* An icon key keeps its square too (its on look and its press are a circle, never a capsule),
+     and its target is 44 px wide as well as tall, centred on it. */
+  :is(.app-shell-navigation, .is-phone-layer) .btn-icon:not([data-detail])::before {
+    left: 50%;
+    right: auto;
+    width: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+}
