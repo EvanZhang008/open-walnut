@@ -80,7 +80,7 @@ test.describe('the panel is a dialog for the keyboard', () => {
     await expect.poll(() => page.evaluate(() => document.activeElement?.classList.contains('sidebar-notification-btn'))).toBe(true)
   })
 
-  test('NK-2: in All, Tab goes Close, then the rail from Needs Action to All, then the Claude Code notice, then the first problem row\'s control, and past the problems onto the feed', async ({ page, browserName }) => {
+  test('NK-2: in All, Tab goes Close, then the rail from Needs Action to All, then the Claude Code notice, then the Remote hosts card\'s x and its first row\'s control, and past the problems onto the feed', async ({ page, browserName }) => {
     await bpSetup(page, {
       // dns: a kind the person must clear, so Net box has a row in All (an unreachable host would not).
       hosts: [failed('netbox', 'Net box', 'dns'), signedOut('signbox', 'Sign box')], local: 'sign-in',
@@ -108,6 +108,9 @@ test.describe('the panel is a dialog for the keyboard', () => {
     expect(await activeIn(page, '[data-testid="nfc-local-claude"]'), `after All focus is on: ${await activeName(page)}`).toBe(true)
     expect(await activeName(page)).toBe(local.first)
     for (let i = 0; i < local.count + 2 && await activeIn(page, '[data-testid="nfc-local-claude"]'); i++) await page.keyboard.press(TAB(browserName))
+    // Then the Remote hosts card's own x at its title row's end (every card has one), then its first row.
+    await expect(page.getByTestId('nfc-problem-hosts-close')).toBeFocused()
+    await page.keyboard.press(TAB(browserName))
     await expect(problemRow(page, 'netbox').getByTestId('hpb-retry')).toBeFocused()
     for (let i = 0; i < 40 && await activeIn(page, '[data-testid="nfc-problems"]'); i++) await page.keyboard.press(TAB(browserName))
     // Since 9b60109d6c a card with nothing to open is no button and no stop of its own (its words

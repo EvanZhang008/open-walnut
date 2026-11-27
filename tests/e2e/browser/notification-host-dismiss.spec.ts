@@ -103,7 +103,10 @@ test.describe('the row x in All\'s problems', () => {
     }
     const localX = panelLocalCard(page).locator('.ab-local-x')
     await expect(localX).toBeVisible()
-    expect(await localX.getAttribute('title')).toBe(await localX.getAttribute('aria-label'))
+    // The one x (NoticeClose) says what it does to a screen reader and draws no hover title of its
+    // own (the notice's words keep the only tooltip), so no tooltip can disagree with its label.
+    expect(await localX.getAttribute('aria-label')).toBe('Dismiss Claude Code notice')
+    expect(await localX.getAttribute('title')).toBeNull()
     expect(boxGap((await localX.boundingBox())!, close)).toBeGreaterThanOrEqual(24)
   })
 
