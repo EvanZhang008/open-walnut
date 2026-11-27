@@ -57,11 +57,16 @@ export const isClientId = (queueId: string): boolean => queueId.startsWith('temp
 type RowVerdict =
   | { kind: 'waiting'; heldReason?: string; afterTurn?: boolean }
   | { kind: 'sent' }
-  | { kind: 'parked'; reason?: string; waitsFor?: string };
+  | { kind: 'parked'; reason?: string; waitsFor?: string; autoRetryAt?: string };
 
 /** What the server's row says of the message. */
 export function rowVerdict(row: QueueRowWire): RowVerdict {
-  if (row.status === 'parked') return { kind: 'parked', ...(row.parkedReason ? { reason: row.parkedReason } : {}), ...(row.waitsFor ? { waitsFor: row.waitsFor } : {}) };
+  if (row.status === 'parked') {
+    return {
+      kind: 'parked', ...(row.parkedReason ? { reason: row.parkedReason } : {}), ...(row.waitsFor ? { waitsFor: row.waitsFor } : {}),
+      ...(row.autoRetryAt ? { autoRetryAt: row.autoRetryAt } : {}),
+    };
+  }
   if (row.delivered === true || row.stage === 'taken' || row.stage === 'written') return { kind: 'sent' };
   const held = (row.status === 'processing' || row.status === 'pending') && !!row.heldReason;
   // The server's stage is its word: `waiting` holds a processing row it cannot vouch for as
@@ -71,7 +76,7 @@ export function rowVerdict(row: QueueRowWire): RowVerdict {
 }
 
 function withoutWaitFacts(m: OptimisticMessage): OptimisticMessage {
-  const { heldReason: _h, afterTurn: _a, failedError: _f, parked: _p, waitsFor: _w, ...rest } = m;
+  const { heldReason: _h, afterTurn: _a, failedError: _f, parked: _p, waitsFor: _w, autoRetryAt: _r, ...rest } = m;
   return rest as OptimisticMessage;
 }
 
@@ -82,18 +87,20 @@ function applyVerdict(m: OptimisticMessage, v: RowVerdict, touched: boolean): Op
     return { ...withoutWaitFacts(m), status: 'delivered' };
   }
   if (v.kind === 'parked') {
-    if (touched || (m.status === 'failed' && m.parked && m.failedError === v.reason && m.waitsFor === v.waitsFor)) return m;
+    if (touched || (m.status === 'failed' && m.parked && m.failedError === v.reason && m.waitsFor === v.waitsFor && m.autoRetryAt === v.autoRetryAt)) return m;
     // A launch prompt the server parked is no launch prompt any more: it reads as the
     // message that was not sent, with its Retry (parked-bubbles.ts).
     const { launch: _launch, ...base } = withoutWaitFacts(m);
     return {
       ...base, status: 'failed', parked: true, serverUndelivered: true,
       ...(v.reason ? { failedError: v.reason } : {}), ...(v.waitsFor ? { waitsFor: v.waitsFor } : {}),
+      ...(v.autoRetryAt ? { autoRetryAt: v.autoRetryAt } : {}),
     } as OptimisticMessage;
   }
-  // Waiting. A failed bubble keeps its Retry; a Delivered one reads Queued again
-  // unless something moved it after the read began.
-  if (m.status === 'failed') return m;
+  // Waiting. A failed bubble keeps its Retry, except one the server had parked: its row is back in
+  // line (the clock tried it again, or a Retry elsewhere), so it reads Queued, not "Not delivered".
+  // A Delivered one reads Queued again unless something moved it after the read began.
+  if (m.status === 'failed' && (!m.parked || touched)) return m;
   if (m.status === 'delivered' && touched) return m;
   if (m.status === 'received' && m.heldReason === v.heldReason && !!m.afterTurn === !!v.afterTurn) return m;
   const { leftQueueAt: _l, ...base } = withoutWaitFacts(m);

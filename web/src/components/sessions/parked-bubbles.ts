@@ -12,6 +12,7 @@
  *     timeline, never as the delivered head of the conversation.
  * Pure, so tests/web pin it (parked-bubbles.test.ts).
  */
+import { sendFailureWords } from '@/utils/operation-error-words';
 
 export interface ParkableBubble {
   queueId: string;
@@ -24,6 +25,7 @@ export interface ParkableBubble {
   waitsForConnection?: boolean;
   autoTries?: number;
   heldReason?: string;
+  autoRetryAt?: string;
 }
 
 /** The server reported these rows not delivered (`parked`: set aside; `waitsFor`: until the agent can run). */
@@ -34,7 +36,8 @@ export function markBubblesFailed<T extends ParkableBubble>(
   return prev.map((m) => {
     if (!idSet.has(m.queueId)) return m;
     // The server answered: no longer a send waiting for the connection (hooks/send-auto-retry.ts).
-    const { launch: _launch, waitsForConnection: _conn, autoTries: _tries, ...rest } = m;
+    // A next try from an earlier park is not this park's: the next queue read says it again or not.
+    const { launch: _launch, waitsForConnection: _conn, autoTries: _tries, autoRetryAt: _retry, ...rest } = m;
     return {
       ...rest, status: 'failed' as const, failedError: error, serverUndelivered: true,
       ...(info?.parked ? { parked: true } : {}),
@@ -46,4 +49,37 @@ export function markBubblesFailed<T extends ParkableBubble>(
 /** Whether a bubble heads the conversation as its launch prompt: a delivered one, never a refused one. */
 export function headsAsLaunch(m: ParkableBubble): boolean {
   return !!m.launch && m.status !== 'failed';
+}
+
+/**
+ * A parked row's words: one the server's clock tries again says so and when (its `autoRetryAt`);
+ * any other waits for Retry. Never "Auto-retry stopped" (2026-11-22, the user: "why not keep
+ * retrying it"): whether it is tried again is the server's word, not this panel's guess.
+ */
+export function parkedWords(reason: string | undefined, autoRetryAt: string | undefined): string {
+  const why = reason ? ` (${sendFailureWords(reason)})` : '';
+  if (autoRetryAt) return `Not delivered yet: Walnut tries it again by itself. ${nextTryLabel(autoRetryAt)}${why}`;
+  return `Not delivered${why}. Retry sends it again.`;
+}
+
+/** When a row is tried again, in the reader's own clock. */
+export function nextTryLabel(iso: string): string {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return '';
+  if (at <= Date.now()) return 'Trying again now.';
+  return `Next try at ${new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: at - Date.now() < 60_000 ? '2-digit' : undefined })}.`;
+}
+
+/**
+ * The earliest time (epoch ms) the server's clock tries one of these parked bubbles again, or null:
+ * the panel reads the queue again from then (useQueueSync), so the badge moves on by itself.
+ */
+export function nextAutoRetryAt(msgs: readonly ParkableBubble[]): number | null {
+  let out: number | null = null;
+  for (const m of msgs) {
+    if (m.status !== 'failed' || !m.parked || !m.autoRetryAt) continue;
+    const at = Date.parse(m.autoRetryAt);
+    if (Number.isFinite(at) && (out === null || at < out)) out = at;
+  }
+  return out;
 }

@@ -47,7 +47,7 @@ import { COMPACTED_MESSAGE, COMPACTING_MESSAGE } from '@open-walnut/compaction-n
 import { useForegroundActive } from '@/stores/background-agents-store';
 import { streamAgentSettled, knownAgentFromStream, type LiveLane } from './LaneTimeline';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
-import { headsAsLaunch } from './parked-bubbles';
+import { headsAsLaunch, nextTryLabel, parkedWords } from './parked-bubbles';
 import { AgentWaitNote } from './AgentWaitNote';
 import { EngineSignInNote, parseNotSignedIn } from './EngineSignInNote';
 import { HistoryGapDivider } from './HistoryGapDivider';
@@ -321,6 +321,8 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   heldReason?: string;
   /** When Walnut sends a held row again by itself (get-queue's heldRetryAt), so a reload keeps the next try. */
   heldRetryAt?: string;
+  /** A parked row Walnut's clock tries again by itself: when (get-queue's autoRetryAt). */
+  autoRetryAt?: string;
   /** Who sent a row this tab did not (the queue's `sentBy`, from the send's
    *  source): an agent's card folds on arrival (queuedFoldRuns). */
   sentBy?: 'person' | 'agent';
@@ -684,12 +686,6 @@ function heldCountPhrase(rows: ReadonlyArray<{ queueId: string; heldReason?: str
   return n ? ` · ${n} held` : '';
 }
 /** "Next try at 5:41 PM." (or "in a moment" once that time has passed). */
-function nextTryLabel(iso: string): string {
-  const at = Date.parse(iso);
-  if (!Number.isFinite(at)) return '';
-  if (at <= Date.now()) return 'Trying again now.';
-  return `Next try at ${new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: at - Date.now() < 60_000 ? '2-digit' : undefined })}.`;
-}
 /** How long after real input inside the transcript its growth still counts as the
  *  reader's own doing (see the follower below). A click's layout lands within a
  *  frame or two, so this only has to cover a gesture, not a thought. */
@@ -6069,7 +6065,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             ? 'Not delivered yet: it goes out once the session continues in a new folder (the notice above).'
             : `Not delivered: this session's folder is gone${goneFolderOf(m.failedError) ? ` (${goneFolderOf(m.failedError)})` : ''}. The message is kept and goes out once the session continues in a new folder.`
           : m.parked
-            ? `Not delivered. Auto-retry stopped${m.failedError ? ` (${sendFailureWords(m.failedError)})` : ''}`
+            ? parkedWords(m.failedError, m.autoRetryAt)
             : `Send failed: ${sendFailureWords(m.failedError)}`}
       </div>
       <div className="session-msg-queued-actions">

@@ -146,6 +146,8 @@ export interface QueueRowWire {
   parkedReason?: string;
   /** Parked only until the agent can run on the host (QueuedMessage.waitsFor): it goes out by itself. */
   waitsFor?: string;
+  /** A parked row Walnut tries again by itself: when (server: sessions/delivery-retry.ts retryTimesOf). */
+  autoRetryAt?: string;
   userUuid?: string;
   heldReason?: string;
   /** When the held row is tried again (a host that cannot be reached: its next re-dial). */
@@ -178,9 +180,8 @@ export function queueRowBubble(m: QueueRowWire, draftOrigin?: DraftOrigin): Opti
   // A queued row also holds any notice Walnut put in front of the words
   // (history-walnut-riders.ts): history shows those as their own card.
   const { text: display, dedupText } = queuedRowText(m.message);
-  // 'parked' = the server stopped auto-retrying this row (permanent failure, e.g. the
-  // session's working folder was deleted). Reuse the 'failed' presentation so it keeps
-  // Retry + Discard instead of looking like an ordinary "Queued" message on its way.
+  // 'parked' = the server set this row aside (not delivered). It keeps Retry + Discard; one the
+  // server's clock tries again by itself says when (`autoRetryAt`), never that retrying stopped.
   // One reading of a row for a reload and for every later queue read (queue-reconcile.ts rowVerdict):
   // a row held back or whose stage is `waiting` (a cold resume, a line mid-delivery) was never
   // written and shows Queued, with its reason; a written one shows Delivered.
@@ -194,7 +195,7 @@ export function queueRowBubble(m: QueueRowWire, draftOrigin?: DraftOrigin): Opti
     timestamp: m.enqueuedAt ?? new Date().toISOString(),
     queueId: m.id,
     status: (verdict.kind === 'sent' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
-    ...(parked ? { parked: true, serverUndelivered: true, failedError: m.parkedReason, ...(m.waitsFor ? { waitsFor: m.waitsFor } : {}) } : {}),
+    ...(parked ? { parked: true, serverUndelivered: true, failedError: m.parkedReason, ...(m.waitsFor ? { waitsFor: m.waitsFor } : {}), ...(m.autoRetryAt ? { autoRetryAt: m.autoRetryAt } : {}) } : {}),
     ...(held ? { heldReason: m.heldReason, ...(m.heldRetryAt ? { heldRetryAt: m.heldRetryAt } : {}) } : {}),
     ...(m.afterTurn && !parked ? { afterTurn: true } : {}),
     ...(dedupText !== undefined ? { dedupText } : {}),

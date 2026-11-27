@@ -22,6 +22,7 @@ import { log } from '@/utils/log';
 import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory';
 import { isClientId, reconcileWithQueue } from './queue-reconcile';
 import type { QueueRowWire } from './useSessionSend';
+import { nextAutoRetryAt } from '@/components/sessions/parked-bubbles';
 
 /** How often a panel with a waiting bubble re-reads the queue. */
 export const QUEUE_POLL_MS = 10_000;
@@ -174,6 +175,17 @@ export function useQueueSync(
     }, QUEUE_POLL_MS);
     return () => clearInterval(id);
   }, [waiting, request]);
+
+  // A parked bubble the server's clock tries again: read again from its time (then every poll until
+  // the row moves), so "Next try at" turns into Queued or a new time by itself.
+  const retryAt = sessionId ? nextAutoRetryAt(msgs) : null;
+  useEffect(() => {
+    if (retryAt === null) return;
+    let poll: ReturnType<typeof setInterval> | null = null;
+    const due = () => { if (document.visibilityState === 'visible') request('auto-retry due'); };
+    const start = setTimeout(() => { due(); poll = setInterval(due, QUEUE_POLL_MS); }, Math.max(retryAt - Date.now(), 0));
+    return () => { clearTimeout(start); if (poll) clearInterval(poll); };
+  }, [retryAt, request]);
 
   const retiredIds = useCallback(() => retired.current, []);
   return { state, request, touch, retire, hold, release, retiredIds };

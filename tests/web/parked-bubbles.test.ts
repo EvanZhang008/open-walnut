@@ -13,9 +13,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { headsAsLaunch, markBubblesFailed, type ParkableBubble } from '@/components/sessions/parked-bubbles';
+import { headsAsLaunch, markBubblesFailed, nextAutoRetryAt, parkedWords, type ParkableBubble } from '@/components/sessions/parked-bubbles';
 import { launchBubbleOf, queueRowBubble, type QueueRowWire } from '@/hooks/useSessionSend';
-import { rehydrateFromQueue } from '@/hooks/queue-reconcile';
+import { reconcileWithQueue, rehydrateFromQueue } from '@/hooks/queue-reconcile';
 import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory';
 import { dedupeOptimisticMessages } from '@/components/sessions/optimistic-dedup';
 
@@ -100,5 +100,52 @@ describe('the waiting note reads the live state of this computer', () => {
     expect(agentWaitLine(false, 'sign-in', missing)).toBe(AGENT_SIGN_IN_LINE);
     expect(agentWaitLine(true, undefined, missing)).toBe(AGENT_READY_SENDING);
     expect(agentWaitLine(false, undefined, missing)).toBe(missing);
+  });
+});
+
+describe('a parked row says whether Walnut tries it again (pain pn-79fe0af3)', () => {
+  const reason = 'Not acknowledged: Claude Code read past this message and Walnut could not write it again.';
+  it('with the server\'s next try: tried again by itself, and when; without: Retry, never "stopped"', () => {
+    const at = new Date(Date.now() + 10 * 60_000).toISOString();
+    expect(parkedWords(reason, at)).toMatch(/^Not delivered yet: Walnut tries it again by itself\. Next try at /);
+    expect(parkedWords(reason, undefined)).toMatch(/^Not delivered \(.+\)\. Retry sends it again\.$/);
+    for (const w of [parkedWords(reason, at), parkedWords(reason, undefined), parkedWords(undefined, undefined)]) expect(w).not.toMatch(/stopped/i);
+  });
+
+  it('a reload and every later queue read carry the server\'s next try onto the bubble', () => {
+    const at = new Date(Date.now() + 60 * 60_000).toISOString();
+    const row: QueueRowWire = { id: 'qm-parked-1', message: 'news', status: 'parked', parkedReason: reason, autoRetryAt: at };
+    expect(queueRowBubble(row)).toMatchObject({ status: 'failed', parked: true, autoRetryAt: at });
+    const shown = queueRowBubble({ ...row, autoRetryAt: undefined })!;
+    const after = rehydrateFromQueue([shown], [row], null, { retired: new Set(), now: Date.now(), toBubble: (r) => queueRowBubble(r) });
+    expect(after).toEqual([expect.objectContaining({ queueId: 'qm-parked-1', autoRetryAt: at })]);
+  });
+
+  it('a new park forgets the last one\'s next try; a row back in line reads Queued, not Not delivered', () => {
+    const at = new Date(Date.now() + 60_000).toISOString();
+    const shown = queueRowBubble({ id: 'qm-parked-2', message: 'news', status: 'parked', parkedReason: reason, autoRetryAt: at })!;
+    // Parked again for a reason only a person fixes: no promise until the queue read says one.
+    const [again] = markBubblesFailed([shown], ['qm-parked-2'], 'No active session found', { parked: true });
+    expect(again.autoRetryAt).toBeUndefined();
+    // The clock put it back in line: Queued, without the park's words.
+    const ctx = { known: new Set(['qm-parked-2']), touched: new Set<string>(), retired: new Set<string>(), now: Date.now(), toBubble: (r: QueueRowWire) => queueRowBubble(r) };
+    const [inLine] = reconcileWithQueue([shown], [{ id: 'qm-parked-2', message: 'news', status: 'pending' }], ctx);
+    expect(inLine).toMatchObject({ status: 'received' });
+    expect(inLine.parked).toBeUndefined();
+    expect(inLine.autoRetryAt).toBeUndefined();
+    // A send failure of the panel's own keeps its Retry while its row waits.
+    const own = { ...shown, parked: undefined, autoRetryAt: undefined } as OptimisticMessage;
+    expect(reconcileWithQueue([own], [{ id: 'qm-parked-2', message: 'news', status: 'pending' }], ctx)[0]).toBe(own);
+  });
+
+  it('the panel reads the queue again from the earliest next try', () => {
+    const soon = new Date(Date.now() + 60_000).toISOString();
+    const later = new Date(Date.now() + 3_600_000).toISOString();
+    const b = (id: string, autoRetryAt?: string): ParkableBubble => ({ queueId: id, status: 'failed', parked: true, ...(autoRetryAt ? { autoRetryAt } : {}) });
+    expect(nextAutoRetryAt([b('a', later), b('b', soon), b('c')])).toBe(Date.parse(soon));
+    expect(nextAutoRetryAt([b('c'), { queueId: 'd', status: 'pending', autoRetryAt: soon }])).toBeNull();
+    const hook = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/hooks/useQueueSync.ts'), 'utf-8');
+    expect(hook).toMatch(/nextAutoRetryAt\(msgs\)/);
+    expect(hook).toMatch(/request\('auto-retry due'\)/);
   });
 });

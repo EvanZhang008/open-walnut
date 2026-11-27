@@ -71,6 +71,11 @@ function sendKeyOf(payload: unknown): string | undefined {
   return p && typeof p.sessionId === 'string' && typeof p.userUuid === 'string' ? `${p.sessionId}\n${p.userUuid}` : undefined
 }
 
+/** A parked row's next automatic try, as the chat's queue read names it (sessions/delivery-retry.ts retryTimesOf). */
+function autoRetryOf(at: number | undefined): { autoRetryAt?: string } {
+  return at === undefined ? {} : { autoRetryAt: new Date(at).toISOString() }
+}
+
 export function registerSessionChatRpc(): void {
   // Feeds `session:get-queue`'s launchPrompt field below.
   startLaunchPromptRegistry()
@@ -579,15 +584,18 @@ export function registerSessionChatRpc(): void {
     // (core/sessions/host-queue-rows.ts): a short deadline, its last answer when it does not answer,
     // and `partial` then, so the panel judges nothing gone from this read (hooks/queue-reconcile.ts).
     const { withHostParkedRows } = await import('../../core/sessions/host-queue-rows.js')
+    // A parked row the clock tries again by itself says when (sessions/delivery-retry.ts): the same
+    // rule the sweep sends by, so the chat never calls a row given up that is still being tried.
+    const { retryTimesOf } = await import('../../core/sessions/delivery-retry.js')
     const { rows, partial } = await withHostParkedRows(sid, [...await withoutWalnutRows(await getQueue(sid)), ...await withoutWalnutRows(await rowsOnTheWay(sid))])
     // Read after the rows: a row taken and answered in between is still listed and
     // reads waiting for this one read (queue-row-view.ts liveLineWordsOf).
-    const live = await liveLineWordsOf(sid)
+    const [live, retries] = [await liveLineWordsOf(sid), await retryTimesOf(sid, rows)]
     const messages = presentColdHolds(rows.map(presentAfterTurn)).map((m) => {
       const why = held?.get(m.id)
       const holds = why !== undefined && (m.status === 'processing' || (m.status === 'pending' && why === PROMPT_HOLD_REASON))
       // An App's AI-only brief riding the row shows its fold (lib/ai-only-envelope.ts); an edit keeps the real one (editMessage).
-      const shown = { ...(hasAiOnly(m.message) ? { ...m, message: redactAiOnly(m.message) } : m), ...queueRowFacts(m, sid, live) }
+      const shown = { ...(hasAiOnly(m.message) ? { ...m, message: redactAiOnly(m.message) } : m), ...queueRowFacts(m, sid, live), ...autoRetryOf(retries.get(m.id)) }
       if (holds) return { ...shown, heldReason: why }
       const wait = m.status === 'pending' ? waitOf(m.id, why) : null
       return wait ? { ...shown, heldReason: wait.reason, ...(wait.retryAt ? { heldRetryAt: wait.retryAt } : {}) } : shown

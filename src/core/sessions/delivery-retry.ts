@@ -97,11 +97,24 @@ export function retriesBySelf(
  * and invites a resend that would run twice once the clock delivers it).
  */
 export async function parkRetriedByClock(row: Pick<QueuedMessage, 'sessionId' | 'status' | 'parkedReason' | 'parkedCode' | 'stopFence'>): Promise<boolean> {
+  const retries = await clockRule(row.sessionId);
+  return retries !== null && retries(row);
+}
+
+/**
+ * The clock's rule for one session's parked rows, read once (its Stop fence, whether it is left
+ * alone): the one rule the sweep sends by, which every word of "Walnut tries it again" reads (the
+ * asker's notice, the chat's badge). Null when nothing is promised: a Stop not settled yet, or a
+ * session left alone.
+ */
+async function clockRule(sessionId: string): Promise<((row: Parameters<typeof retriesBySelf>[0]) => boolean) | null> {
   const { sessionStops } = await import('./session-stop.js');
   let fence: string | null;
   // A Stop not settled yet: not promised as being tried.
-  try { fence = (await sessionStops.fence(row.sessionId)) ?? null; } catch { return false; }
-  return retriesBySelf(row, fence, await reasonCode()) && !await leftAlone(row.sessionId);
+  try { fence = (await sessionStops.fence(sessionId)) ?? null; } catch { return null; }
+  if (await leftAlone(sessionId)) return null;
+  const codeOf = await reasonCode();
+  return (row) => retriesBySelf(row, fence, codeOf);
 }
 
 /** The verdict code a stored reason reads as (delivery-failure.ts, by its words alone). */
@@ -117,6 +130,27 @@ async function reasonCode(): Promise<(reason: string) => string | undefined> {
 export function nextRetryAt(row: Pick<QueuedMessage, 'parkedAt' | 'enqueuedAt' | 'autoRetries'>): number {
   const at = Date.parse(row.parkedAt ?? row.enqueuedAt);
   return (Number.isFinite(at) ? at : Date.now()) + retryDelayMs(row.autoRetries ?? 0);
+}
+
+/**
+ * When the clock tries each of this session's parked rows again by itself (epoch ms), for the rows it
+ * does: the chat's word on a parked row comes from the same rule the sweep sends by (retriesBySelf,
+ * the Stop fence, a session left alone), never its own guess. 2026-11-22, the user, on a row the
+ * chat called "Auto-retry stopped" while the clock was to try it: "why not keep retrying it". A
+ * row missing here waits for a person's Retry (or goes by itself another way: a folder that comes
+ * back, the agent that can run). Never throws (an unreadable fence or record: none promised).
+ */
+export async function retryTimesOf(sessionId: string, rows: readonly QueuedMessage[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const parked = rows.filter((r) => r.status === 'parked');
+  if (parked.length === 0) return out;
+  try {
+    const retries = await clockRule(sessionId);
+    if (retries === null) return out;
+    // A row waiting for its agent or its folder shows that wait instead (SessionChatHistory's own branches).
+    for (const r of parked) if (!r.waitsFor && r.folderWait !== true && retries(r)) out.set(r.id, nextRetryAt(r));
+  } catch { /* nothing promised */ }
+  return out;
 }
 
 /** An archived session, or one whose task is complete: a send would start work nobody waits on. */
