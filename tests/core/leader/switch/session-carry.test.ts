@@ -113,6 +113,30 @@ describe('a carry batch', () => {
     expect(carryBehindLine({ size: capped, state: {}, rate: 0 })).toMatch(/at least \d+ MB in more than 100 files/)
   })
 
+  it('a session the history archive compressed is carried as it is: its .jsonl.gz, its manifest and its sidecar', async () => {
+    const root = dir()
+    const home = path.join(root, 'home')
+    fs.mkdirSync(home, { recursive: true })
+    const { eng, f } = engineDir(root, home)
+    write(path.join(eng, 'projects', f, `${sid(5)}.jsonl.gz`), 'gz')
+    write(path.join(eng, 'projects', f, `${sid(5)}.walnut-archive.json`), '{"version":1}')
+    write(path.join(eng, 'projects', f, sid(5), 'subagents', 'agent-y.jsonl.gz'), 'gz')
+    // Archive temps and another session's names are not taken.
+    write(path.join(eng, 'projects', f, `${sid(5)}.jsonl.walnut-orig`), 'aside')
+    write(path.join(eng, 'projects', f, 'x.jsonl.gz'), 'not a session')
+    const sel = carrySelection([rec(5, home)], home)
+    const target = path.join(root, 'standby', 'carry')
+    expect((await snapshotTo(eng, target, { place: carryPlace(sel), stagingDir: path.join(root, 'staging') })).ok).toBe(true)
+    const taken = listCopy(target).filter((r) => r.includes(sid(5)))
+    expect(taken).toEqual([
+      `projects/${f}/${sid(5)}.jsonl.gz`,
+      `projects/${f}/${sid(5)}.walnut-archive.json`,
+      `projects/${f}/${sid(5)}/subagents/agent-y.jsonl.gz`,
+    ])
+    expect(listCopy(target)).not.toContain(`projects/${f}/x.jsonl.gz`)
+    expect(carryPlace(sel).appendOnly(`projects/${f}/${sid(5)}.jsonl.gz`)).toBe(false)
+  })
+
   it('a folder under the home that links out of it is not selected: another project\'s records are never carried', async () => {
     const root = dir()
     const home = path.join(root, 'home')
@@ -291,6 +315,32 @@ describe('after the commit: the records into the new folder', () => {
     expect(r.conflicts).toEqual([])
     expect(fs.readFileSync(path.join(t.eng, 'projects', engineFolderUnder(toF, 'notes'), `${sid(2)}.jsonl`), 'utf8')).toBe('{"named":1}\n')
     expect(fs.existsSync(path.join(t.eng, 'projects', toF, `${sid(7)}.jsonl`))).toBe(false)
+  })
+
+  it('an archived session (compressed, or offloaded with only its manifest) is placed as it is and is not missing', async () => {
+    const t = setup()
+    const toF = homeEngineFolder(t.newHome)!
+    const copy = path.join(carryTargetDir(t.standby), 'copy')
+    fs.chmodSync(copy, 0o700); fs.chmodSync(path.join(copy, 'projects'), 0o700)
+    const notesF = path.join(copy, 'projects', engineFolderUnder(t.fromF, 'notes'))
+    fs.chmodSync(notesF, 0o700)
+    // Row 2 compressed on the old machine; row 1's folder also holds an offloaded session 3 (manifest only).
+    fs.rmSync(path.join(notesF, `${sid(2)}.jsonl`))
+    write(path.join(notesF, `${sid(2)}.jsonl.gz`), 'gz')
+    write(path.join(notesF, `${sid(2)}.walnut-archive.json`), '{"version":1}')
+    fs.chmodSync(path.join(copy, 'projects', t.fromF), 0o700)
+    write(path.join(copy, 'projects', t.fromF, `${sid(3)}.walnut-archive.json`), '{"version":1,"remote":{}}')
+    t.rows.set(sid(3), { ...t.rows.get(sid(1))!, claudeSessionId: sid(3), leaderSwitch: { ...t.rows.get(sid(1))!.leaderSwitch!, supervised: false } } as SessionRecord)
+    const r = await placeCarriedRecords({ switchId: 'S1', home: t.newHome, standbyDir: t.standby, homeFolderFrom: t.fromF, engineDir: t.eng, deps: t.deps })
+    expect(r.missing).toEqual([])
+    expect(r.conflicts).toEqual([])
+    const notesTo = path.join(t.eng, 'projects', engineFolderUnder(toF, 'notes'))
+    expect(fs.readFileSync(path.join(notesTo, `${sid(2)}.jsonl.gz`), 'utf8')).toBe('gz')
+    expect(fs.existsSync(path.join(notesTo, `${sid(2)}.walnut-archive.json`))).toBe(true)
+    expect(fs.existsSync(path.join(t.eng, 'projects', toF, `${sid(3)}.walnut-archive.json`))).toBe(true)
+    expect(t.rows.get(sid(2))!.leaderSwitch!.moved!.records).toBe('placed')
+    expect(t.rows.get(sid(3))!.leaderSwitch!.moved!.records).toBe('placed')
+    expect(fs.existsSync(carryTargetDir(t.standby))).toBe(false)
   })
 
   it('a transcript the old machine kept but that is not at its new place: the session ends with why, the carry stays', async () => {

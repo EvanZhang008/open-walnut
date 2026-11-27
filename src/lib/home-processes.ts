@@ -82,7 +82,7 @@ async function mac(roots: readonly string[], uid: number): Promise<FolderProcess
   }
   if (out.length) {
     // Their command lines (a process that ended in between has none).
-    const ps = await run('ps', ['-o', 'pid=,args=', '-p', out.map((p) => p.pid).join(',')])
+    const ps = await run('ps', ['-ww', '-o', 'pid=', '-o', 'args=', '-p', out.map((p) => p.pid).join(',')])
     if (ps.error && ps.code !== 1) throw new Error(`ps could not read the command lines: ${ps.error.message}`)
     const argsOf = new Map<number, string>()
     for (const line of ps.stdout.split('\n')) {

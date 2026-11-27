@@ -125,6 +125,7 @@ const SENDERS: Record<string, { calls: number; kind: Kind; why: string }> = {
   // Only this machine's own daemon.
   'src/commands/demo-server.ts': { calls: 1, kind: 'local', why: 'the Demo\'s stop confirms with its own daemon on this machine over loopback (demo.quiesce)' },
   'src/core/feature-nodes/feature-service.ts': { calls: 1, kind: 'local', why: 'feature request frames over loopback' },
+  'src/core/leader/switch/home-session-runtime.ts': { calls: 6, kind: 'local', why: 'the leader switch\'s stop and rollback of the sessions in the data home on this machine\'s own daemon (__local__, loopback): each stop has its 30 s answer bound and a lost one fails the switch stop; a re-enable lost on rollback is tried again with backoff until done' },
   'src/core/leader/switch/host-follow.ts': { calls: 2, kind: 'local', why: 'the leader switch\'s steps on this machine\'s own daemon (__local__, loopback): its host service, its trigger set and bridge dropped before the stop and pushed again on a rollback' },
   'src/core/session-channel/host-boot.ts': { calls: 3, kind: 'local', why: 'a host\'s service asks the runtime in its own process (the own-sessions link) whether a session\'s CLI is alive, under a 3 s deadline; no answer keeps the row the host\'s' },
   'src/core/hosts/host-fixture.ts': { calls: 2, kind: 'local', why: 'a test fixture daemon on a loopback URL' },

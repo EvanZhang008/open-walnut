@@ -28,10 +28,23 @@ import type { CarrySource, CopyPlace } from '../../standby/scan.js'
 import { carryTargetDir } from '../../standby/target-files.js'
 import type { SessionRecord } from '../../types.js'
 import { encodeProjectPath } from '../../session-file-reader.js'
+import { ARCHIVE_SUFFIX, MANIFEST_SUFFIX } from '../../../providers/transcript-archive-names.js'
 import { engineFolderName, engineOf, homeSessionRows, moveRefusal, realPath } from './home-sessions.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const UUID_JSONL = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i
+/**
+ * A session the history archive compressed (transcript-archive.ts): `<sid>.jsonl.gz` and its manifest
+ * `<sid>.walnut-archive.json` beside it (its rels are relative, so the archive opens in a new folder too). Carried
+ * and placed like the transcript; the sidecar's own `.gz` files come with `<sid>/`.
+ */
+const reEscape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const UUID_ARCHIVED = new RegExp(`^${UUID.source.slice(1, -1)}(${reEscape(`.jsonl${ARCHIVE_SUFFIX}`)}|${reEscape(MANIFEST_SUFFIX)})$`, 'i')
+
+/** Whether a session's history is in `folder` (its plain transcript, or its archive: compressed, or only its manifest when offloaded). */
+export function historyIn(folder: string, sid: string): boolean {
+  return [`${sid}.jsonl`, `${sid}.jsonl${ARCHIVE_SUFFIX}`, `${sid}${MANIFEST_SUFFIX}`].some((n) => fs.existsSync(path.join(folder, n)))
+}
 
 /** What one carry batch takes: the engine folders (by name) and the sessions (for their task lists). */
 export interface CarrySelection {
@@ -82,7 +95,7 @@ export function carryPlace(sel: CarrySelection): CopyPlace {
     fileTest: () => (dir, name) => {
       if (!dir) return false
       const p = dir.split('/')
-      if (p[0] === 'projects' && p.length === 2) return sel.folders.has(p[1]!) && UUID_JSONL.test(name)
+      if (p[0] === 'projects' && p.length === 2) return sel.folders.has(p[1]!) && (UUID_JSONL.test(name) || UUID_ARCHIVED.test(name))
       if (p[0] === 'projects' && p.length >= 3) return dirMayHold(dir)
       if (p[0] === 'tasks' && p.length >= 2) return sel.sids.has(p[1]!)
       return false
@@ -235,6 +248,12 @@ export function placeFolder(o: { carryCopy: string; engineDir: string; from: str
       if (!o.sids.has(sid)) continue
       const why = moveFile(s, d, o.switchId, placed, 'transcript', out.setAside)
       if (why) out.conflicts.push({ sid, why })
+    } else if (e.isFile() && UUID_ARCHIVED.test(e.name)) {
+      // Its archive: the carried one is the newer (one there already is set aside).
+      const sid = e.name.slice(0, 36)
+      if (!o.sids.has(sid)) continue
+      const why = moveFile(s, d, o.switchId, placed, 'newer', out.setAside)
+      if (why) out.conflicts.push({ sid, why })
     } else if (e.isDirectory() && (e.name === 'memory' || (UUID.test(e.name) && o.sids.has(e.name)))) {
       mergeDir(s, d, o.switchId, placed, out.setAside)
     }
@@ -386,7 +405,7 @@ export async function placeCarriedRecords(o: { switchId: string; home: string; s
     const st = r.leaderSwitch!
     const sid = r.claudeSessionId
     let why = conflicted.get(sid)
-    const there = fs.existsSync(path.join(o.engineDir, 'projects', toOf.get(sid)!, `${sid}.jsonl`))
+    const there = historyIn(path.join(o.engineDir, 'projects', toOf.get(sid)!), sid)
     if (!why && !there && st.transcript !== false) {
       why = `its transcript was not among the records carried from ${st.from.machine} (folder ${st.engineFolder ?? st.rel}), so its history is not on this machine`
       out.missing.push(sid)

@@ -67,10 +67,10 @@ export function stopAnswer(reply: Record<string, unknown>, describe: (r: Record<
 }
 
 export async function homeStopDeps(home: string): Promise<HomeStopDeps> {
-  const [{ listSessions }, { getConnectedDaemonConnection }, { readSessionSupervision }, { describeStopRefusal }, { processesInFolders }, { judgeOf }, { needCapability }, fs, path, { localEngineDir }] = await Promise.all([
+  const [{ listSessions }, { getConnectedDaemonConnection }, { readSessionSupervision }, { describeStopRefusal }, { processesInFolders }, { judgeOf }, { needCapability }, path, { localEngineDir, historyIn }] = await Promise.all([
     store(), import('../../../providers/daemon-connection.js'), import('../../sessions/session-supervision.js'),
     import('../../sessions/stop-provenance.js'), import('../../../lib/home-processes.js'), import('../../sessions/judge-of.js'),
-    import('../../../providers/daemon-capability-need.js'), import('node:fs'), import('node:path'), import('./session-carry.js'),
+    import('../../../providers/daemon-capability-need.js'), import('node:path'), import('./session-carry.js'),
   ])
   const engineDir = await localEngineDir().catch(() => null)
   return {
@@ -88,7 +88,8 @@ export async function homeStopDeps(home: string): Promise<HomeStopDeps> {
       return stopAnswer(reply as Record<string, unknown>, describeStopRefusal as (r: Record<string, unknown>) => string)
     },
     processesInHome: (spellings) => processesInFolders(spellings),
-    transcriptExists: async (folder, sid) => !!engineDir && fs.existsSync(path.join(engineDir, 'projects', folder, `${sid}.jsonl`)),
+    // Its plain transcript or its archive (transcript-archive.ts: compressed in place, or offloaded with its manifest kept).
+    transcriptExists: async (folder, sid) => !!engineDir && historyIn(path.join(engineDir, 'projects', folder), sid),
     now: Date.now,
   }
 }

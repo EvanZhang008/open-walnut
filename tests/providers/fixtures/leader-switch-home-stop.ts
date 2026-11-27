@@ -200,7 +200,7 @@ function seedSupervised(s: string) {
 }
 /** The members of process group `pgid` (pid and command line), read with ps. */
 function groupMembers(pgid: number): Array<{ pid: number; args: string }> {
-  const rows = spawnSync('ps', ['-A', '-ww', '-o', 'pid=,pgid=,args='], { encoding: 'utf8' }).stdout ?? ''
+  const rows = spawnSync('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'pgid=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout ?? ''
   return rows.split('\n').map((l) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m && Number(m[2]) === pgid)
     .map((m) => ({ pid: Number(m[1]), args: m[3]! }))
 }

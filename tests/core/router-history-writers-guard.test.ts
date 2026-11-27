@@ -40,6 +40,7 @@ const FIXED: Record<string, string> = {
   'core/task-db.ts#normalizeStoredTags': 'Tag normalization only.',
   'core/inbox-migration.ts#migrateInboxProject': 'Startup project conversion only: files projectless rows and folders into the Inbox.',
   'core/leader/switch/session-hosts.ts#moveSessionHosts': 'Changes host, a field the history rule checks (history-write.ts sessionHistoryWriteNeedsCheck), once per switch in the promoted home with no server running on it. It never moves a row with an area profile (session-hosts.ts AREA_PROFILE_SQL, tested against hasAreaProfile), whose host is its area\'s, so no area session leaves its isolated profile; the rows it moves carry no area profile, and their task, profile, engine and origin stay.',
+  'core/leader/switch/session-hosts.ts#moveHomeRows': 'The sessions in the data home at a leader switch, in the same promotion transaction as moveSessionHosts and under its rows (MOVES: never an area profile): cwd to the same place in the new home, host cleared to the new leader\'s own daemon or set to the old machine for a row that ends there, archived with why for one that cannot move, and the switch\'s own stamp and folder-moved notice in the payload. Task, profile, engine and origin stay.',
   'hooks/on-compact.ts#updateSessionLastActive': 'Updates last_active_at only.',
   'hooks/session-status-store.ts#markSessionStoppedInSqlite': 'Updates the status projection only.',
   'core/session-db.ts#ensureSessionStatusColumns': 'Adds and backfills the status revision columns only.',

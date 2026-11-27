@@ -42,6 +42,7 @@ const ALLOWED_MODULES: Record<string, string> = {
   './org/org-enabled.js': 'org switch from the cached local config',
   './task-manager.js': 'task from the local task store (only while the org is off)',
   './sessions/engine-switch-io.js': 'move-held reason constant and the switch context kept in the local store',
+  './sessions/switch-hold.js': 'leader switch hold: a pure check of the session row\'s own stamp (and one existsSync of the data home\'s marker), no I/O beyond this machine',
   './sessions/queue-after-turn.js': 'after-turn hold: the runner\'s in-memory turn state',
   './sessions/place-notice.js': 'place note from the local task and session records',
   './sessions/restart-notice.js': 'restart note from the local session record',

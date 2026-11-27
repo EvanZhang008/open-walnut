@@ -307,8 +307,8 @@ describe('a strict ACP stop that waits on a straggler while a worker of the same
     try {
       // A plain stop first: it sends shutdown and arms its 6 s SIGKILL timer.
       await acp.acpStop('rt-wait')
+      // The strict stop marks the worker as it is called, before its settle's first wait.
       const strict = acp.acpStop('rt-wait', { strict: true })
-      await new Promise((r) => setTimeout(r, 200))
       // A hard abort during the settle is refused, not a SIGKILL.
       const abort = await acp.acpAbortTurn('rt-wait', { hard: true })
       expect(abort).toMatchObject({ ok: false, error: { kind: 'worker_stopping' } })

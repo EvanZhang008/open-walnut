@@ -34,6 +34,7 @@ const SITES: Record<string, string> = {
   'src/core/session-jsonl-migration.ts': 'restores before it moves a transcript to a new cwd',
   'src/core/stream-retention.ts': 'counts an archived transcript as the copy that makes a stream capture recoverable',
   'src/core/sessions/adopt-search-session.ts': 'counts an archived transcript as present (a resume restores it)',
+  'src/core/leader/switch/session-carry.ts': 'carries and places an archived session as it is (`<sid>.jsonl.gz`, its manifest, its sidecar `.gz` files: historyIn counts it present), so it restores on open in the new folder',
   // Read through the daemon file commands, which restore.
   'src/core/daemon-file-reader.ts': 'daemon fs.* (restores)',
   'src/core/session-changes.ts': 'daemon fs.* (restores)',

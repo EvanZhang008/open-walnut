@@ -538,7 +538,8 @@ holds `/a/b/c`, never `/a/b-c`). A VP or lead runs in its own task folder and is
   handedOverHomeOnHost`). Restart recovery and the message queue leave a session the switch holds
   (`sessions/switch-hold.ts`).
 - **Records** (the engine's own: transcripts, subagent transcripts, large tool results, the folder's memory, the task
-  list) travel with the standby copy into `<standby dir>/carry` ([Standby copy](./standby-copy.md), a carry), never
+  list; a session the history archive compressed travels as it is, `<sid>.jsonl.gz` and its manifest, and opens in
+  the new folder) travel with the standby copy into `<standby dir>/carry` ([Standby copy](./standby-copy.md), a carry), never
   into the new machine's engine dir before the commit. The final batch sends them until unchanged after the home's,
   and the final mark names that batch; the new leader refuses to promote without it. The catch-up before the
   handover and the last look count the carry that rides each batch, so a carry that has not caught up (the first one

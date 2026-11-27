@@ -28,6 +28,7 @@
  */
 import type { BatchOutcome } from '../../standby/index.js'
 import { withDeadline } from '../../../lib/with-deadline.js'
+import { clause } from '../../../utils/format.js'
 
 export const HANDOVER_SEEN_MS = 30_000
 export const STOP_TEARDOWN_MS = 10_000
@@ -94,7 +95,7 @@ export async function catchUpStandby(o: {
   const batches: CatchUpBatch[] = []
   const refuse = async (why: string): Promise<CatchUpOutcome> => {
     const behind = await o.behind?.(batches).catch(() => null)
-    return { ok: false, why: behind ? `${why}. ${behind}` : why, batches, ms: now() - start, budgetMs }
+    return { ok: false, why: behind ? `${clause(why)}. ${behind}` : why, batches, ms: now() - start, budgetMs }
   }
   for (;;) {
     const left = start + maxMs - now()
