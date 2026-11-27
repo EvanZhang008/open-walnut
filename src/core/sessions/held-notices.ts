@@ -103,7 +103,7 @@ export function dropParts(sid: string, parts: readonly unknown[], why: string, n
     queueTell({
       kind: 'dropped', callerSid: m.from, op: 'task_send', taskId: m.task ?? '', reason: `${noteLabel(m)}: ${why}`,
       at: now, tries: 0, mid: m.mid, ...(m.fromTask ? { fromTask: m.fromTask } : {}),
-    });
+    }, { via: 'note-void', sessionId: sid });
     queued = true;
   }
   if (queued) flushTellsSoon();
@@ -251,7 +251,7 @@ export function tellStillWaiting(
         kind: 'waiting', callerSid: m.from, op: 'task_send', taskId: m.task ?? '',
         reason: `${noteLabel(m)}: ${stillWaitingWords(cause, target)}`,
         at: now, tries: 0, mid: m.mid, ...(m.fromTask ? { fromTask: m.fromTask } : {}),
-      });
+      }, { via: 'note-wait', sessionId: sid });
       marked++;
     }
   }

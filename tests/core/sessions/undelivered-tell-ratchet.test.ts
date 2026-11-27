@@ -92,6 +92,30 @@ describe('the ledger hands every step to the teller', () => {
     expect(exits).toMatch(/HOLD_REASONS\.has\(at\.parkedReason \?\? ''\) \? \{ via: PARK_WAIT_VIA \}/)
   })
 
+  it('every tell to a sender is written in the ledger as `told`, by one writer', () => {
+    // 2026-11-27, the Reflection VP's audit: a held note's sender was told it still waited, and the
+    // ledger had no `told`: the hold's tells (still waiting, dropped) wrote none, only a queue row's did.
+    const store = read('src/core/sessions/held-notices-store.ts')
+    const queue = store.slice(store.indexOf('export function queueTell('), store.indexOf('/**\n * Take back queued tells'))
+    expect(queue).toMatch(/queueTell\(t: DropTell & \{ mid: string \}, told: ToldStep\)/)
+    expect(queue).toMatch(/tells\.push\(t\);[\s\S]*recordSenderTold\(\{/)
+    // A tell is queued only by queueTell, and held for its sender only by flushDropTells.
+    expect(sites('\\btells\\.push\\(').map((s) => s.file)).toEqual(['src/core/sessions/held-notices-store.ts', 'src/core/sessions/held-notices-store.ts'])
+    expect(store).toMatch(/export function settleTells[\s\S]{0,400}tells\.push\(\.\.\.untold\)/)
+    expect([...new Set(sites('DROP_TELL_KEY,').filter((s) => /holdFoldedNotice/.test(s.text)).map((s) => s.file))]).toEqual(['src/core/sessions/held-notices-sweep.ts'])
+    // Nobody writes `told` but recordSenderTold; it is called by the queue and by a peer's ask answered
+    // through its request (no tell is queued there: its asker's notice).
+    expect(srcFiles().filter((f) => /step: 'told'/.test(read(f)))).toEqual(['src/core/sessions/delivery-ledger.ts'])
+    expect([...new Set(sites('recordSenderTold\\(').map((s) => s.file))].sort()).toEqual([
+      'src/core/sessions/delivery-ledger.ts', 'src/core/sessions/held-notices-store.ts', 'src/core/sessions/undelivered-requests.ts', 'src/core/sessions/undelivered-tell.ts',
+    ])
+    // The hold's own tells never count as a row's park or void told (a note that rides a row later is told of it).
+    const teller = read('src/core/sessions/undelivered-tell.ts')
+    expect(teller).toMatch(/if \(l\.via === 'note-wait' \|\| l\.via === 'note-void'\) continue;/)
+    const held = read('src/core/sessions/held-notices.ts')
+    expect([...held.matchAll(/\}, \{ via: '(note-wait|note-void)', sessionId: sid \}\);/g)].map((m) => m[1]).sort()).toEqual(['note-void', 'note-wait'])
+  })
+
   it('a note\'s fate reads dropped only where its sender is told', () => {
     const files = [...new Set(sites(`state: 'dropped'`).map((s) => s.file))].sort()
     expect(files.filter((f) => f.startsWith('src/core/sessions/'))).toEqual(['src/core/sessions/held-notices.ts', 'src/core/sessions/undelivered-tell.ts'])

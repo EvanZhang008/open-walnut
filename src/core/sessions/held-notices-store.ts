@@ -8,7 +8,7 @@
  *   { version: 1,
  *     sessions: { <session id>: { <key>: { text, at, whileOpen?, parts?, dropped? } } },
  *     fates:    { <message id>: { state: 'delivered' | 'dropped', at, sid, why?, row? } },
- *     tells?:   [ { callerSid, op, taskId, reason, at, tries, mid?, fromTask?, kind? } ] }   (senders still to be told)
+ *     tells?:   [ { callerSid, op, taskId, reason, at, tries, mid?, fromTask?, kind?, subject? } ] }   (senders still to be told)
  * Only the server opens it (openStore, at boot on the leader): a process that never opened it
  * keeps its notices in memory as before and never writes the file. A missing file, or one in a
  * shape this version does not read (an older or a newer release's, set aside first), reads as empty.
@@ -36,6 +36,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
+import type { ToldVia } from './delivery-ledger.js';
 
 /** A held notice older than this is dropped unread (never one with a `whole` part): the live list has moved on. */
 export const HOLD_MAX_MS = 3 * 24 * 60 * 60_000;
@@ -275,9 +276,21 @@ export function fateOf(mid: string): NoteFate | undefined {
   return fates.get(mid);
 }
 
-/** A sender to tell its note was dropped (kept in the file until it is told). */
-export function queueTell(t: DropTell): void {
+/** What a tell's `told` ledger step says beyond the tell: what it tells of, and the session the message was for. */
+export interface ToldStep { via: ToldVia; sessionId?: string }
+
+/**
+ * A sender to tell what became of its message (kept in the file until it is told), and the ledger's
+ * `told` step that says so, written here, as it is queued: one place, so no tell goes unrecorded
+ * (2026-11-27, the Reflection VP's audit: the hold's tells wrote none), and a restart reads it back
+ * so the teller does not tell again (undelivered-tell.ts load). One that reaches no session is
+ * written on its note's fate, or logged (tellUndeliverable).
+ */
+export function queueTell(t: DropTell & { mid: string }, told: ToldStep): void {
   tells.push(t);
+  void import('./delivery-ledger.js').then((l) => l.recordSenderTold({
+    id: t.mid, told: t.callerSid, via: told.via, why: t.reason, ...(told.sessionId ? { sessionId: told.sessionId } : {}), ...(t.taskId ? { taskId: t.taskId } : {}),
+  })).catch(() => {});
 }
 
 /**

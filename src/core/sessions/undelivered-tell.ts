@@ -104,6 +104,8 @@ function index(l: DeliveryLine): void {
     const k = entry(id);
     if ((l.step === 'sent' || l.step === 'held') && !k.origin) k.origin = l;
     if (l.step === 'told') {
+      // The hold's own tells (a held note still waits, or was dropped) say nothing of a row it rides later.
+      if (l.via === 'note-wait' || l.via === 'note-void') continue;
       if (l.via === 'void') k.toldVoid = true;
       else k.toldPark = true;
       if (l.via === 'request' && /not delivered yet/.test(l.why ?? '')) k.requestYet = true;
@@ -238,8 +240,8 @@ async function tell(line: DeliveryLine, kind: 'park' | 'wait' | 'void', row?: Ro
     ? voidWords(line, why)
     : `${minutes ? `still not delivered after ${minutes} minutes` : 'not delivered yet'}: ${why}; ${await nextOfPark(row, kind === 'wait')}`;
   const subjects: Array<{ mid: string; rode?: string }> = [{ mid: id }, ...[...(k.riders ?? [])].map((mid) => ({ mid, rode: id }))];
-  const [{ queueTell, recordFate }, { flushTellsSoon }, { recordDelivery }] = await Promise.all([
-    import('./held-notices-store.js'), import('./held-notices.js'), import('./delivery-ledger.js'),
+  const [{ queueTell, recordFate }, { flushTellsSoon }] = await Promise.all([
+    import('./held-notices-store.js'), import('./held-notices.js'),
   ]);
   let queued = 0;
   for (const s of subjects) {
@@ -261,8 +263,7 @@ async function tell(line: DeliveryLine, kind: 'park' | 'wait' | 'void', row?: Ro
       kind: kind === 'void' ? 'dropped' : 'waiting', subject: 'message', callerSid: from, op: 'task_send',
       taskId: line.taskId ?? origin.taskId ?? '', reason: `${labelOf(s.mid, origin, line)}: ${said}`,
       at: now, tries: 0, mid: s.mid, ...(origin.fromTaskId ? { fromTask: origin.fromTaskId } : {}),
-    });
-    void recordDelivery({ step: 'told', id: s.mid, ...(line.sessionId ? { sessionId: line.sessionId } : {}), told: from, via: kind, why: said.slice(0, 200) });
+    }, { via: kind, ...(line.sessionId ? { sessionId: line.sessionId } : {}) });
     queued++;
   }
   if (queued) {
@@ -289,8 +290,8 @@ async function answeredByRequest(requestId: string, line: DeliveryLine, kind: 'p
     // Answered by its target, withdrawn, or already told it was not delivered: nothing more to say.
     else return true;
     if (told) {
-      const { recordDelivery } = await import('./delivery-ledger.js');
-      void recordDelivery({ step: 'told', id: line.id!, ...(line.sessionId ? { sessionId: line.sessionId } : {}), told: request.fromSessionId, via: 'void', why: `its request ${requestId} was answered: not delivered: ${why}`.slice(0, 200) });
+      const { recordSenderTold } = await import('./delivery-ledger.js');
+      void recordSenderTold({ id: line.id!, ...(line.sessionId ? { sessionId: line.sessionId } : {}), told: request.fromSessionId, via: 'void', why: `its request ${requestId} was answered: not delivered: ${why}` });
     }
     return true;
   }

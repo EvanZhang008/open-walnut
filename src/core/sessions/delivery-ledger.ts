@@ -59,7 +59,7 @@ export interface DeliveryLine {
    * read: how, when no CLI line carried it (`threads`: its owner read it in its Threads; `cli`: the CLI
    * took a row put back while its line's fate was unknown). parked: `wait` for a hold that goes by
    * itself. dropped: `hold` for a note the hold dropped (its sender told there). told: what the
-   * sender was told of (`park`, `wait`, `void`, `request`).
+   * sender was told of (ToldVia).
    */
   via?: string;
   requestId?: string;
@@ -151,6 +151,27 @@ export function recordDelivery(line: Omit<DeliveryLine, 'at'> & { at?: string })
     try { stepObserver?.(row); } catch { /* best effort */ }
   }).catch((err) => log.session.warn('delivery ledger: a step was not recorded', { step: row.step, id: row.id, error: err instanceof Error ? err.message : String(err) }));
   return chain;
+}
+
+/**
+ * What a `told` step tells of: a queue row `park`ed (set aside) or `void`ed, `wait`ing on its own
+ * clock, a peer's ask answered through its `request`, or a held note the hold says still waits
+ * (`note-wait`) or dropped (`note-void`). The hold's own are kept apart: a note that later rides a
+ * row that is set aside is told of that too (undelivered-tell.ts index).
+ */
+export type ToldVia = 'park' | 'wait' | 'void' | 'request' | 'note-wait' | 'note-void';
+export const TOLD_VIAS: readonly ToldVia[] = ['park', 'wait', 'void', 'request', 'note-wait', 'note-void'];
+
+/**
+ * The one writer of `told`: the sender `told` (a session) heard what became of message `id`
+ * (2026-11-27, the Reflection VP's audit: the hold told a note's sender it still waited and wrote
+ * nothing, so the audit read it as never told).
+ */
+export function recordSenderTold(t: { id: string; told: string; via: ToldVia; why: string; sessionId?: string; taskId?: string }): Promise<unknown> {
+  return recordDelivery({
+    step: 'told', id: t.id, told: t.told, via: t.via, why: t.why.replace(/\s+/g, ' ').slice(0, 200),
+    ...(t.sessionId ? { sessionId: t.sessionId } : {}), ...(t.taskId ? { taskId: t.taskId } : {}),
+  });
 }
 
 /**

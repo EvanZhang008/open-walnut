@@ -152,6 +152,18 @@ describe('a message voided unsent tells its sender, and the notes that rode it t
     expect(fateOf('qm-rider-1')?.state).toBe('dropped')
   })
 
+  it('a held note whose sender the hold told it still waits, then rides a row that is set aside: its sender is told of that too', async () => {
+    // The hold's own tell (`note-wait`) says nothing of the row it rides later (review, 2026-11-27).
+    await recordDelivery({ step: 'held', id: 'qm-rider-2', sessionId: TARGET, from: RIDER, fromTaskId: 't-rider', title: 'Side note' })
+    await recordDelivery({ step: 'told', id: 'qm-rider-2', sessionId: TARGET, told: RIDER, via: 'note-wait', why: 'not delivered yet: its target is stopped' })
+    const row = await peerRow('the carrier')
+    await recordDelivery({ step: 'carried', id: row.id, sessionId: TARGET, ids: ['qm-rider-2'] })
+    await parkMessages([row], `${HOST_REFUSED_REASON}: host_runs_sessions_off`)
+    await settle()
+    expect(tellOf(RIDER)).toContain('it rode message')
+    expect((await readDeliveryLines(1)).filter((l) => l.id === 'qm-rider-2' && l.step === 'told').map((l) => l.via)).toEqual(['note-wait', 'park'])
+  })
+
   it('a host\'s queue fact that its row was dropped tells the sender here', async () => {
     const id = 'qm-host-remote-1'
     await recordDelivery({ step: 'sent', id, sessionId: TARGET, from: SENDER, fromTaskId: 't-sender', source: 'peer' })

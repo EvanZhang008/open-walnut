@@ -178,10 +178,10 @@ export async function notifyParkedRequests(rows: readonly QueuedMessage[]): Prom
       const { notifyRequesterFallback } = await import('./session-request-notify.js');
       const told = await notifyRequesterFallback(request, 'error', retried ? {} : { notDelivered: row.parkedReason });
       // The ledger says its asker was told (sessions/undelivered-tell.ts leaves such a park to this).
-      const { recordDelivery } = await import('./delivery-ledger.js');
-      if (told) void recordDelivery({
-        step: 'told', id: row.id, sessionId: row.sessionId, told: request.fromSessionId, via: 'request',
-        why: `its request ${id} was answered: ${retried ? 'not delivered yet, Walnut tries again' : 'not delivered'}: ${row.parkedReason ?? ''}`.slice(0, 200),
+      const { recordSenderTold } = await import('./delivery-ledger.js');
+      if (told) void recordSenderTold({
+        id: row.id, sessionId: row.sessionId, told: request.fromSessionId, via: 'request',
+        why: `its request ${id} was answered: ${retried ? 'not delivered yet, Walnut tries again' : 'not delivered'}: ${row.parkedReason ?? ''}`,
       });
     } catch (err) {
       log.session.warn('parked request: notifying the asker failed', {

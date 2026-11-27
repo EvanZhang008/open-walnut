@@ -84,6 +84,7 @@ import { QUIET_ROW_PREFIX, endQuietTurn, isQuietRowId, isQuietTurn, isRidingQuie
 import { _resetOrgEnabledForTesting } from '../../../src/core/org/org-enabled.js';
 import { COLD_HOLD_MAX_MS, stopColdHold, sweepColdHolds } from '../../../src/core/sessions/cold-hold.js';
 import { holdQuietNote } from '../../../src/core/sessions/quiet-notes.js';
+import { readDeliveryLines } from '../../../src/core/sessions/delivery-ledger.js';
 import path from 'node:path';
 import { DROP_WHY, _clearHeldNotices, heldNoteState, heldNoticeKeys, holdFoldedNotice } from '../../../src/core/sessions/held-notices.js';
 import { _resetHeldStoreForTesting, held, persist } from '../../../src/core/sessions/held-notices-store.js';
@@ -107,6 +108,18 @@ async function heldTells(sid: string): Promise<Array<{ text: string; told: Array
 }
 const SENDER = 'eeeeeeee-1111-4222-8333-555555555555';
 const MIN = 60_000;
+/**
+ * The ledger's `told` steps of a note, once written (2026-11-27, the Reflection VP's audit: a held
+ * note's sender was told it still waited, the ledger had no `told`, and the audit read it as never told).
+ */
+async function toldInLedger(mid: string, n = 1): Promise<Array<{ via?: string; told?: string; sessionId?: string }>> {
+  let out: Array<{ via?: string; told?: string; sessionId?: string }> = [];
+  await vi.waitFor(async () => {
+    out = (await readDeliveryLines(1)).filter((l) => l.id === mid && l.step === 'told');
+    expect(out).toHaveLength(n);
+  });
+  return out;
+}
 
 let sends: Array<{ sessionId: string; source: string }> = [];
 const running = new Set<string>();
@@ -264,6 +277,7 @@ describe('quiet notes past the max hold', () => {
     const tells = await heldTells(SENDER);
     expect(tells).toHaveLength(1);
     expect(tells[0].told).toMatchObject([{ mid: 'qm-st', kind: 'waiting' }]);
+    expect(await toldInLedger('qm-st')).toEqual([expect.objectContaining({ via: 'note-wait', told: SENDER, sessionId: TARGET })]);
     expect(tells[0].text).toContain('outcome="note-held"');
     expect(tells[0].text).toContain(`"note qm-st", sent ${new Date(t0).toISOString().slice(0, 16).replace('T', ' ')} UTC: not delivered yet: ${QUIET_WAITS.stopped.cause}. `
       + 'It stays held and rides task t-target\'s next message; send it again without wake=false (or task_start that task) to have it read now.');
@@ -281,6 +295,7 @@ describe('quiet notes past the max hold', () => {
     await sweepColdHolds(t0 + 4 * COLD_HOLD_MAX_MS);
     expect(await queuedTells()).toEqual([]);
     expect(await heldTells(SENDER)).toHaveLength(1);
+    expect(await toldInLedger('qm-st')).toHaveLength(1);
 
     // The target's next run carries it, and the sender's tell that it waits is withdrawn (stale).
     const row = await sendMessageToSession(TARGET, 'pick the task up again', { source: 'ui' });
@@ -465,6 +480,7 @@ describe('quiet notes past the max hold', () => {
     await sweepColdHolds(t0 + COLD_HOLD_MAX_MS);
     expect(await heldNoteState('qm-cd')).toMatchObject({ state: 'dropped', why: DROP_WHY.complete });
     expect(await heldTells(SENDER)).toHaveLength(1);
+    expect(await toldInLedger('qm-cd')).toEqual([expect.objectContaining({ via: 'note-void', told: SENDER, sessionId: TARGET })]);
     expect(sends).toEqual([]);
 
     const heldAt = Date.now();
