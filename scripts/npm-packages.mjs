@@ -127,7 +127,7 @@ require(require('path').join(__dirname, '..', 'lib', 'launch.js')).launch(__file
 const writeJson = (file, data) => fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`)
 
 function headOf(repoRoot) {
-  const r = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' })
+  const r = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 256 << 20 })
   return r.status === 0 && /^[0-9a-f]{40}$/.test(r.stdout.trim()) ? r.stdout.trim() : null
 }
 
@@ -197,13 +197,13 @@ export function npmHoldsVersion(output, version) {
 
 /** Is name@version on the registry already (published, or accepted and still being processed)? */
 function onRegistry(name, version, extra) {
-  const r = spawnSync('npm', ['view', `${name}@${version}`, 'version', ...extra], { encoding: 'utf8', timeout: 120_000 })
+  const r = spawnSync('npm', ['view', `${name}@${version}`, 'version', ...extra], { encoding: 'utf8', timeout: 120_000, maxBuffer: 256 << 20 })
   return r.status === 0 && r.stdout.trim() === version
 }
 
 /** False only when npm answers that the package has no version at all (E404). */
 function packageExists(name, extra) {
-  const r = spawnSync('npm', ['view', name, 'name', ...extra], { encoding: 'utf8', timeout: 120_000 })
+  const r = spawnSync('npm', ['view', name, 'name', ...extra], { encoding: 'utf8', timeout: 120_000, maxBuffer: 256 << 20 })
   return !(r.status !== 0 && /\bE404\b/.test(`${r.stdout ?? ''}${r.stderr ?? ''}`))
 }
 

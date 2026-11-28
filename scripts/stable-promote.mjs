@@ -200,7 +200,7 @@ export function allowedScripts(pkg) {
 }
 
 function git(root, args) {
-  return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 << 20 }).trim()
 }
 
 function arg(name) {

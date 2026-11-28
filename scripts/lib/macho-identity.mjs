@@ -87,7 +87,7 @@ export function writeMachoUuid(file, uuid) {
 
 /** The code signature's identifier (`codesign -dv`, which writes to stderr), or null. macOS only. */
 export function readSigningIdentifier(file) {
-  const r = spawnSync('codesign', ['-dv', file], { encoding: 'utf8' })
+  const r = spawnSync('codesign', ['-dv', file], { encoding: 'utf8', maxBuffer: 256 << 20 })
   const m = /^Identifier=(.*)$/m.exec(`${r.stdout ?? ''}${r.stderr ?? ''}`)
   return m ? m[1] : null
 }
@@ -119,7 +119,7 @@ function darwinSigner(name, opts, run) {
  * a code hash that does not match, or no signature at all, counts as broken.
  */
 function rcodesignVerifies(cmd, file, opts) {
-  const r = (opts.capture ?? ((c, a) => spawnSync(c, a, { encoding: 'utf8' })))(cmd, ['verify', file])
+  const r = (opts.capture ?? ((c, a) => spawnSync(c, a, { encoding: 'utf8', maxBuffer: 256 << 20 })))(cmd, ['verify', file])
   const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
   if (r.error) throw new Error(`${cmd} verify did not run: ${r.error.message}`)
   if (/digest mismatch|no code signature|not signed/i.test(out)) throw new Error(`the signature does not match the file: ${out.trim().split('\n').slice(-3).join(' ')}`)

@@ -37,7 +37,7 @@ export async function releaseBuild({ version, out, bun = process.env.BUN || 'bun
   if (host) {
     const env = { ...process.env }
     delete env.BUN_BE_BUN
-    const printed = execFileSync(path.join(files, builtName(host)), ['--version'], { env, encoding: 'utf8', timeout: 120_000 }).trim()
+    const printed = execFileSync(path.join(files, builtName(host)), ['--version'], { env, encoding: 'utf8', timeout: 120_000, maxBuffer: 256 << 20 }).trim()
     if (printed.split(/\s/)[0] !== version) throw new Error(`${builtName(host)} --version printed "${printed}", not ${version}`)
     log(`${builtName(host)} --version: ${printed}`)
   }

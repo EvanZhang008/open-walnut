@@ -48,7 +48,7 @@ function fail(message) {
 }
 
 function git(gitArgs, opts = {}) {
-  return execFileSync('git', gitArgs, { cwd: root, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], ...opts }).trim()
+  return execFileSync('git', gitArgs, { cwd: root, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 256 << 20, ...opts }).trim()
 }
 
 /** The next version for a bump word, or the version given, as a plain release. */

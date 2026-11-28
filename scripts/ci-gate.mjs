@@ -120,7 +120,7 @@ export function gh(endpoint) {
   const baseMs = Number(process.env.CI_GATE_RETRY_MS) || 3000
   for (let attempt = 1; ; attempt++) {
     try {
-      const out = execFileSync('gh', ['api', endpoint], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 })
+      const out = execFileSync('gh', ['api', endpoint], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000, maxBuffer: 256 << 20 })
       return JSON.parse(out)
     } catch (err) {
       const text = `${err?.message ?? ''}\n${err?.stderr ?? ''}\n${err?.code ?? ''}`
@@ -167,7 +167,7 @@ export function lastGreen(branch = 'main') {
 }
 
 function git(...args) {
-  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 << 20 }).trim()
 }
 
 function main() {

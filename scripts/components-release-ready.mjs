@@ -67,7 +67,7 @@ if (import.meta.main) {
   }
   let source = ''
   try {
-    source = rev ? execFileSync('git', ['show', `${rev}:${PIN}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) : fs.readFileSync(PIN, 'utf8')
+    source = rev ? execFileSync('git', ['show', `${rev}:${PIN}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 << 20 }) : fs.readFileSync(PIN, 'utf8')
   } catch {
     source = ''
   }

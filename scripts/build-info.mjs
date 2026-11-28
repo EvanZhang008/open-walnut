@@ -52,6 +52,7 @@ function git(root, args) {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 5000,
+      maxBuffer: 256 << 20,
     })
     return out.trim()
   } catch {
