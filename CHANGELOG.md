@@ -8,12 +8,6 @@ breaking changes).
 
 ### Changed
 
-- The session daemon keeps its own files (port, pid, session registry, programs, trigger state, logs) in `~/.cache/open-walnut` instead of `/tmp/open-walnut`, where the system's temp cleanup removed them after days of nobody touching them. Logs and pasted pictures stay in `/tmp/open-walnut`. Nothing that runs is moved: an existing install changes dir at its next reboot, and an older release still finds the daemon and its sessions (a downgrade keeps running sessions)
-- Remote Linux hosts now always run the compiled daemon (a daemon binary or the walnut file); a host where neither runs (node-only) is no longer supported
-- The one Walnut service is on by default: a remote Linux host under the service launcher runs its Walnut server and its session helper as one program; `hosts.<name>.service_offer: false` or a stored `host_service_offer` list keeps a host on two programs, macOS hosts are not offered it yet, and a `host_service_offer` set to null now means every host, not none
-- A remote host two Walnuts share becomes the one service of whichever leader asks first; the other Walnut's running sessions keep their CLI and their conversation, and it keeps sending to them and hearing them
-- On one computer account, the Walnut server runs this computer's sessions in its own process: a second server on the same daemon dir refuses to start and names the running one (pid, port, data dir), and a newer server that finds an older one's daemon program takes it over, its sessions adopted with their conversations
-- With the experiment "Small hosts run the one Walnut service, without a copy of your data", a host's Walnut switch turned off means the service runs there with no copy of your data, no port and no console (about 170 MB of memory against 80 MB for the session helper alone); Linux hosts only for now
 - A plugin op's answer, and the `api` op's answer for a route that carries outside text (plugins, letters, notifications, the mail router, any method), reach a session or a script inside an untrusted-data envelope: the value is under `external_content.data`. A script that parses such an answer (`walnut tools call calendar_query ... | jq`) reads `.external_content.data.events` instead of `.events`. A trigger check script, a plugin's own `walnut.ops.call` and a person read the plain value as before
 
 ### Fixed
@@ -21,6 +15,20 @@ breaking changes).
 - The server no longer stands still for about three seconds a minute after each start: judging the ended real-use watches again reads only each target's own rows, and the server answers between two watches
 - A trigger check's Walnut call that Walnut refuses as written (arguments the tool does not take, a tool name that does not exist, bad JSON, a step only a person may take) is told to the task that wrote the check, for every tool and from every host, and `trigger_test` names it, so a check that drops the error no longer stays quiet and blind. A check on the Mac can now call a plugin's tool
 - The server no longer freezes for one to two seconds every hour: the session daemon's hourly cleanup of old pictures and logs, and its sweeps of old session streams, now read the disk without holding the server
+
+## [0.6.38] - 2026-11-28
+
+### Changed
+
+- The session daemon keeps its own files (port, pid, session registry, programs, trigger state, logs) in `~/.cache/open-walnut` instead of `/tmp/open-walnut`, where the system's temp cleanup removed them after days of nobody touching them. Logs and pasted pictures stay in `/tmp/open-walnut`. Nothing that runs is moved: an existing install changes dir at its next reboot, and an older release still finds the daemon and its sessions (a downgrade keeps running sessions)
+- Remote Linux hosts now always run the compiled daemon (a daemon binary or the walnut file); a host where neither runs (node-only) is no longer supported
+- The one Walnut service is on by default: a remote Linux host under the service launcher runs its Walnut server and its session helper as one program; `hosts.<name>.service_offer: false` or a stored `host_service_offer` list keeps a host on two programs, macOS hosts are not offered it yet, and a `host_service_offer` set to null now means every host, not none
+- A remote host two Walnuts share becomes the one service of whichever leader asks first; the other Walnut's running sessions keep their CLI and their conversation, and it keeps sending to them and hearing them
+- On one computer account, the Walnut server runs this computer's sessions in its own process: a second server on the same daemon dir refuses to start and names the running one (pid, port, data dir), and a newer server that finds an older one's daemon program takes it over, its sessions adopted with their conversations
+- With the experiment "Small hosts run the one Walnut service, without a copy of your data", a host's Walnut switch turned off means the service runs there with no copy of your data, no port and no console (about 170 MB of memory against 80 MB for the session helper alone); Linux hosts only for now
+
+### Fixed
+
 - A session daemon that keeps running after its port, pid and instance files were removed (a temp-folder cleanup) is found through its instance lock and used, then updated as usual; sessions no longer fail to start with "port file not created within 10s", on this machine or a remote host
 
 ## [0.6.37] - 2026-11-20
