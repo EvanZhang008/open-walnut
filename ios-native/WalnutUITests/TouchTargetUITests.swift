@@ -104,6 +104,11 @@ final class TouchTargetUITests: XCTestCase {
             menu.tap()
         }
         XCTAssertTrue(scrim.waitForExistence(timeout: 10), "the board drawer did not open")
+        // The scrim is there from the first frame of the slide, and the launch's restore opens the
+        // drawer by itself a beat after the tab shows: a header key tapped while the drawer still
+        // moves loses its tap (CI run 46033978979: the calendar key's tap opened nothing, the
+        // drawer open and still afterwards). The keys are tapped once the header holds still.
+        XCTAssertTrue(waitStill(app.buttons["tasks.calendar"], timeout: 10), "the board drawer never held still")
     }
 
     /// Put the keyboard away (a pill's first tap with it up only does that, by design).
