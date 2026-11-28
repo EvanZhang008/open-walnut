@@ -118,17 +118,28 @@ final class TalkToWalnutUITests: XCTestCase {
         for _ in 0..<8 where !open.isHittable { app.swipeDown() }
         open.tap()
         let resend = element(app, "talk.unsent.resend")
-        let delete = element(app, "talk.unsent.delete")
         XCTAssertTrue(resend.waitForExistence(timeout: 10))
+        // The take retries by itself: while a send is in flight the row shows "Sending…" in place
+        // of its reason, and after one it gains a "Tried again at" line that pushes both keys down.
+        // Every frame below is read from ONE snapshot of the row held still with no send in flight
+        // (CI run 46062235809 read Delete before that line came and Send Now after it).
+        let held = stillSnapshot(app, ids: ["talk.unsent.resend", "talk.unsent.delete"], timeout: 30) {
+            $0.first(id: "talk.unsent.resending") == nil
+        }
+        let tree = try XCTUnwrap(held, "the Not Sent row never held still with no send in flight")
         shot("ax-unsent-row")
         let width = app.windows.firstMatch.frame.width
-        XCTAssertGreaterThan(resend.frame.width, width * 0.6, "Resend is squeezed beside the reason")
-        XCTAssertGreaterThan(delete.frame.width, width * 0.6, "Delete is squeezed beside the reason")
-        XCTAssertGreaterThanOrEqual(delete.frame.minY, resend.frame.maxY - 1, "stacked, Resend comes first")
+        let resendFrame = try XCTUnwrap(tree.first(id: "talk.unsent.resend")).frame
+        let deleteFrame = try XCTUnwrap(tree.first(id: "talk.unsent.delete")).frame
+        XCTAssertGreaterThan(resendFrame.width, width * 0.6, "Resend is squeezed beside the reason")
+        XCTAssertGreaterThan(deleteFrame.width, width * 0.6, "Delete is squeezed beside the reason")
+        XCTAssertGreaterThanOrEqual(deleteFrame.minY, resendFrame.maxY - 1, "stacked, Resend comes first")
         // The reason (on the row, or once in the header when every row shares it)
         // wraps instead of ending in "…": at this size it needs two lines or more.
-        let reason = labelled(app, "Walnut server unavailable")
-        XCTAssertTrue(reason.exists, "the reason is not shown")
-        XCTAssertGreaterThan(reason.frame.height, 60, "the reason is cut to one line")
+        let reason = tree.allNodes.first {
+            !$0.frame.isEmpty && $0.label.range(of: "Walnut server unavailable", options: .caseInsensitive) != nil
+        }
+        XCTAssertNotNil(reason, "the reason is not shown")
+        XCTAssertGreaterThan(reason?.frame.height ?? 0, 60, "the reason is cut to one line")
     }
 }

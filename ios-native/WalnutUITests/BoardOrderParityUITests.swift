@@ -179,14 +179,9 @@ final class BoardOrderParityUITests: XCTestCase {
     private func drawnRowIds(_ app: XCUIApplication) -> [String] {
         guard let root = try? app.snapshot() else { return [] }
         let prefix = "board.row."
-        var found: [(id: String, y: CGFloat)] = []
-        var stack: [XCUIElementSnapshot] = [root]
-        while let node = stack.popLast() {
-            if node.identifier.hasPrefix(prefix), !node.frame.isEmpty {
-                found.append((String(node.identifier.dropFirst(prefix.count)), node.frame.minY))
-            }
-            stack.append(contentsOf: node.children)
-        }
+        let found = root.allNodes
+            .filter { $0.identifier.hasPrefix(prefix) && !$0.frame.isEmpty }
+            .map { (id: String($0.identifier.dropFirst(prefix.count)), y: $0.frame.minY) }
         var ids: [String] = []
         for entry in found.sorted(by: { $0.y < $1.y }) where !ids.contains(entry.id) {
             ids.append(entry.id)
