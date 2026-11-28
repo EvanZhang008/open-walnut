@@ -22,6 +22,8 @@ export type LightSubagentStatus = 'running' | 'completed' | 'failed' | 'stopped'
 /** Why a run could not start or did not finish, as one code a caller can branch on. */
 export type LightSubagentErrorCode =
   | 'bad_request'
+  /** The folder it would run in (or copy from) is not on the caller's own host: nothing was started. */
+  | 'cwd_missing'
   | 'no_session'
   | 'engine_unavailable'
   | 'model_unavailable'

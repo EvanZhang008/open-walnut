@@ -268,6 +268,18 @@ export async function startLightSubagent(parentSid: string | undefined, req: Sta
   if (req.cwd && (!cwd.startsWith('/') || cwd.split('/').includes('..'))) {
     throw new LightSubagentError('bad_request', `cwd must be an absolute path without "..": ${req.cwd}`, 400)
   }
+  // The folder is on the caller's own host (with `host` too: its work is copied from there). A folder
+  // that is not there is the caller's mistake, answered here: started anyway, the run died at the
+  // spawn's folder check and Walnut Health counted it as a background error (2026-11-28: a Mac
+  // session named a dev box's path without `host`, three times).
+  const { folderState } = await import('../sessions/folder-gone.js')
+  // `~` is everyone's home on its host (missingStartFolder never asks it either).
+  if (!cwd.startsWith('~') && (await folderState(cwd, ownHost)) === 'gone') {
+    const where = ownHost === '__local__' ? 'this machine' : ownHost
+    throw new LightSubagentError('cwd_missing',
+      `The folder ${cwd} is not on ${where}, your session's own host, so the subagent was not started. \`cwd\` names a folder there; to run on another machine, pass \`host\` (your work at \`cwd\` is copied to it).`,
+      400, { cwd, host: ownHost })
+  }
   // Another host: the one host_exec would run on, under the same grant (it is as strong as a command there).
   const away = req.host?.trim() ? await awayHost(sid, req.host.trim(), prompt) : null
   const host = away?.host ?? ownHost

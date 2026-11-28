@@ -413,6 +413,18 @@ describe('subagent_run on another host', () => {
     await expect(startLightSubagent(SID, { host: 'cloud', prompt: 'x', cwd: '/a/../b' })).rejects.toMatchObject({ code: 'bad_request' })
   })
 
+  // 2026-11-28: a Mac session named a dev box's folder without `host`; each run was started, died at
+  // the spawn's folder check and counted in Walnut Health as a background error. The caller hears it.
+  it('refuses a cwd that is not on the caller\'s own host, and starts nothing, with host or without', async () => {
+    const missing = path.join(W.root, 'not-on-this-host', 'runner')
+    for (const more of [{}, { host: 'cloud' }, { engine: 'codex' as const }]) {
+      await expect(startLightSubagent(SID, { prompt: 'x', cwd: missing, ...more }))
+        .rejects.toMatchObject({ code: 'cwd_missing', status: 400, data: { cwd: missing, host: '__local__' }, message: expect.stringContaining('pass `host`') })
+    }
+    expect(starts).toEqual([])
+    expect(lightSubagentRows(SID)).toEqual([])
+  })
+
   it('starts a full task session there: no profile, the caller\'s full access, the CLI\'s own model', async () => {
     const run = await runToEnd('Check it.')
     expect(run.status, run.error).toBe('completed')
