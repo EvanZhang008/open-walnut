@@ -130,7 +130,8 @@ describe('guard: the server records each writer from Walnut\'s own record only',
   it('the route reads no writer from the body, and every write that records one passes the verified source', () => {
     expect(route).not.toMatch(/str\(b, '(sid|host|by|reply_sid|reply_host|reply_by)'\)/)
     expect(route).not.toMatch(/\bb\.(sid|host|by|reply_sid|reply_host|reply_by)\b/)
-    expect(route).toMatch(/resolveThreadCaller\(header\(req, 'x-walnut-caller-sid'\)\)/)
+    // The caller's sid, or the outside caller for a request that is not the person (changed-by.ts).
+    expect(route).toMatch(/resolveThreadCaller\(callerSidOrOutside\(req\)\)/)
     // Every caller of the two writes that record a writer, anywhere in the server.
     const calls: string[] = []
     const walk = (dir: string) => {

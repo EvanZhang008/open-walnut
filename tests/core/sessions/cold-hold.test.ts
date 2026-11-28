@@ -133,6 +133,7 @@ const NO_CLOCK_NOTICES: Record<string, { files: string[]; why: string }> = {
 const PEER_SENDERS: Record<string, string> = {
   'src/core/sessions/session-send-core.ts': 'task_send and its replies: another task speaking now',
   'src/web/routes/messages-v1.ts': 'a calling session\'s Retry of its own message',
+  'src/web/routes/session-chat.ts': 'a socket that is not the person retrying its own message, as messages-v1 does for a session',
   'src/core/human-inbox/letter-ops.ts': 'an agent\'s answer to a letter, sent with a wake reason',
 };
 
