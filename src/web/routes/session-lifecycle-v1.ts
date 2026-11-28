@@ -41,6 +41,7 @@ import { isImageAttachError } from './images.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
+import { callerSidHeader, callerSidOrOutside, changedBy } from './changed-by.js'
 
 export const sessionLifecycleV1Router = Router()
 
@@ -283,7 +284,7 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
     const body = (req.body ?? {}) as Record<string, unknown>
     // A session sets a mode at most as loose as its own (delegated-mode.ts), before any relay.
     const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
-    const refused = await modeChangeRefusal(req.get('x-walnut-caller-sid'), body.mode, { unproven: callerUnprovenOf(req) })
+    const refused = await modeChangeRefusal(callerSidOrOutside(req), body.mode, { unproven: callerUnprovenOf(req) })
     if (refused) { sendError(res, 403, 'mode_above_caller', refused); return }
     const patch = {
       ...(body.title !== undefined ? { title: body.title } : {}),
@@ -403,7 +404,7 @@ sessionLifecycleV1Router.post('/sessions/:id/terminate', async (req: Request, re
     const { sendStopPending } = await import('./session-stop-v1.js')
     try {
       const { stopperOf } = await import('../../core/sessions/host-lost.js')
-      const result = await terminateSession(sessionId, { force, by: await stopperOf(req.get('x-walnut-caller-sid') || undefined) })
+      const result = await terminateSession(sessionId, { force, by: callerSidHeader(req) ? await stopperOf(callerSidHeader(req)) : await changedBy(req) })
       if (result.status === 'pending') {
         await sendStopPending(res, sessionId)
         return

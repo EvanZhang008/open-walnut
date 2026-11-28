@@ -29,7 +29,7 @@
  * proof videos that type are recorded there. `WALNUT_AUTOMATED_CLIENT_AGENT=1` turns it on there
  * (this rule's own tests), `=0` off anywhere.
  *
- * Dependency-free at import (send-sent-by.ts is pure and imports it).
+ * Dependency-free at import (send-sent-by.ts imports it).
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 

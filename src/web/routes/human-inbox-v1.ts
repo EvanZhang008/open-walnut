@@ -45,6 +45,7 @@ import { isCompanion, isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
 import { isImageAttachError } from './images.js'
+import { callerSidHeader, callerSidOrOutside } from './changed-by.js'
 import {
   LETTER_HTML_MAX_BYTES, letterFieldMaxBytes,
   type AgentReplyInput, type NewLetter,
@@ -163,11 +164,14 @@ async function guard(
 }
 
 /** The caller's session id, as provenance for the envelope. */
-function callerSid(req: Request): string | undefined {
-  const raw = req.headers['x-walnut-caller-sid']
-  const sid = (Array.isArray(raw) ? raw[0] : raw ?? '').trim()
-  return sid || undefined
-}
+const callerSid = callerSidHeader
+
+/**
+ * Who answers, replies to or settles a letter: the caller's session, none only for the person
+ * himself, else an outside caller (changed-by.ts callerSidOrOutside), so a local process with no
+ * proof never answers in his name.
+ */
+const answererSid = callerSidOrOutside
 
 function body(req: Request): Record<string, unknown> {
   const b = req.body
@@ -443,7 +447,7 @@ humanInboxV1Router.post('/human-inbox/:id/settle', async (req: Request, res: Res
   await guard(res, next, 'POST /human-inbox/:id/settle', async () => {
     const b = body(req)
     const id = letterId(req)
-    const sid = callerSid(req)
+    const sid = answererSid(req)
     // The companion relays to the Mac; a host replica's front forwards the route there itself.
     if (isCompanion()) {
       await relayControlAction(res, 'server.human-inbox.settle', SERVER_RELAY_SID, { ...b, id, ...(sid ? { callerSid: sid } : {}) }, 200)
@@ -484,7 +488,7 @@ humanInboxV1Router.post('/human-inbox/:id/answer', async (req: Request, res: Res
   await guard(res, next, 'POST /human-inbox/:id/answer', async () => {
     const b = body(req)
     const id = letterId(req)
-    const sid = callerSid(req)
+    const sid = answererSid(req)
     if (CLOUD_MODE) {
       // The primary resolves the caller and checks the letter: it holds the letter for sure.
       // While it is away, the human's own answer waits for it in the journal (human-inbox-replica.ts).
@@ -531,7 +535,7 @@ humanInboxV1Router.post('/human-inbox/:id/human-reply', async (req: Request, res
       sendError(res, 413, 'too_large', `text is over the ${over.max}-byte cap`)
       return
     }
-    const sid = callerSid(req)
+    const sid = answererSid(req)
     if (CLOUD_MODE) {
       const { replicaLetterTurn } = await import('./human-inbox-replica.js')
       await replicaLetterTurn(res, 'reply', id, b, { ...(await withInlinePictures(b)), id, ...(sid ? { callerSid: sid } : {}) }, { ...(sid ? { callerSid: sid } : {}), answerBy })

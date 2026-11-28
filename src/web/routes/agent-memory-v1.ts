@@ -35,6 +35,7 @@ import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendOwnAnswer } from '../middleware/coded-refusal-answer.js'
 import { MemoryFolderError, SHARED_FOLDER, listMemoryFiles, readMemoryFile, writeOwnNote } from '../../core/sessions/memory-folder.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const agentMemoryV1Router = Router()
 
@@ -64,7 +65,8 @@ agentMemoryV1Router.get('/tasks/:id/agent-memory', route(async (req, res) => {
 agentMemoryV1Router.put('/tasks/:id/agent-memory', route(async (req, res) => {
   if (role() === 'replica') throw new RouteError(501, 'not_supported_cloud', 'A task\'s MEMORY.md is written on the primary box')
   const task = await resolveTask(param(req.params.id))
-  const sid = header(req, 'x-walnut-caller-sid')
+  // No session named is the person only for his own request; any other such caller is an agent (changed-by.ts).
+  const sid = callerSidOrOutside(req)
   const b = body(req)
   if (typeof b.content !== 'string') throw new RouteError(400, 'bad_request', 'content (string) is required')
   const mode = b.mode === 'replace' ? 'replace' as const : 'append' as const

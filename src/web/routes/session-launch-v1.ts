@@ -67,6 +67,7 @@ import { log } from '../../logging/index.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const sessionLaunchV1Router = Router()
 
@@ -418,8 +419,8 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
           // createSessionManager routes to this box's daemon). No new branch in
           // the session core, so the generic local path cannot regress here.
           const result = await performMobileLaunch(
-            { ...input, host: launchHostForCore(input.host) }, startRouteSource('cloud-exec-launch', req.headers),
-            { callerSid: req.get('x-walnut-caller-sid')?.trim() || undefined, callerUnproven: callerUnprovenOf(req) },
+            { ...input, host: launchHostForCore(input.host) }, startRouteSource('cloud-exec-launch', req),
+            { callerSid: callerSidOrOutside(req), callerUnproven: callerUnprovenOf(req) },
           )
           // Seed id→host so this box's OWN subsequent stream/send/transcript
           // calls resolve to the cloud host instead of missing the (Mac-owned)
@@ -448,7 +449,7 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
       const callerSid = req.get('x-walnut-caller-sid')?.trim() || undefined
       const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
       const caller = callerSid ? await getSessionByClaudeId(callerSid).catch(() => null) : null
-      const message = frameStartText(input.message, { source: startRouteSource('mobile-launch-bridge', req.headers), callerSid,
+      const message = frameStartText(input.message, { source: startRouteSource('mobile-launch-bridge', req), callerSid,
         ...(caller ? { caller: await framingCallerOf(caller) } : {}) })
       // The envelope crosses older bridges too: no new protocol field is needed to keep its author.
       await relayLaunchAction(res, 'launch', { ...req.body, message }, 201)
@@ -456,8 +457,9 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
     }
 
     try {
-      const callerSid = req.get('x-walnut-caller-sid')?.trim() || undefined
-      const result = await performMobileLaunch(input, startRouteSource('mobile-launch', req.headers), { callerSid, callerUnproven: callerUnprovenOf(req) })
+      // A caller with no session that is not the person is capped as an outside one (changed-by.ts).
+      const callerSid = callerSidOrOutside(req)
+      const result = await performMobileLaunch(input, startRouteSource('mobile-launch', req), { callerSid, callerUnproven: callerUnprovenOf(req) })
       res.status(201).json(result)
     } catch (err) {
       if (err instanceof QuickStartError) {

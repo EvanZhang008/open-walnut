@@ -53,7 +53,7 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
     const typed = typeof body.text === 'string' && !!body.text.trim()
     const text = typed ? body.text as string : DEFAULT_TEXT
     // Clicking Move did not type the default handoff. Its author is Walnut.
-    const source = typed ? startRouteSource('api-v1', req.headers) : 'task-move'
+    const source = typed ? startRouteSource('api-v1', req) : 'task-move'
     const { getTask } = await import('../../core/task-manager.js')
     const task = await getTask(String(req.params.id)).catch(() => null)
     if (!task) { res.status(404).json({ error: 'Task not found', code: 'not_found' }); return }

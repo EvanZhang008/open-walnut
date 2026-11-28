@@ -166,7 +166,7 @@ contentV1Router.post('/content/ceo', async (req: Request, res: Response, next: N
     }
     const text = ceoMessage(item, noted.note)
     const images = sessionImagesOf(req.body?.images)
-    const source = routeSource('ui', req.headers)
+    const source = routeSource('ui', req)
     const { sendToMain, sendToTaskChat } = await import('./quick-input-v1.js')
     const to = { id: target.id, kind: target.kind, name: target.name }
     const standIn = await testRunCeo()

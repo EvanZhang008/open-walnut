@@ -23,6 +23,7 @@ import { SocketTraffic } from './traffic.js'
 import { automatedClientIsAgent, automatedClientOf, withAutomatedClient, type AutomatedClientKind } from '../../core/sessions/automated-client.js'
 import { asPersonCall } from '../../core/session-channel/person-call.js'
 import { isPersonCaller } from '../routes/person-caller.js'
+import { withRpcCaller } from './rpc-caller.js'
 import { authenticateFeatureNode, upgradeFeatureNode, startFeatureNodes, closeFeatureNodes } from './feature-node-runtime.js'
 import { BRIDGE_SESSION_STREAM_PATH, closeAllBridgeSessionStreams, handleBridgeSessionStreamUpgrade } from './bridge-session-stream.js'
 
@@ -348,7 +349,8 @@ async function handleMessage(client: Client, raw: string): Promise<void> {
   try {
     const run = () => handler(frame.payload, client.ws)
     const asPerson = client.person === true && !client.automated && personMethods.has(frame.method)
-    const result = await withAutomatedClient(automated, asPerson ? () => asPersonCall(run) : run, () => open)
+    // Every socket call says whether its socket is the person's (rpc-caller.ts), for a handler that frames words as his.
+    const result = await withRpcCaller(client.person === true, () => withAutomatedClient(automated, asPerson ? () => asPersonCall(run) : run, () => open))
     sendResponse(client.ws, frame.id, true, result ?? undefined)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

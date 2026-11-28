@@ -14,15 +14,12 @@ import { createRouterNode, updateRouterNode, type RouterNodePatch } from '../../
 import { setSelfRouter, clearSelfRouter } from '../../core/router/self-router.js';
 import { assertIsolatedHistory } from '../../core/router/history-isolation.js';
 import { OrgError } from '../../core/org/org-store.js';
+import { callerSidOrOutside } from './changed-by.js';
 
 export const routerV1Router = Router();
 
-function callerSid(req: Request): string | undefined {
-  const sid = req.headers['x-walnut-caller-sid'];
-  if (typeof sid === 'string' && sid.trim()) return sid.trim();
-  const kind = req.headers['x-walnut-caller-kind'];
-  return typeof kind === 'string' && kind.trim().toLowerCase() === 'automation' ? 'external' : undefined;
-}
+/** The caller's session; none only for the person's own request, else an outside caller (changed-by.ts). */
+const callerSid = callerSidOrOutside;
 
 /** A router's own session, which reads outside content with only its two router tools. */
 async function refuseRouterSession(req: Request, message: string): Promise<void> {
@@ -87,11 +84,11 @@ routerV1Router.put('/org/routers/self/:id', async (req: Request, res: Response, 
       || (body.name !== undefined && typeof body.name !== 'string')) {
       throw new RouterError('bad_router', 'Give the VP links (a list of VP task ids) and, if you like, its name on the Org page.');
     }
-    const sid = req.headers['x-walnut-caller-sid'];
+    const sid = callerSid(req);
     let by = 'human';
-    if (typeof sid === 'string' && sid.trim()) {
+    if (sid) {
       const { resolveCaller } = await import('../../core/sessions/session-send-core.js');
-      const caller = await resolveCaller(sid.trim());
+      const caller = await resolveCaller(sid);
       by = caller.kind === 'session' && caller.record.taskId ? `task:${caller.record.taskId}` : 'agent';
     }
     res.json({ task: await setSelfRouter(String(req.params.id), {

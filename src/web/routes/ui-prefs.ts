@@ -252,7 +252,7 @@ uiPrefsRouter.put('/', async (req: Request, res: Response, next: NextFunction) =
       return
     }
     // An agent may mirror layout, but its activity never joins the person's Recent.
-    if (routeSource('ui', req.headers) !== 'ui') {
+    if (routeSource('ui', req) !== 'ui') {
       patch = { ...patch }
       delete patch[RECENT_OPENED_KEY]
     }

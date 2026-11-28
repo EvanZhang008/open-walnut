@@ -35,6 +35,7 @@ import { broadcastEvent } from '../ws/handler.js'
 import { hasAiOnly, redactAiOnly } from '../../lib/ai-only-envelope.js'
 import { attachmentHeaderBlock } from '../../lib/attachment-headers.js'
 import { attributedUnlessAutomated } from '../../core/sessions/send-frame.js'
+import { rpcCallerIsPerson } from '../ws/rpc-caller.js'
 import { oneSendAtATime, sameSendSettled } from '../../core/sessions/send-once.js'
 import { readHostOf } from '../../core/sessions/session-row-owner.js'
 
@@ -76,6 +77,9 @@ function autoRetryOf(at: number | undefined): { autoRetryAt?: string } {
   return at === undefined ? {} : { autoRetryAt: new Date(at).toISOString() }
 }
 
+/** The sender a start from a socket that is not the person's names (send-frame.ts frames its words as Walnut's). */
+const NOT_PERSON_SOCKET = 'a local client that is not the person'
+
 export function registerSessionChatRpc(): void {
   // Feeds `session:get-queue`'s launchPrompt field below.
   startLaunchPromptRegistry()
@@ -104,8 +108,9 @@ export function registerSessionChatRpc(): void {
     bus.emit(EventNames.SESSION_START, {
       taskId: typeof data.taskId === 'string' ? data.taskId : '',
       message: data.message,
-      // The console's composer: a person typed it, unless a browser under automation did.
-      ...attributedUnlessAutomated('ui:typed-message'),
+      // The console's composer: a person typed it, unless a browser under automation did, or the
+      // socket is not the person's (ws/rpc-caller.ts): then its words are framed as Walnut's.
+      ...(rpcCallerIsPerson() ? attributedUnlessAutomated('ui:typed-message') : { attributionSource: NOT_PERSON_SOCKET }),
       cwd: typeof data.cwd === 'string' ? data.cwd : undefined,
       project: typeof data.project === 'string' ? data.project : undefined,
       mode: typeof data.mode === 'string' ? data.mode : undefined,
@@ -127,6 +132,10 @@ export function registerSessionChatRpc(): void {
     if (typeof data.sessionId !== 'string' || typeof data.message !== 'string') {
       throw new Error('session:send requires sessionId (string) and message (string)')
     }
+    // The composer's words are the person's only from the person's own socket (ws/rpc-caller.ts);
+    // any other socket sends as an agent, as a non-person HTTP send does (send-sent-by.ts routeSource).
+    const person = rpcCallerIsPerson()
+    const source = person ? 'ui' : 'api-agent'
 
     // Optional pre-assigned uuid for the CLI's own user line. Validated here (the
     // one entry point) so a bad value can never reach the queue or the FIFO
@@ -194,7 +203,7 @@ export function registerSessionChatRpc(): void {
         sessionId: data.sessionId,
         messageId,
         message: data.message as string,
-        source: 'ui',
+        source,
         ...dictationEventFields(dictation),
       }, ['main-ai'], { source: 'web-ui' })
 
@@ -304,7 +313,7 @@ export function registerSessionChatRpc(): void {
       const { sendQueuedNow } = await import('../../core/sessions/send-now.js')
       const again = await sendQueuedNow({
         sessionId: data.sessionId, messageId: data.retryOf, taskId: record?.taskId,
-        message: data.message as string, source: 'web-ui-retry', unpark: data.autoResend !== true,
+        message: data.message as string, source: person ? 'web-ui-retry' : 'peer', unpark: person && data.autoResend !== true,
       })
       if (again.sent) return { messageId: data.retryOf }
       // The row is the host's and the host could not be asked: it may even have sent it. Said as
@@ -320,7 +329,7 @@ export function registerSessionChatRpc(): void {
       retryLine = await settledLineUuid(data.retryOf)
       const same = await sameSendSettled({
         sessionId: data.sessionId, host: record?.host, taskId: record?.taskId, userUuid, lineUuid: retryLine,
-        message: data.message as string, source: 'web-ui-retry', autoResend: data.autoResend === true,
+        message: data.message as string, source: person ? 'web-ui-retry' : 'peer', autoResend: data.autoResend === true,
       })
       if (same.state === 'queued') return { messageId: same.messageId, ...(same.enqueuedAt ? { enqueuedAt: same.enqueuedAt } : {}) }
       if (same.state === 'ran') return { messageId: data.retryOf, alreadyDelivered: true }
@@ -364,7 +373,7 @@ export function registerSessionChatRpc(): void {
         ...(typeof switchTo.effort === 'string' ? { effort: switchTo.effort as SessionEffort } : {}),
         ...(typeof switchTo.permissionMode === 'string' ? { permissionMode: switchTo.permissionMode as SessionMode } : {}),
         ...(dictation ? { dictation } : {}),
-        source: 'ui', detach: true,
+        source, detach: true,
       })
       log.web.info('session:send RPC engine switch', { sessionId: data.sessionId, taskId: record.taskId, engine: switchTo.engine, state: out.state })
       // It starts a session and queues no message, so its dictations are paired here.
@@ -379,7 +388,7 @@ export function registerSessionChatRpc(): void {
     }
 
     const outputMode = await prepareHintedSend(data.sessionId, record, augmentedMessage, {
-      requested: requestedHintsOf(data.hints), sentBy: 'person',
+      requested: requestedHintsOf(data.hints), sentBy: person ? 'person' : 'agent',
       // Sent from a thread's Follow up on the Org page's Threads (core/org/thread-capture.ts).
       ...(typeof data.threadId === 'string' && /^th-[a-f0-9]{6,32}$/.test(data.threadId) ? { threadId: data.threadId } : {}),
       // A Retry that falls through to a fresh enqueue: its words were filed when first sent.
@@ -393,7 +402,7 @@ export function registerSessionChatRpc(): void {
     // persisted as cliModel for cold resume); SESSION_SEND carries no model field.
     log.web.info('session message via RPC', { sessionId: data.sessionId, taskId: record?.taskId, messageLength: augmentedMessage.length })
     const msg = await sendMessageToSession(data.sessionId, data.message as string, {
-      source: 'ui',
+      source,
       taskId: record?.taskId,
       mode: typeof data.mode === 'string' ? data.mode : undefined,
       interrupt: data.interrupt === true ? true : undefined,

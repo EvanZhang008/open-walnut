@@ -112,7 +112,7 @@ engineSwitchV1Router.post('/tasks/:id/switch-engine', async (req: Request, res: 
       ...(typeof body.effort === 'string' ? { effort: body.effort as SessionEffort } : {}),
       ...(typeof body.permission_mode === 'string' ? { permissionMode: body.permission_mode as SessionMode } : {}),
       ...(typeof body.reason === 'string' && body.reason.trim() ? { reason: body.reason } : {}),
-      callerSid: callerSid(req), callerUnproven: callerUnprovenOf(req), source: startRouteSource('api-v1', req.headers),
+      callerSid: callerSid(req), callerUnproven: callerUnprovenOf(req), source: startRouteSource('api-v1', req),
     })
     let timer: ReturnType<typeof setTimeout> | undefined
     const outcome = await Promise.race([

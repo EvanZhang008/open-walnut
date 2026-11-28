@@ -37,8 +37,9 @@ import { getOp, getOpOwner, type AnswerReader, type HttpBinding, type WalnutOp }
 import { defaultAddressNote, demoApiHeaders, getSelfApiRoot, getSelfCallToken, walnutApiTarget } from '../lib/self-api-root.js'
 import { fetchErrorCode } from '../lib/fetch-error.js'
 import {
-  LOCAL_ORIGIN, ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
+  LOCAL_ORIGIN, ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
 } from '../lib/caller-origin.js'
+import { forwardProofHeader } from '../lib/forward-proof.js'
 import { selfCallRefusal } from './origin-policy.js'
 import { declaredKeysNote, inferRenames, invalidTypeHint, keyMeaningHint, renameNote, unknownKeyHint, unknownKeyNotes } from './arg-hints.js'
 import { isCallId, takeCallIdArg, writeOpId } from '../lib/op-call-id.js'
@@ -224,7 +225,8 @@ async function rawRequest(
   // A call to this process's own server proves itself (a cloud-mode server has no
   // loopback waiver); the credential never goes to any other root.
   const self = getSelfApiRoot()
-  const selfToken = self && resolveApiBase(self) === base ? getSelfCallToken() : null
+  const selfRoot = !!self && resolveApiBase(self) === base
+  const selfToken = selfRoot ? getSelfCallToken() : null
   let res: Response
   if (method !== 'GET' && method !== 'HEAD') {
     await prov.beforeMutation?.()
@@ -251,6 +253,8 @@ async function rawRequest(
         // No session and no person behind it: a script or a scheduled job (src/lib/cli-sender.ts).
         ...(!prov.sid && prov.callerKind === 'agent' ? { [CALLER_KIND_HEADER]: 'automation', ...(prov.sender ? { [SENDER_LABEL_HEADER]: prov.sender } : {}) } : {}),
         ...(selfToken ? { Authorization: `Bearer ${selfToken}` } : {}),
+        // A call to this server itself made for a client off this machine proves it is ours (lib/forward-proof.ts).
+        ...(selfRoot && prov.origin === REMOTE_HTTP_ORIGIN ? forwardProofHeader() : {}),
         // A retry of the same call meets this write's first answer instead of applying it twice.
         ...(opId ? { [OP_ID_HEADER]: opId } : {}),
         ...testRunHeader(),

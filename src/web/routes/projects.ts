@@ -38,6 +38,7 @@ import type { SlimTask } from '../../core/task-manager.js'
 import { orgDisplayTitle, pickLead } from '../../core/org/org-tree.js'
 import { INBOX_PROJECT, isInboxProject } from '../../core/inbox-project.js'
 import { ProjectSettingsError } from '../../core/sessions/project-launch-defaults.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const projectsRouter = Router()
 
@@ -190,7 +191,7 @@ projectsRouter.post('/', async (req: Request, res: Response, next: NextFunction)
 
     const { projectSourceRefusal } = await import('../../core/plugins/integration-list.js')
     const refusal = await projectSourceRefusal(typeof source === 'string' ? source : 'local',
-      req.get('x-walnut-caller-sid') || undefined, (req.body as { user_words?: unknown }).user_words)
+      callerSidOrOutside(req), (req.body as { user_words?: unknown }).user_words)
     if (refusal) {
       res.status(403).json({ error: refusal, code: 'user_decision' })
       return

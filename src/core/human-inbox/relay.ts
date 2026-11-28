@@ -92,7 +92,8 @@ export async function handleHumanInboxRelayAction(
       const { executeInboxItem, queryInboxItem } = await import('./item-execution.js');
       if (sub === 'item-execute') {
         const { humanActionApiBase } = await import('../../ops/human-action-policy.js');
-        const receipt = await executeInboxItem(letterId, itemId, p.body, origin, humanActionApiBase());
+        // A follower that names no verdict is older than it, and kept the old rule: the person.
+        const receipt = await executeInboxItem(letterId, itemId, p.body, origin, humanActionApiBase(), p.asPerson !== false);
         return { ...await queryInboxItem(letterId, itemId, origin), receipt };
       }
       if (sub === 'item-execution') return await queryInboxItem(letterId, itemId, origin) as unknown as Record<string, unknown>;

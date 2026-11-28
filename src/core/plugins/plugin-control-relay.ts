@@ -4,6 +4,7 @@ import { getPluginLifecycleRecords } from '../integration-loader.js'
 import { validatePluginId } from './ids.js'
 import { callPluginOp, getPluginApiBase, listPluginOps, parsePluginOpCaller } from './server-api.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
+import { forwardProofHeader } from '../../lib/forward-proof.js'
 import { parseTestRunLabel, testRunMarkingEnabled, withTestRun } from '../test-run.js'
 import {
   isRelayablePluginPath,
@@ -242,7 +243,7 @@ async function relayPluginHttp(params: Record<string, unknown>, origin: string):
   const pathname = relayPath(params.path)
   // A loopback self-call for a client off this Mac: label it, over any header the
   // client sent (names arrive lowercased), so a plugin route never reads it as local.
-  const headers = { ...filterHeaders(params.headers), [ORIGIN_HEADER]: origin }
+  const headers = { ...filterHeaders(params.headers), [ORIGIN_HEADER]: origin, ...forwardProofHeader() }
   const body = decodeBase64(params.data, params.size)
   if ((method === 'GET' || method === 'HEAD') && body.byteLength > 0) {
     throw new PluginControlFailure(`${method} Plugin requests cannot have a body`, 400)

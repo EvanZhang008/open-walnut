@@ -38,7 +38,16 @@ import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { requestOrigin } from '../middleware/request-origin.js'
+import { isPersonNotAutomation } from './person-caller.js'
+import { SENDER_LABEL_HEADER } from '../../lib/cli-sender.js'
 import { humanActionRefusal, humanActionApiBase } from '../../ops/human-action-policy.js'
+
+/** The automation label a call with no session and no person behind it runs under (cli-sender.ts). */
+function senderOf(req: Request): string {
+  const raw = req.headers[SENDER_LABEL_HEADER]
+  const v = (Array.isArray(raw) ? raw[0] : raw)?.trim()
+  return v ? v.slice(0, 80) : 'action-card'
+}
 
 export const actionsV1Router = Router()
 
@@ -150,7 +159,11 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
     const startedAt = Date.now()
     const outcome = await executeOp(tool, parsed.args, {
       apiBase: apiBaseFor(req),
-      ...(sid ? { callerMode: 'session' as const, callerSid: sid } : { callerMode: 'human' as const }),
+      // A card click runs as the person only when the request is his (person-caller.ts): a call with
+      // no session that is not his (a local process, a script) runs as an automation, never laundered
+      // into his own call by this route (2026-11-28 review).
+      ...(sid ? { callerMode: 'session' as const, callerSid: sid }
+        : isPersonNotAutomation(req) ? { callerMode: 'human' as const } : { sender: senderOf(req) }),
       origin,
     })
     const ms = Date.now() - startedAt

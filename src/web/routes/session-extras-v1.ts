@@ -47,6 +47,7 @@ import { relayControlAction, sendV1Error as sendError, v1ErrorCode } from './v1-
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const sessionExtrasV1Router = Router()
 
@@ -202,7 +203,7 @@ sessionExtrasV1Router.post('/sessions/:id/controls', async (req: Request, res: R
     const body = (req.body ?? {}) as Record<string, unknown>
     // A session sets a mode at most as loose as its own (delegated-mode.ts), before any relay.
     const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
-    const refused = body.id === 'mode' ? await modeChangeRefusal(req.get('x-walnut-caller-sid'), body.value, { unproven: callerUnprovenOf(req) }) : null
+    const refused = body.id === 'mode' ? await modeChangeRefusal(callerSidOrOutside(req), body.value, { unproven: callerUnprovenOf(req) }) : null
     if (refused) { sendError(res, 403, 'mode_above_caller', refused); return }
     if (CLOUD_MODE) {
       const { cloudChatLaneControls, CLOUD_CHAT_MODE } = await import('../../core/sessions/cloud-chat-lane.js')
@@ -332,11 +333,11 @@ sessionExtrasV1Router.post('/sessions/:id/side-question/:qid/promote', async (re
     if (!sessionId) return
     const qid = String(req.params.qid ?? '')
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'side-question.promote', sessionId, { id: qid, recentSource: routeSource('mobile', req.headers) }, 200)
+      await relayControlAction(res, 'side-question.promote', sessionId, { id: qid, recentSource: routeSource('mobile', req) }, 200)
       return
     }
     const { promoteSessionSideQuestion } = await import('../../core/sessions/session-extras.js')
-    await runLocal(res, next, 200, () => promoteSessionSideQuestion(sessionId, qid, routeSource('mobile', req.headers)))
+    await runLocal(res, next, 200, () => promoteSessionSideQuestion(sessionId, qid, routeSource('mobile', req)))
   } catch (err) {
     next(err)
   }

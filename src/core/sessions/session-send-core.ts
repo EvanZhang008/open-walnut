@@ -470,7 +470,7 @@ function appSenderOf(caller: CallerIdentity, job: SessionSendInput['callerJob'])
 export type CallerIdentity =
   | { kind: 'session'; record: SessionRecord }
   | { kind: 'external'; app?: string } // gateway 'external' or an unknown sid; `app`: an installed plugin's own call
-  | { kind: 'human' };              // no caller sid at all: the user's own CLI
+  | { kind: 'human' };              // no caller sid: Walnut's own in-process call, or the person (a route passes web/routes/changed-by.ts callerSidOrOutside, so any other caller arrives as 'external')
 
 /** The caller's own session id when the header resolves to a live record, else undefined (a person or unknown). */
 export async function trustedCallerSessionId(callerSid: string | undefined): Promise<string | undefined> {

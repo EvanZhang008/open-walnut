@@ -152,11 +152,13 @@ export function frameStartText(
       host: !opts.job.host || opts.job.host === '__local__' ? 'local' : opts.job.host,
     });
   }
-  // A caller that named itself but did not resolve (a session id Walnut no longer knows) is still not a person.
-  if (opts.callerSid?.trim()) return frameAsWalnut(text, `caller:${opts.callerSid.trim()}`);
+  // An automation names itself first (startRouteSource): its callerSid, when set, is only the outside
+  // caller's (web/routes/changed-by.ts callerSidOrOutside), which names nobody.
   if (opts.source?.startsWith('automation:')) return buildPeerWrapper(text, {
     title: '', shortId: '', host: 'unknown', anonymous: true, automation: opts.source.slice('automation:'.length),
   });
+  // A caller that named itself but did not resolve (a session id Walnut no longer knows) is still not a person.
+  if (opts.callerSid?.trim()) return frameAsWalnut(text, `caller:${opts.callerSid.trim()}`);
   return frameForSource(text, opts.source);
 }
 

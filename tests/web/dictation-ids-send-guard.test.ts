@@ -75,7 +75,7 @@ const SRC_KNOWN: Known[] = [
   { file: 'src/core/sessions/session-lifecycle.ts', anchor: 'sendMessageToSession(session.claudeSessionId, message', why: 'the HTTP send of the CLI and scripts: no dictation' },
   { file: 'src/core/sessions/session-extras.ts', anchor: 'sendMessageToSession(actualPlanSessionId, planMessage', why: 'a plan approval sent over HTTP: Walnut writes its words' },
   { file: 'src/core/sessions/side-thread-manager.ts', anchor: 'sendMessageToSession(threadSessionId, prepared.enqueueText', why: 'a side-thread question: its drawer composer has no draft key, so no recordings are known' },
-  { file: 'src/web/routes/session-send-v1.ts', anchor: "source: routeSource('mobile', req.headers)", why: "the phone app's send: its takes are phone recordings, paired by text" },
+  { file: 'src/web/routes/session-send-v1.ts', anchor: "source: routeSource('mobile', req)", why: "the phone app's send: its takes are phone recordings, paired by text" },
   { file: 'src/providers/daemon-connection.ts', anchor: /^sendMessageToSession\(sessionId, message, \{\s*source: 'mobile',/, why: "the phone's message relayed by the companion: paired by text" },
   { file: 'src/web/routes/chat.ts', anchor: 'runLaneTurn(agentId, conversationId, sessionMessage', why: 'the HTTP chat route (POST /api/chat): its client names no recordings yet, paired by text' },
   { file: 'src/web/routes/cloud-chat-fallback.ts', anchor: 'runLaneTurn(agentId, conversationId, text', why: "the person's chat on the companion: its recordings are the companion's, not this server's" },

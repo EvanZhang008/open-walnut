@@ -24,7 +24,8 @@ import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { ambientAutomatedClient } from '../../core/sessions/automated-client.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { isOnBehalfOfRemote, requestOrigin } from '../middleware/request-origin.js'
-import { loopbackPersonStands } from './local-person-proof.js'
+import { claimedRemoteStands, loopbackPersonStands } from './local-person-proof.js'
+import { classifyLocalRequest } from '../middleware/local-trust.js'
 
 /** What the rule reads of a request: its headers and its socket (an HTTP request, or a WebSocket upgrade). */
 type CallerRequest = { headers: IncomingHttpHeaders; socket?: { remoteAddress?: string; localPort?: number }; url?: string; method?: string }
@@ -36,12 +37,15 @@ function header(req: CallerRequest, name: string): string | undefined {
 }
 
 /** A person's own request (see the file comment); a `/ws` upgrade reads the same (ws/handler.ts). */
-export function isPersonCaller(req: CallerRequest): boolean {
+export function isPersonCaller(req: CallerRequest, opts: { quiet?: boolean } = {}): boolean {
   const origin = requestOrigin(req)
   if (header(req, 'x-walnut-caller-sid') || header(req, CALLER_KIND_HEADER)) return false
-  if (origin === REMOTE_HTTP_ORIGIN) return true
+  if (origin === REMOTE_HTTP_ORIGIN) {
+    // A paired device's own socket, or this server's forward for one; never a loopback claim alone.
+    return !classifyLocalRequest(req).trusted || claimedRemoteStands(req, opts)
+  }
   // This computer: only with what the person's own clients send (local-person-proof.ts).
-  return origin === LOCAL_ORIGIN && loopbackPersonStands(req)
+  return origin === LOCAL_ORIGIN && loopbackPersonStands(req, opts)
 }
 
 /** A person's own request, and no browser under automation (see the file comment). */

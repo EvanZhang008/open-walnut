@@ -76,8 +76,9 @@ describe('the raw passes of the send framing', () => {
       'return buildPeerWrapper(text, {',
       // A plugin job its host's daemon vouched for: its App's job's note (plugins/plugin-caller.ts jobAppSender).
       'return buildPeerWrapper(text, {',
-      'if (opts.callerSid?.trim()) return frameAsWalnut(text, `caller:${opts.callerSid.trim()}`);',
+      // An automation's start names it, before an outside caller's sid that names nobody (changed-by.ts).
       "if (opts.source?.startsWith('automation:')) return buildPeerWrapper(text, {",
+      'if (opts.callerSid?.trim()) return frameAsWalnut(text, `caller:${opts.callerSid.trim()}`);',
       'return frameForSource(text, opts.source);',
     ]);
   });

@@ -23,7 +23,8 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
-import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER, senderLabel } from '../../lib/cli-sender.js'
+import { SENDER_LABEL_HEADER, senderLabel } from '../../lib/cli-sender.js'
+import { callerSidOrOutside } from './changed-by.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
 
 export const messagesV1Router = Router()
@@ -56,8 +57,9 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
     const { requestCaller } = await import('../../core/sessions/request-caller.js')
     const trust = requestCaller(req)
     // No session and no person behind it (a script, a LaunchAgent, cron: the CLI's rule,
-    // src/lib/cli-sender.ts): an anonymous sender that names itself, never the user.
-    const automationCaller = !trust.callerSid && header(req, CALLER_KIND_HEADER) === 'automation'
+    // src/lib/cli-sender.ts; a local process with no proof of the person's client: person-caller.ts):
+    // an anonymous sender that names itself, never the user.
+    const automationCaller = trust.outside === true
     // threads_one_id: the message that hands the work over says which thread it is (core/org/thread-handoff.ts).
     const { oneIdOn } = await import('../../core/org/thread-one-id.js')
     const { sameIdLineBeforeSend, withSameIdLine } = await import('../../core/org/thread-handoff.js')
@@ -205,7 +207,8 @@ messagesV1Router.post('/messages/:id/send-now', async (req: Request, res: Respon
     }
     // A session caller's send now is a peer's nudge (its turn interrupts a wait, as a
     // task_send's does); with no caller it is the person's, the bubble's Send now.
-    const callerSid = header(req, 'x-walnut-caller-sid')
+    // The person's Send now only for the person's own request (changed-by.ts callerSidOrOutside).
+    const callerSid = callerSidOrOutside(req)
     // `interrupt: true` stops the running turn so the row goes out in a fresh one. A person or a session may
     // ask for it; the stop is recorded under the same source as the send (the person's, or a peer's).
     const rawInterrupt = (req.body ?? {}).interrupt

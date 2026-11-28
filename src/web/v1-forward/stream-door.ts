@@ -30,6 +30,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { getSelfApiRoot } from '../../lib/self-api-root.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
+import { forwardProofHeader } from '../../lib/forward-proof.js'
 import { controlRefusedForHost, controlRelayOrigin } from '../../core/sessions/control-host-policy.js'
 import { bootPolicy } from '../../core/boot-policy.js'
 import { forwardRequestHeaders, forwardResponseHeaders, noteForwardedTaskWrite } from './policy.js'
@@ -85,7 +86,7 @@ function originOf(socket: object): string {
 
 /** The request headers that cross, the caller's class, and the body's framing. */
 function crossingHeaders(req: IncomingMessage): http.OutgoingHttpHeaders {
-  const out: http.OutgoingHttpHeaders = { ...forwardRequestHeaders(req.headers), [ORIGIN_HEADER]: originOf(req.socket) }
+  const out: http.OutgoingHttpHeaders = { ...forwardRequestHeaders(req.headers), [ORIGIN_HEADER]: originOf(req.socket), ...forwardProofHeader() }
   const len = req.headers['content-length']
   if (typeof len === 'string' && /^\d+$/.test(len)) out['content-length'] = len
   else if (req.headers['transfer-encoding'] !== undefined) out['transfer-encoding'] = 'chunked'

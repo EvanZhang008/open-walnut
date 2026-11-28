@@ -305,12 +305,12 @@ sessionControlV1Router.post('/sessions/:id/fork', async (req: Request, res: Resp
       ...(typeof body.model === 'string' ? { model: body.model } : {}),
     }
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'fork', sessionId, { ...params, recentSource: routeSource('mobile', req.headers) }, 201)
+      await relayControlAction(res, 'fork', sessionId, { ...params, recentSource: routeSource('mobile', req) }, 201)
       return
     }
     const { forkSessionToTask, SessionControlError } = await import('../../core/sessions/session-controls.js')
     try {
-      res.status(201).json(await forkSessionToTask(sessionId, params, routeSource('api-v1', req.headers)))
+      res.status(201).json(await forkSessionToTask(sessionId, params, routeSource('api-v1', req)))
     } catch (err) {
       if (err instanceof SessionControlError) {
         sendControlError(res, err)

@@ -4,12 +4,10 @@
  */
 import type { NextFunction, Request, Response } from 'express'
 import { QuickStartError } from '../../core/sessions/quick-start.js'
+import { callerSidOrOutside } from './changed-by.js'
 
-export function callerSid(req: Request): string | undefined {
-  const raw = req.headers['x-walnut-caller-sid']
-  const sid = Array.isArray(raw) ? raw[0] : raw
-  return typeof sid === 'string' && sid.trim() ? sid.trim() : undefined
-}
+/** Who called: its session, none only for the person's own request, else an outside caller (changed-by.ts). */
+export const callerSid: (req: Request) => string | undefined = callerSidOrOutside
 
 /** A refusal with a status answers as itself; `detail` (a sign-in refusal's engine and host) rides along, never over error or code. */
 export function sendSwitchError(res: Response, err: unknown, next: NextFunction): void {

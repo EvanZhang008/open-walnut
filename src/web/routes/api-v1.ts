@@ -1838,7 +1838,7 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
     const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
     const caller = callerSid ? await getSessionByClaudeId(callerSid).catch(() => null) : null
     const text = frameStartText(typeof rawText === 'string' ? rawText : '', {
-      source: startRouteSource('api-v1', req.headers), callerSid,
+      source: startRouteSource('api-v1', req), callerSid,
       ...(caller ? { caller: await framingCallerOf(caller) } : {}),
     })
     if (text.trim().length === 0 && images.length === 0) {
@@ -3128,8 +3128,8 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         && task.parent_task_id === caller.task.id
         ? { callerSid: caller.session.id }
         : {}
-      await (await import('../../core/recent-task-touch.js')).recordRecentTaskTouch(task.id, (await import('../../core/sessions/send-sent-by.js')).routeSource('mobile', req.headers), task.created_at)
-      bus.emit(EventNames.TASK_CREATED, { task, ...fromWorker, ...((await import('../../core/sessions/send-sent-by.js')).routeSource('mobile', req.headers) === 'mobile' ? { humanTouchAt: task.created_at } : {}) }, ['web-ui'], { source: 'api-v1' })
+      await (await import('../../core/recent-task-touch.js')).recordRecentTaskTouch(task.id, (await import('../../core/sessions/send-sent-by.js')).routeSource('mobile', req), task.created_at)
+      bus.emit(EventNames.TASK_CREATED, { task, ...fromWorker, ...((await import('../../core/sessions/send-sent-by.js')).routeSource('mobile', req) === 'mobile' ? { humanTouchAt: task.created_at } : {}) }, ['web-ui'], { source: 'api-v1' })
       if (titleShortenedFrom) {
         void refineShortTitle(task.id, finalTitle, titleShortenedFrom,
           description !== undefined ? description as string : undefined)

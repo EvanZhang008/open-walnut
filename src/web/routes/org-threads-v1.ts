@@ -38,7 +38,8 @@
  * it: { tasks: [{ id, title, what?, waitingOn?, until? }], replies, letter } (projected; all additive).
  * PATCH takes the node's `place` and `place_why` on one (core/org/thread-ack.ts checkPlace).
  *
- * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on every replica.
+ * The caller comes from `x-walnut-caller-sid`: none = the user, only for his own request (person-caller.ts;
+ * any other caller with none is an agent). Writes answer 501 on every replica.
  * The session that wrote a summary or a first post is the caller's own, read from its session
  * record (core/org/thread-caller.ts); a `sid`, `host` or `by` in the body is never read.
  */
@@ -62,6 +63,7 @@ import { carriedRows, elsewhereThread, poppedOne, poppedThreadsFor, threadsPopUp
 import { oneIdOn } from '../../core/org/thread-one-id.js'
 import { handedRows } from '../../core/org/thread-one-id-view.js'
 import { withKnownAwaits } from '../../core/org/thread-ack.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const orgThreadsV1Router = Router()
 
@@ -93,9 +95,9 @@ async function nodeTask(req: Request): Promise<Task> {
   return task
 }
 
-/** The writer and its verified session, from the header alone. */
+/** The writer and its verified session, from the header alone; none is the user only for his own request (changed-by.ts). */
 async function callerOf(req: Request): Promise<ThreadCaller> {
-  return resolveThreadCaller(header(req, 'x-walnut-caller-sid'))
+  return resolveThreadCaller(callerSidOrOutside(req))
 }
 
 /** The node's own session reads these threads of its own: his replies on them are in its hands now (thread-reply.ts repliesReadByOwner). */

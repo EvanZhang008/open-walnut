@@ -63,7 +63,7 @@ describe('Recent human touches', () => {
     expect(read('src/core/companion-journal.ts')).toContain('humanTouchAt: input.humanTouchAt')
     expect(read('src/core/offline-merge/apply-v2.ts')).toContain('record.humanTouchAt')
     expect(read('src/web/routes/conversations.ts')).toContain('recordRecentTaskTouch(')
-    expect(read('src/web/routes/search-agent.ts')).toContain("routeSource('ui', req.headers)")
+    expect(read('src/web/routes/search-agent.ts')).toContain("routeSource('ui', req)")
   })
   it('cross-window, native links and board clicks preserve person input; replay preserves time', () => {
     expect(read('web/src/popout/openPopout.ts')).toContain('human: hasRecentHumanInput()')

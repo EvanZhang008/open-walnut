@@ -108,7 +108,11 @@ export function confirmedMailRead(result: unknown, account: string): boolean {
     return first.account === account && first.read === true && first.changed === 1 && (first.failed === undefined || Array.isArray(first.failed) && first.failed.length === 0);
   } catch { return false; }
 }
-export async function executeInboxItem(letterId: string, itemId: string, raw: unknown, origin: string, apiBase: string) {
+/**
+ * `asPerson`: whether the request that confirmed the plan is the person's own (web/routes/person-caller.ts).
+ * Its ops run as his own call only then; any other caller's run as an automation, never in his name.
+ */
+export async function executeInboxItem(letterId: string, itemId: string, raw: unknown, origin: string, apiBase: string, asPerson = true) {
   const parsed = inboxExecuteSchema.safeParse(raw);
   if (!parsed.success) throw new ItemActionError('bad_request', parsed.error.message, 400);
   const request = parsed.data;
@@ -125,7 +129,7 @@ export async function executeInboxItem(letterId: string, itemId: string, raw: un
   const claimed = await claimItemExecution(saved, request.requestId);
   await writeItemReceipt(letterId, itemId, claimed.receipt);
   if (claimed.fresh) {
-    const attempt = runItemPlan(saved, claimed.receipt, origin, apiBase).catch(() => claimed.receipt).finally(async () => { active.delete(request.requestId); await releaseItemWorker(request.requestId).catch(() => {}); });
+    const attempt = runItemPlan(saved, claimed.receipt, origin, apiBase, asPerson).catch(() => claimed.receipt).finally(async () => { active.delete(request.requestId); await releaseItemWorker(request.requestId).catch(() => {}); });
     active.set(request.requestId, attempt);
   }
   return claimed.receipt;
@@ -266,7 +270,7 @@ async function persistStartRecoveryRefusal(saved: SavedItemPlan, receipt: InboxI
     reason: (await words()).recoveryRefused(reason),
     recovery: ['retry_start', 'check_status', 'open_task'] });
 }
-async function runItemPlan(saved: SavedItemPlan, receipt: InboxItemReceipt, origin: string, apiBase: string): Promise<InboxItemReceipt> {
+async function runItemPlan(saved: SavedItemPlan, receipt: InboxItemReceipt, origin: string, apiBase: string, asPerson: boolean): Promise<InboxItemReceipt> {
   const plan = saved.plan;
   let taskCreated = false;
   let dispatched = false;
@@ -305,7 +309,7 @@ async function runItemPlan(saved: SavedItemPlan, receipt: InboxItemReceipt, orig
         if (saved.taskFingerprint && await taskPlanFingerprint(task.id) !== saved.taskFingerprint) throw new ItemActionError('task_changed', 'This task changed. Review the action again.');
       }
       dispatched = true;
-      const outcome = await executeOp(operation.tool, operation.args, { apiBase, origin, callerMode: 'human', beforeMutation: async () => {
+      const outcome = await executeOp(operation.tool, operation.args, { apiBase, origin, ...(asPerson ? { callerMode: 'human' as const } : { sender: 'inbox-item' }), beforeMutation: async () => {
         if (operation.tool === 'task_start' || operation.tool === 'task_send') {
           const task = await exactItemTask(plan.taskId!);
           if (task.phase === 'COMPLETE') throw new ItemActionError('task_changed', 'This task changed. Review the action again.');

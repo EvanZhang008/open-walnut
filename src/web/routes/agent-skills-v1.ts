@@ -25,6 +25,7 @@ import { log } from '../../logging/index.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendOwnAnswer } from '../middleware/coded-refusal-answer.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const agentSkillsV1Router = Router()
 
@@ -49,7 +50,8 @@ function scopeOf(v: unknown): AgentSkillScope {
 
 /** Who writes: null for the scope's own task writing its own; else the person, another task, or an agent. */
 async function stampOf(req: Request, taskId: string, scope: AgentSkillScope): Promise<{ stamp: AgentMemoryWriterStamp | null; sid?: string; callerTaskId: string | null }> {
-  const sid = header(req, 'x-walnut-caller-sid')
+  // No session named is the person only for his own request; any other such caller is an agent (changed-by.ts).
+  const sid = callerSidOrOutside(req)
   const caller = sid ? await resolveCaller(sid).catch(() => null) : null
   const callerTaskId = caller?.kind === 'session' ? caller.record.taskId ?? null : null
   if (!sid) return { stamp: { by: 'human' }, callerTaskId }

@@ -15,8 +15,11 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import request from 'supertest';
 import { actionsV1Router } from '../../../src/web/routes/actions-v1.js';
+import { setLocalProofModeForTest } from '../../../src/web/routes/local-person-proof.js';
 
 interface Seen { method: string; path: string; body: unknown }
+/** The headers each self-call reached the stand-in route with, beside `seen`. */
+let seenHeaders: Array<Record<string, unknown>> = [];
 
 let seen: Seen[] = [];
 /** Stub target routes answer 200 unless a test arms a refusal. */
@@ -30,6 +33,7 @@ function createApp() {
   const v1 = express.Router();
   const record = (req: Request, res: Response) => {
     seen.push({ method: req.method, path: req.path, body: req.body });
+    seenHeaders.push(req.headers);
     if (refuse) {
       res.status(refuse.status).json(refuse.body);
       return;
@@ -274,5 +278,25 @@ describe('POST /api/v1/actions/invoke — the passthrough escape hatch', () => {
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('not_invocable');
     expect(seen).toEqual([]);
+  });
+});
+
+describe('POST /api/v1/actions/invoke never launders a caller into the person (2026-11-28 review)', () => {
+  it('runs a click as the person only when the request is his; a plain local process runs as an automation', async () => {
+    setLocalProofModeForTest('enforce');
+    try {
+      // The person's own window: a browser sends its fetch metadata.
+      const own = await request(createApp()).post('/api/v1/actions/invoke').set('sec-fetch-site', 'same-origin')
+        .send({ tool: 'task_focus_tier_set', args: { id: 't_1', tier: 'focus' } });
+      expect(own.status).toBe(200);
+      expect(seenHeaders.at(-1)?.['x-walnut-caller-kind']).toBeUndefined();
+      // A plain local process (a session's own curl): its op call carries the automation mark.
+      const curl = await request(createApp()).post('/api/v1/actions/invoke').set('user-agent', 'curl/8.7.1')
+        .send({ tool: 'task_focus_tier_set', args: { id: 't_1', tier: 'focus' } });
+      expect(curl.status).toBe(200);
+      expect(seenHeaders.at(-1)?.['x-walnut-caller-kind']).toBe('automation');
+    } finally {
+      setLocalProofModeForTest('off');
+    }
   });
 });

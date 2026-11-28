@@ -13,10 +13,11 @@ import express, { Router } from 'express'
 import request from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { IntegrationRegistry } from '../../../src/core/integration-registry.js'
-import { createPluginBodyParser, createPluginRouteDispatcher, UNPROVEN_LOCAL_KIND } from '../../../src/web/plugin-route-dispatcher.js'
+import { createPluginBodyParser, createPluginRouteDispatcher } from '../../../src/web/plugin-route-dispatcher.js'
+import { forwardProofHeader } from '../../../src/lib/forward-proof.js'
 import { isPersonCaller } from '../../../src/web/routes/person-caller.js'
 import {
-  initLocalPersonProof, localPersonProof, localProofMode, parseLocalProofMode, setLocalProofModeForTest, type LocalProofMode,
+  initLocalPersonProof, localPersonProof, localProofMode, parseLocalProofMode, setLocalProofModeForTest, UNPROVEN_LOCAL_SENDER, type LocalProofMode,
 } from '../../../src/web/routes/local-person-proof.js'
 import { createMockPlugin } from '../../core/plugin-test-utils.js'
 
@@ -35,6 +36,12 @@ const CURL = { ...HOST, 'user-agent': 'curl/8.7.1' }
 const SESSION_CLI = { ...PERSON_CLI, 'x-walnut-caller-sid': 'sess-1' }
 const SCRIPT_CLI = { ...PERSON_CLI, 'x-walnut-caller-kind': 'automation' }
 const CROSS_SITE = { ...HOST, 'sec-fetch-site': 'cross-site' }
+/** The Mac app's own native calls (quick capture, dictation): URLSession's agent string. */
+const MAC_NATIVE = { ...HOST, 'user-agent': 'Walnut/1.0 CFNetwork/3860.700.1 Darwin/25.6.0' }
+/** A loopback request that writes the paired-device label itself (2026-11-28 review: it read as the person). */
+const CLAIMS_REMOTE = { ...CURL, 'x-walnut-origin': 'remote-http' }
+/** This server's own forward for the phone: the same label, with the in-process proof. */
+const OWN_FORWARD = { ...HOST, 'x-walnut-origin': 'remote-http', ...forwardProofHeader() }
 
 function local(headers: Record<string, string>) {
   return { headers, socket: LOOPBACK, url: '/api/approvals/x/answer', method: 'POST' }
@@ -48,6 +55,7 @@ describe('what proves a local request is one of the person\'s clients', () => {
     expect(localPersonProof(BROWSER_WS)).toBe('browser')
     expect(localPersonProof(TYPED_URL)).toBe('browser')
     expect(localPersonProof(PERSON_CLI)).toBe('cli')
+    expect(localPersonProof(MAC_NATIVE)).toBe('mac-app')
     for (const h of [CURL, SESSION_CLI, SCRIPT_CLI, CROSS_SITE, HOST]) expect(localPersonProof(h)).toBeNull()
   })
 
@@ -69,7 +77,10 @@ describe('isPersonCaller, the rule every person-only route shares', () => {
     ['the Mac app\'s web view', BROWSER_GET, { enforce: true, observe: true, off: true }],
     ['a browser socket', BROWSER_WS, { enforce: true, observe: true, off: true }],
     ['the person\'s CLI', PERSON_CLI, { enforce: true, observe: true, off: true }],
+    ['the Mac app\'s native call', MAC_NATIVE, { enforce: true, observe: true, off: true }],
+    ['this server\'s own forward for the phone', OWN_FORWARD, { enforce: true, observe: true, off: true }],
     ['a plain curl on this computer', CURL, { enforce: false, observe: true, off: true }],
+    ['a curl that claims to be the phone', CLAIMS_REMOTE, { enforce: false, observe: true, off: true }],
     ['a session\'s CLI', SESSION_CLI, { enforce: false, observe: false, off: false }],
     ['a script\'s CLI', SCRIPT_CLI, { enforce: false, observe: false, off: false }],
   ]
@@ -93,17 +104,22 @@ describe('plugins get the same verdict through the dispatcher', () => {
   function app() {
     const registry = new IntegrationRegistry()
     const router = Router()
-    router.post('/', (req, res) => res.json({ kind: req.headers['x-walnut-caller-kind'] ?? null }))
+    router.post('/', (req, res) => {
+      expect(req.headers['x-walnut-sender'] ?? UNPROVEN_LOCAL_SENDER).toBe(UNPROVEN_LOCAL_SENDER)
+      res.json({ kind: req.headers['x-walnut-caller-kind'] ?? null })
+    })
     registry.register('sample', createMockPlugin({ id: 'sample', httpRoutes: [{ method: 'post' as const, path: '/send', handler: router }] }))
     const a = express()
     a.use('/api/plugins', createPluginBodyParser(), createPluginRouteDispatcher(registry))
     return a
   }
 
-  it('marks an unproven local request as an automation in enforce, so the plugin\'s own person check refuses it', async () => {
+  it('marks an unproven local request, and a loopback claim of the phone without proof, as an automation in enforce', async () => {
     setLocalProofModeForTest('enforce')
     const curl = await request(app()).post('/api/plugins/sample/send').set('user-agent', 'curl/8.7.1').send({})
-    expect(curl.body).toEqual({ kind: UNPROVEN_LOCAL_KIND })
+    expect(curl.body).toEqual({ kind: 'automation' })
+    const claims = await request(app()).post('/api/plugins/sample/send').set('x-walnut-origin', 'remote-http').send({})
+    expect(claims.body).toEqual({ kind: 'automation' })
     const browser = await request(app()).post('/api/plugins/sample/send').set('sec-fetch-site', 'same-origin').send({})
     expect(browser.body).toEqual({ kind: null })
     const script = await request(app()).post('/api/plugins/sample/send').set('x-walnut-caller-kind', 'automation').send({})
@@ -140,7 +156,7 @@ describe('ratchet: no route keeps its own copy of the person rule', () => {
     const copies = files(path.join(REPO, 'src')).filter((file) => {
       const text = fs.readFileSync(file, 'utf8')
       return /REMOTE_HTTP_ORIGIN/.test(text) && /x-walnut-caller-sid|CALLER_SID_HEADER/.test(text)
-        && /origin === LOCAL_ORIGIN \|\| origin === REMOTE_HTTP_ORIGIN|LOCAL_ORIGIN.*REMOTE_HTTP_ORIGIN.*\)/.test(text.replace(/\n\s*/g, ' '))
+        && /=== LOCAL_ORIGIN \|\| \w+ === REMOTE_HTTP_ORIGIN|=== REMOTE_HTTP_ORIGIN \|\| \w+ === LOCAL_ORIGIN/.test(text.replace(/\n\s*/g, ' '))
     }).map((file) => path.relative(REPO, file)).filter((rel) => !Object.hasOwn(ALLOWED, rel))
     expect(copies, 'use isPersonCaller (src/web/routes/person-caller.ts) instead of a copy of its rule').toEqual([])
   })

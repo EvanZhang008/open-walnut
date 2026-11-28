@@ -103,10 +103,10 @@ describe('inside an automated client\'s scope nothing reads as the person', () =
       expect(start.attributed).toBeUndefined();
       expect(readsAsPerson(frameStartData({ message: 'Start it', ...start }).message!)).toBe(false);
       // Its own source, not `api-agent`: phase.ts once counted that one as a person's send.
-      expect(routeSource('ui', {})).toBe(AUTOMATED_SEND_SOURCE);
-      expect(isPhasePersonSend(routeSource('mobile', {}))).toBe(false);
+      expect(routeSource('ui', { headers: {} })).toBe(AUTOMATED_SEND_SOURCE);
+      expect(isPhasePersonSend(routeSource('mobile', { headers: {} }))).toBe(false);
       for (const s of PERSON_SEND_SOURCES) expect(isPhasePersonSend(s), s).toBe(false);
-      expect(startRouteSource('quick-start', {})).toBe('automation:browser automation (webdriver)');
+      expect(startRouteSource('quick-start', { headers: {} })).toBe('automation:browser automation (webdriver)');
     });
   });
 
@@ -118,11 +118,11 @@ describe('inside an automated client\'s scope nothing reads as the person', () =
       expect(queueSentBy('ui')).toBe('person');
       expect(frameForSource('mine', 'ui')).toBe('mine');
     }, () => open);
-    expect(routeSource('ui', {})).toBe('ui');
+    expect(routeSource('ui', { headers: {} })).toBe('ui');
     expect(isPersonSendSource('ui')).toBe(true);
     expect(isPhasePersonSend('ui')).toBe(true);
     // A task calling a person's route is no person either.
-    expect(isPhasePersonSend(routeSource('ui', { 'x-walnut-caller-sid': 'abc' }))).toBe(false);
+    expect(isPhasePersonSend(routeSource('ui', { headers: { 'x-walnut-caller-sid': 'abc' } }))).toBe(false);
     expect(attributedUnlessAutomated('ui:typed-message')).toEqual({ attributed: true, attributionSource: 'ui:typed-message' });
   });
 
@@ -177,7 +177,6 @@ describe('ratchet: who a person is gets decided through the rule', () => {
       'src/core/sessions/task-start.ts': 1,          // frameStartText framed it for the rewritten source
       'src/core/subagents/on-host.ts': 1,            // attributed to `subagent`, framed by its lane turn
       'src/providers/daemon-connection.ts': 1,       // the phone's message relayed by the companion (no browser)
-      'src/web/routes/session-chat.ts': 1,           // prepareHintedSend downgrades `person` in the scope
       'src/web/routes/sessions.ts': 1,               // execute-plan: generated text, framed separately
     };
     const found: Record<string, number> = {};

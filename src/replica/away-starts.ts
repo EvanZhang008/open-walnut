@@ -295,7 +295,7 @@ export async function frameAsCaller(text: string, actor: WriteActor, task: (id: 
   // A device never starts here (needs_leader first); named all the same, as the console's start names it.
   if (actor.kind !== 'session') {
     const { startRouteSource } = await import('../core/sessions/send-sent-by.js')
-    return frameStartText(text, { source: startRouteSource('quick-start', {}) })
+    return frameStartText(text, { source: startRouteSource('quick-start', { headers: {} }) })
   }
   const { getSessionByClaudeId } = await import('../core/session-tracker.js')
   const rec = await getSessionByClaudeId(actor.sid).catch(() => null)

@@ -23,7 +23,8 @@
  *   PUT    /tasks/:id/board/seen/:section    { hash }                → { seen | null }
  *   DELETE /tasks/:id/board                  → 204 (the file is kept in boards/.deleted/, newest 5 per task)
  *
- * The caller comes from `x-walnut-caller-sid`: none = a human. Every write is
+ * The caller comes from `x-walnut-caller-sid`: none = the person, only for his own request
+ * (person-caller.ts; any other caller with none is an outside agent). Every write is
  * open to every caller, the user and any session alike (2026-10-27, the user:
  * "all human action can be done by agent also"); the writer is recorded
  * (board-team.ts), and a read tick, a choice answer or a section seen by an
@@ -99,6 +100,7 @@ import { answerBoardChoice } from '../../core/boards/board-choice-answer.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { isImageAttachError } from './images.js'
 import { picturesHeader, saveAnswerPictures } from '../../core/answer-pictures.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export { buildBoardThreadPrompt }
 
@@ -184,7 +186,8 @@ export function refuseOnReplica(): void {
 export async function prepareWrite(req: Request): Promise<{ task: Task; caller: BoardCaller }> {
   refuseOnReplica()
   const task = await resolveTask(param(req.params.id))
-  const caller = await resolveBoardCaller(header(req, 'x-walnut-caller-sid'))
+  // No session named: the person only for his own request, else an outside caller (changed-by.ts).
+  const caller = await resolveBoardCaller(callerSidOrOutside(req))
   return { task, caller }
 }
 

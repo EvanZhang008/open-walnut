@@ -579,7 +579,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     const launchEffort = typeof rawEffort === 'string' ? rawEffort as SessionEffort : undefined
     // A session's start runs at most as loose as that session (delegated-mode.ts): a looser mode
     // it names is refused, a looser project default comes down to its mode.
-    const startedBySid = req.get('x-walnut-caller-sid')?.trim() || undefined
+    // A caller with no session that is not the person is capped as an outside one (changed-by.ts).
+    const startedBySid = callerSidOrOutside(req)
     // Its host could not prove that sid (lib/caller-unproven.ts): capped as an outside caller.
     const startedUnproven = callerUnprovenOf(req)
     if (startedBySid || startedUnproven) {
@@ -793,7 +794,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         ...(inOwnTaskDir ? { ownTaskDir: true } : {}),
         existingTaskId, taskMeta: isWalnutAgent ? walnutTaskMeta : fixWalnutTaskMeta,
         // A session that makes this request is not a person: its first line is framed (sessions/send-frame.ts).
-        source: startRouteSource('quick-start', req.headers), requestTs,
+        source: startRouteSource('quick-start', req), requestTs,
         engine: effectiveEngine,
         ...(fallback ? { fallback } : {}),
         ...(decidesFallback ? { fallbackDecided: true } : {}),
@@ -863,7 +864,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
           message: sessionMessage, ...(messagePrefix ? { messagePrefix } : {}), ...(model ? { model } : {}), ...(launchMode ? { mode: launchMode } : {}),
           ...(launchEffort ? { effort: launchEffort } : {}),
           ...(effectiveEngine ? { engine: effectiveEngine } : {}), engine_decided: true, ...(preassignedSessionId ? { session_id: preassignedSessionId } : {}),
-          source: startRouteSource('quick-start', req.headers), at: new Date(requestTs).toISOString(),
+          source: startRouteSource('quick-start', req), at: new Date(requestTs).toISOString(),
           ...(startedBySid ? { caller_sid: startedBySid } : {}), ...(startedUnproven ? { caller_unproven: true as const } : {}),
         })
         fromProject?.used(answer)
@@ -915,6 +916,7 @@ import { SessionControlError } from '../../core/sessions/session-controls.js'
 import { historyNotWrittenYet, transcriptNotWrittenYet } from '../../core/sessions/history-not-written.js'
 import { HOST_RECONNECTING, HostReconnectingError, HostStillLoadingError, boundHostRead, boundSharedHostRead, hostReadFailureLevel, isRemoteHost } from '../../core/hosts/remote-read-bound.js'
 import { readHostOf } from '../../core/sessions/session-row-owner.js'
+import { callerSidHeader, callerSidOrOutside, changedBy } from './changed-by.js'
 
 /** A full history read this slow logs its steps ('history read slow'). */
 const SLOW_HISTORY_READ_MS = 2_000
@@ -1415,7 +1417,7 @@ sessionsRouter.post('/:sessionId/controls', async (req: Request, res: Response) 
   const { id, value } = req.body as { id?: unknown; value?: unknown }
   try {
     const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
-    const refused = id === 'mode' ? await modeChangeRefusal(req.get('x-walnut-caller-sid'), value, { unproven: callerUnprovenOf(req) }) : null
+    const refused = id === 'mode' ? await modeChangeRefusal(callerSidOrOutside(req), value, { unproven: callerUnprovenOf(req) }) : null
     if (refused) { res.status(403).json({ error: refused, code: 'mode_above_caller' }); return }
     res.json(await applySessionControl(sessionId, id, value))
   } catch (err) {
@@ -1442,7 +1444,7 @@ sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: Ne
     // identities and must never select or implicitly create a durable record.
     try {
       const { modeChangeRefusal } = await import('../../core/sessions/delegated-mode.js')
-      const refused = await modeChangeRefusal(req.get('x-walnut-caller-sid'), (req.body as { mode?: unknown } | undefined)?.mode, { unproven: callerUnprovenOf(req) })
+      const refused = await modeChangeRefusal(callerSidOrOutside(req), (req.body as { mode?: unknown } | undefined)?.mode, { unproven: callerUnprovenOf(req) })
       if (refused) { res.status(403).json({ error: refused, code: 'mode_above_caller' }); return }
       const session = await patchSession(sessionId, (req.body ?? {}) as Record<string, unknown>)
       log.web.info('session updated via REST', { sessionId, fields: Object.keys(req.body ?? {}) })
@@ -2812,7 +2814,7 @@ sessionsRouter.post('/:sessionId/side-question', async (req: Request, res: Respo
 // POST /api/sessions/:sessionId/side-question/:id/promote — turn a Q&A into a task
 sessionsRouter.post('/:sessionId/side-question/:id/promote', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const result = await promoteSessionSideQuestion(String(req.params.sessionId), String(req.params.id), routeSource('ui', req.headers))
+    const result = await promoteSessionSideQuestion(String(req.params.sessionId), String(req.params.id), routeSource('ui', req))
     res.json({ taskId: result.taskId, parentTaskId: result.parentTaskId })
   } catch (err) {
     if (err instanceof SessionControlError) {
@@ -2983,7 +2985,7 @@ sessionsRouter.post('/:sessionId/side-threads/:threadId/promote', async (req: Re
     const result = await promoteSideThread(
       String(req.params.sessionId),
       String(req.params.threadId),
-      { source: routeSource('ui', req.headers), ...(typeof title === 'string' && title.trim() ? { title } : {}) },
+      { source: routeSource('ui', req), ...(typeof title === 'string' && title.trim() ? { title } : {}) },
     )
     res.json({
       taskId: result.taskId,
@@ -3147,7 +3149,7 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     let execMode = mode ?? 'bypass'
     // A session's plan execution runs at most as loose as that session (delegated-mode.ts): a
     // looser mode it names is refused, the Bypass default comes down to its mode.
-    const execBySid = req.get('x-walnut-caller-sid')?.trim()
+    const execBySid = callerSidOrOutside(req)
     const execUnproven = callerUnprovenOf(req)
     if (execBySid || execUnproven) {
       const { capStartMode } = await import('../../core/sessions/delegated-mode.js')
@@ -3167,7 +3169,7 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
       ...(caller ? { caller: await framingCallerOf(caller) } : {}),
     })
     const typedInstructions = typeof instructions === 'string' && instructions.trim() ? frameStartText(instructions, {
-      source: startRouteSource('web-api', req.headers), callerSid: execBySid,
+      source: startRouteSource('web-api', req), callerSid: execBySid,
       ...(caller ? { caller: await framingCallerOf(caller) } : {}),
     }) : ''
     const planMessage = typedInstructions ? `${generated}\n\n${typedInstructions}` : generated
@@ -3390,8 +3392,8 @@ sessionsRouter.post('/:sessionId/continue-in-new-folder', async (req: Request, r
   try {
     const sessionId = req.params.sessionId as string
     const { continueInNewFolder } = await import('../../core/sessions/folder-gone.js')
-    const callerSid = req.get('x-walnut-caller-sid')
-    res.json(await continueInNewFolder(sessionId, { by: callerSid ? `session:${callerSid}` : 'human' }))
+    const callerSid = callerSidHeader(req)
+    res.json(await continueInNewFolder(sessionId, { by: callerSid ? `session:${callerSid}` : await changedBy(req) }))
   } catch (err) {
     if (err instanceof SessionControlError) {
       res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
@@ -3519,7 +3521,7 @@ sessionsRouter.post('/:sessionId/terminate', async (req: Request, res: Response,
   try {
     const force = req.body?.force === true || req.query?.force === '1'
     const { stopperOf } = await import('../../core/sessions/host-lost.js')
-    const result = await terminateSession(sessionId, { force, by: await stopperOf(req.get('x-walnut-caller-sid') || undefined) })
+    const result = await terminateSession(sessionId, { force, by: callerSidHeader(req) ? await stopperOf(callerSidHeader(req)) : await changedBy(req) })
     log.web.info('session terminate: complete', { sessionId, durationMs: Date.now() - startedAt })
     res.json(result)
   } catch (err) {
@@ -3574,7 +3576,7 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       const result = await forkSessionToTask(sourceSessionId, {
         task_id, create_child_task, child_title, message, title, model,
         ...(imageContext ? { imageContext } : {}),
-      }, routeSource('web-api', req.headers))
+      }, routeSource('web-api', req))
       // Web and mobile now share the SAME core result shape (including the
       // additive `title` field); clients ignore fields they don't know.
       res.json(result)
@@ -3623,7 +3625,7 @@ sessionsRouter.post('/:sessionId/rewind', async (req: Request, res: Response, ne
         ...(restore_files !== undefined ? { restoreFiles: !!restore_files } : {}),
         ...(keep_source !== undefined ? { keepSource: !!keep_source } : {}),
         ...(message !== undefined ? { message: String(message) } : {}),
-      }, routeSource('web-api', req.headers))
+      }, routeSource('web-api', req))
       log.web.info('session rewound via REST', {
         sessionId, rewoundId: result.sessionId, mode: result.mode, restoreFiles: !!restore_files,
       })

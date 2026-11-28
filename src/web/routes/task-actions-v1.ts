@@ -19,6 +19,7 @@ import { log } from '../../logging/index.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { sendOwnAnswer } from '../middleware/coded-refusal-answer.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const taskActionsV1Router = Router()
 
@@ -54,9 +55,10 @@ taskActionsV1Router.put('/tasks/:id/actions/:item/snooze', route(async (req, res
   if (!known && !(until === null && snoozed)) {
     throw new RouteError(404, 'action_not_found', `"${task.title}" asks nothing with the id ${item} now (read user_status.actions)`)
   }
-  const sid = header(req, 'x-walnut-caller-sid')
+  // 'human' only for the person's own request; a caller Walnut cannot place is an agent (changed-by.ts).
+  const sid = callerSidOrOutside(req)
   const caller = sid ? await resolveCaller(sid).catch(() => null) : null
-  const by = caller?.kind === 'session' ? caller.record.taskId ? `task:${caller.record.taskId}` : 'session' : 'human'
+  const by = !sid ? 'human' : caller?.kind === 'session' ? caller.record.taskId ? `task:${caller.record.taskId}` : 'session' : 'agent'
   await updateTaskRaw(task.id, (cur) => ({ action_snoozes: writeSnooze(cur.action_snoozes, item, until, Date.now(), by) }),
     { emitEvent: true, source: 'action-snooze' })
   log.task.info(until ? 'action snoozed' : 'action unsnoozed', { taskId: task.id, item, until, by })

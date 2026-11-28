@@ -60,6 +60,7 @@ import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-ima
 import { sessionImagesOf } from './session-send-v1.js'
 import { routeSource, startRouteSource } from '../../core/sessions/send-sent-by.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const quickInputV1Router = Router()
 
@@ -354,7 +355,7 @@ quickInputV1Router.post('/quick/session', async (req: Request, res: Response, ne
       await sendAndFollow(() => sendToTaskFromRequest(req, task, text, images), res)
       return
     }
-    await sendAndFollow(() => startAsk(text, images, startRouteSource('quick-input', req.headers), startingCaller(req)), res)
+    await sendAndFollow(() => startAsk(text, images, startRouteSource('quick-input', req), startingCaller(req)), res)
   } catch (err) {
     next(err)
   }
@@ -452,7 +453,7 @@ async function withSavedImages(text: string, images: SessionImage[]): Promise<st
 
 /** A person's send source, unless a session made the request (an agent calling this route is not a person). */
 function quickSource(req: Request): string {
-  return routeSource('ui', req.headers)
+  return routeSource('ui', req)
 }
 
 /** The person's message into one task's chat: its live session, or a session started with it. */
@@ -474,7 +475,7 @@ async function exactTask(taskId: string, res: Response): Promise<Task | null> {
 
 /** The words into one task's chat as this request's: its source, its start's source and caller. */
 async function sendToTaskFromRequest(req: Request, task: Task, text: string, images: SessionImage[], line?: QuickLine): Promise<QuickMainResult> {
-  return sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req), startRouteSource('api-v1', req.headers), startingCaller(req), line)
+  return sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req), startRouteSource('api-v1', req), startingCaller(req), line)
 }
 
 /** Who asks a start made here, beside the words. */
@@ -485,7 +486,8 @@ interface StartingCaller { callerSid?: string; callerUnproven?: true }
  * (delegated-mode.ts), or as an outside caller when its host could not prove it (lib/caller-unproven.ts).
  */
 function startingCaller(req: Request): StartingCaller {
-  return { callerSid: req.get('x-walnut-caller-sid')?.trim() || undefined, callerUnproven: callerUnprovenOf(req) }
+  // A caller with no session that is not the person is capped as an outside one (changed-by.ts).
+  return { callerSid: callerSidOrOutside(req), callerUnproven: callerUnprovenOf(req) }
 }
 
 async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false, source: string = 'ui', firstSource = source, caller: StartingCaller = {}, line?: QuickLine): Promise<QuickMainResult> {

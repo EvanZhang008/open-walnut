@@ -141,7 +141,7 @@ searchAgentRouter.post('/session', async (req: Request, res: Response, next: Nex
         adoptAgentSearchSession(q, { startIfMissing: maySearch, ...(progressId ? { progressId } : {}) }),
         timeout,
       ]);
-      await (await import('../../core/recent-task-touch.js')).recordRecentTaskTouch(adopted.taskId, (await import('../../core/sessions/send-sent-by.js')).routeSource('ui', req.headers));
+      await (await import('../../core/recent-task-touch.js')).recordRecentTaskTouch(adopted.taskId, (await import('../../core/sessions/send-sent-by.js')).routeSource('ui', req));
       res.json(adopted);
     } catch (err) {
       if (err instanceof AdoptSearchSessionError) {

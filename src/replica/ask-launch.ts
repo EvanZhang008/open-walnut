@@ -384,7 +384,7 @@ export function createAskLaunch(deps: AskLaunchDeps): AskLaunch {
     const { frameStartText } = await import('../core/sessions/send-frame.js')
     const { startRouteSource } = await import('../core/sessions/send-sent-by.js')
     const message = frameStartText(typeof b.message === 'string' ? b.message : '', {
-      source: startRouteSource('quick-start', req.headers), callerSid: req.get('x-walnut-caller-sid')?.trim() || undefined,
+      source: startRouteSource('quick-start', req), callerSid: req.get('x-walnut-caller-sid')?.trim() || undefined,
     })
     if (message.length > 200_000) return refusalAnswer('bad_request', 'The message is too long to start an ask here.')
     const meta = createMeta(b.taskMeta, v1)

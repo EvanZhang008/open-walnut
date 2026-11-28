@@ -7,7 +7,8 @@
  * is left untouched: the header means nothing to another server.
  */
 
-import { ORIGIN_HEADER, ambientCallerOrigin, isLocalOrigin, lowerOrigin } from '../../lib/caller-origin.js'
+import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, ambientCallerOrigin, isLocalOrigin, lowerOrigin } from '../../lib/caller-origin.js'
+import { forwardProofHeader } from '../../lib/forward-proof.js'
 import { isLoopbackName } from '../../web/middleware/local-trust.js'
 
 function hostName(host: string): string {
@@ -49,5 +50,7 @@ export function labelPluginFetch(
   }
   if (!addressesThisMachine(url, hostHeader)) return headers
   out[ORIGIN_HEADER] = lowerOrigin(claimed, origin)
+  // A self-call made for a paired device proves it is this server's own (lib/forward-proof.ts).
+  if (out[ORIGIN_HEADER] === REMOTE_HTTP_ORIGIN) Object.assign(out, forwardProofHeader())
   return out
 }

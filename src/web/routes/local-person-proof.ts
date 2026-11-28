@@ -12,9 +12,14 @@
  *     foreign Origin is already refused before this (local-trust.ts), so a present one is ours;
  *   - the `walnut` CLI the person runs at his terminal: the op executor's `x-walnut-op-call` mark
  *     with no session and no automation mark (cli-sender.ts: a session's call names its session,
- *     a call with no terminal is an automation's).
- * A paired device (the phone, through the companion too) proves itself with its device token and is
- * not loopback at all; this rule never touches it.
+ *     a call with no terminal is an automation's);
+ *   - the Mac app's own native calls (quick capture, dictation, App Intents): URLSession's
+ *     `Walnut/<build> CFNetwork/...` agent string.
+ * A paired device (the phone) proves itself with its device token and is not loopback at all; this
+ * rule never touches it. A loopback request that CLAIMS to be for one (`x-walnut-origin: remote-http`,
+ * the label this server's own forwards carry) counts only with this process's forward proof
+ * (lib/forward-proof.ts), never on the header alone. The iOS simulator on this Mac talks loopback
+ * like the Mac app and passes the same way.
  *
  * Any of these can be forged by a process that sets the header on purpose: this keeps a well-meaning
  * agent's plain request from passing as the person, and makes a forged one a deliberate act that
@@ -28,11 +33,16 @@
  */
 import type { IncomingHttpHeaders } from 'node:http'
 import { log } from '../../logging/index.js'
+import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
+import { SENDER_LABEL_HEADER } from '../../lib/cli-sender.js'
+import { FORWARD_PROOF_HEADER, isForwardProof } from '../../lib/forward-proof.js'
 
 export type LocalProofMode = 'enforce' | 'observe' | 'off'
-export type LocalProof = 'browser' | 'cli'
+export type LocalProof = 'browser' | 'cli' | 'mac-app'
 
 const OP_CALL_HEADER = 'x-walnut-op-call'
+/** `Walnut/<build> CFNetwork/<v> Darwin/<v>`: the agent string the Mac app's URLSession sends (lowercased). */
+const MAC_APP_AGENT = /^walnut\/\S+ cfnetwork\//
 const CALLER_SID_HEADER = 'x-walnut-caller-sid'
 const CALLER_KIND_HEADER = 'x-walnut-caller-kind'
 
@@ -55,6 +65,8 @@ export function localPersonProof(headers: IncomingHttpHeaders): LocalProof | nul
   if (site === 'same-origin' || site === 'none') return 'browser'
   if (one(headers, 'origin')) return 'browser'
   if (one(headers, OP_CALL_HEADER) === '1' && !one(headers, CALLER_SID_HEADER) && !one(headers, CALLER_KIND_HEADER)) return 'cli'
+  // The Mac app's own native calls (quick capture, dictation, App Intents): URLSession's agent string.
+  if (MAC_APP_AGENT.test(one(headers, 'user-agent'))) return 'mac-app'
   return null
 }
 
@@ -101,23 +113,65 @@ function uaClass(headers: IncomingHttpHeaders): string {
   return ua.slice(0, 40)
 }
 
+/** A route's path with its ids folded, so one kind of request logs once an hour, not once per id. */
+function routeOf(url: string | undefined): string {
+  return String(url ?? '').split('?')[0]!.split('/').slice(0, 6)
+    .map((part) => (/\d/.test(part) || part.length > 24 ? ':id' : part)).join('/')
+}
+
+function note(kind: 'local' | 'claimed-remote', req: { headers: IncomingHttpHeaders; url?: string; method?: string }): void {
+  const path = routeOf(req.url)
+  const ua = uaClass(req.headers)
+  const key = `${mode}|${kind}|${req.method ?? ''}|${path}|${ua}`
+  const now = Date.now()
+  if ((logged.get(key) ?? 0) + LOG_EVERY_MS > now) return
+  logged.set(key, now)
+  if (logged.size > 2000) logged.clear()
+  log.web.warn(mode === 'enforce' ? 'local request not counted as the person: no proof' : 'local request would not count as the person: no proof', {
+    mode, kind, method: req.method ?? '', path, ua,
+  })
+}
+
+type ProofRequest = { headers: IncomingHttpHeaders; url?: string; method?: string }
+
 /**
  * Whether a loopback request that the old rule calls the person still counts as the person. Logs,
- * at most once an hour per kind of client and path, what it refuses (enforce) or would (observe).
+ * at most once an hour per kind of client and route, what it refuses (enforce) or would (observe);
+ * `quiet` for a reader that only labels (no decision rests on it).
  */
-export function loopbackPersonStands(req: { headers: IncomingHttpHeaders; url?: string; method?: string }): boolean {
+export function loopbackPersonStands(req: ProofRequest, opts: { quiet?: boolean } = {}): boolean {
   if (mode === 'off') return true
   if (localPersonProof(req.headers)) return true
-  const path = String(req.url ?? '').split('?')[0]!.split('/').slice(0, 4).join('/')
-  const ua = uaClass(req.headers)
-  const key = `${mode}|${req.method ?? ''}|${path}|${ua}`
-  const now = Date.now()
-  if ((logged.get(key) ?? 0) + LOG_EVERY_MS <= now) {
-    logged.set(key, now)
-    if (logged.size > 500) logged.clear()
-    log.web.warn(mode === 'enforce' ? 'local request not counted as the person: no proof' : 'local request would not count as the person: no proof', {
-      mode, method: req.method ?? '', path, ua,
-    })
-  }
+  if (!opts.quiet) note('local', req)
   return mode === 'observe'
+}
+
+/** Whether a loopback request claiming to be for a paired device is this server's own forward. */
+export function claimedRemoteStands(req: ProofRequest, opts: { quiet?: boolean } = {}): boolean {
+  if (mode === 'off') return true
+  if (isForwardProof(req.headers[FORWARD_PROOF_HEADER])) return true
+  if (!opts.quiet) note('claimed-remote', req)
+  return mode === 'observe'
+}
+
+/** The sender label a stamped request carries (cli-sender.ts SENDER_LABEL_HEADER). */
+export const UNPROVEN_LOCAL_SENDER = 'unproven-local'
+
+/**
+ * Mark a loopback request with no caller mark and no proof as an automation's, as the CLI marks a
+ * script's call (x-walnut-caller-kind: automation), so every reader of the caller marks downstream
+ * (the host's routes, a plugin's own check) treats it as not the person: one with no proof of a
+ * person's client, and one that claims to be for a paired device without this server's forward
+ * proof. `origin` is requestOrigin's class; `loopback` whether the socket is this computer's own
+ * trusted path (local-trust.ts). Only in enforce.
+ */
+export function stampUnproven(req: ProofRequest, origin: string, loopback: boolean): void {
+  if (mode !== 'enforce' || !loopback) return
+  if (one(req.headers, CALLER_SID_HEADER) || one(req.headers, CALLER_KIND_HEADER)) return
+  const stands = origin === LOCAL_ORIGIN ? loopbackPersonStands(req)
+    : origin === REMOTE_HTTP_ORIGIN ? claimedRemoteStands(req)
+      : true
+  if (stands) return
+  req.headers[CALLER_KIND_HEADER] = 'automation'
+  req.headers[SENDER_LABEL_HEADER] = UNPROVEN_LOCAL_SENDER
 }

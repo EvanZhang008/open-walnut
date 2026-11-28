@@ -50,6 +50,7 @@ import { PIN_TIER_POLICY, SESSION_ENGINE_IDS, migrateFocusTier } from '../../cor
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { logRouteError } from './route-error-log.js'
 import { startRouteSource } from '../../core/sessions/send-sent-by.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const taskV1Router = Router()
 
@@ -256,9 +257,9 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
     try {
       // The acting session rides on the phase event, so the notices this
       // completion causes can skip their own author (a leader completing its
-      // worker is not told what it just did, 2026-10-02).
-      const rawActor = req.headers['x-walnut-caller-sid']
-      const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
+      // worker is not told what it just did, 2026-10-02). A caller with none that is not the person
+      // is an outside one, never recorded as the person (changed-by.ts callerSidOrOutside).
+      const actorSid = callerSidOrOutside(req)
       const b = (req.body ?? {}) as Record<string, unknown>
       const { readStructuredReply, scoreProblem } = await import('../../core/peers/structured-reply.js')
       const badScore = scoreProblem(b.score)
@@ -349,14 +350,7 @@ taskV1Router.post('/tasks/:id/not-done', async (req: Request, res: Response, nex
       return
     }
     const note = typeof b.note === 'string' && b.note.trim() ? b.note.trim().slice(0, 500) : undefined
-    const rawActor = req.headers['x-walnut-caller-sid']
-    const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
-    let by = 'human'
-    if (actorSid) {
-      const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
-      const caller = await resolveCaller(actorSid).catch(() => null)
-      if (caller?.kind === 'session' && caller.record.taskId) by = `task:${caller.record.taskId}`
-    }
+    const { by } = await callerBy(req)
     const tm = await import('../../core/task-manager.js')
     try {
       const task = await tm.getTask(id)
@@ -395,8 +389,8 @@ taskV1Router.post('/tasks/:id/not-done', async (req: Request, res: Response, nex
 taskV1Router.post('/tasks/:id/ask-answer/withdraw', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const b = (req.body ?? {}) as Record<string, unknown>
-    const rawActor = req.headers['x-walnut-caller-sid']
-    const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
+    // No session named: the person, or an outside caller that may not (changed-by.ts callerSidOrOutside).
+    const actorSid = callerSidOrOutside(req)
     let callerTaskId: string | null = null
     if (actorSid) {
       const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
@@ -427,13 +421,17 @@ taskV1Router.post('/tasks/:id/ask-answer/withdraw', async (req: Request, res: Re
 // stop every open task under it (its own session too unless include_self is false; never the
 // caller's own), pause their armed triggers and take off their wake clocks (core/sessions/team-stop.ts).
 // POST /api/v1/tasks/:id/team-resume → TeamResumeResult: turn those triggers and clocks back on.
+/**
+ * Who writes, as these task records name it: `task:<id>` for a task's session, 'human' only for the
+ * person himself (person-caller.ts), 'agent' for any other caller (a sid Walnut cannot place, or none
+ * from a caller that is not the person: changed-by.ts callerSidOrOutside).
+ */
 async function callerBy(req: Request): Promise<{ by: string; callerSid?: string }> {
-  const raw = req.headers['x-walnut-caller-sid']
-  const callerSid = (Array.isArray(raw) ? raw[0] : raw)?.trim() || undefined
+  const callerSid = callerSidOrOutside(req)
   if (!callerSid) return { by: 'human' }
   const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
   const caller = await resolveCaller(callerSid).catch(() => null)
-  return { by: caller?.kind === 'session' && caller.record.taskId ? `task:${caller.record.taskId}` : 'human', callerSid }
+  return { by: caller?.kind === 'session' && caller.record.taskId ? `task:${caller.record.taskId}` : 'agent', callerSid }
 }
 
 taskV1Router.post('/tasks/:id/team-stop', async (req: Request, res: Response, next: NextFunction) => {
@@ -593,7 +591,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         // Its host could not prove that sid (lib/caller-unproven.ts): the ceiling reads an outside caller.
         callerUnproven: trust.callerUnproven,
         startAttemptId: str('start_attempt_id'),
-        source: programSource ?? startRouteSource('api-v1', req.headers),
+        source: programSource ?? startRouteSource('api-v1', req),
         // An agent's start answers once its session is up or the start failed (a sync call,
         // 2026-11-06, the user): never a start left to come up later unseen.
         ...(callerSid ? { answerWithinMs: AGENT_START_ANSWER_MS } : {}),

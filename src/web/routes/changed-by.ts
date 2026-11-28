@@ -8,6 +8,12 @@
  * can only lower) says ` via host:<key>`, a session id the host's daemon could not prove says
  * ` (unproven)`, and only a person's own request (person-caller.ts: no session id, no automation
  * mark, this machine or a paired device) reads `human`; any other call with no session is 'agent'.
+ *
+ * `callerSidOrOutside` is the same rule for a route that hands the caller's session id to a core rule
+ * reading "no session id" as the person (resolveCaller, resolveCallerPlacement, resolveBoardCaller,
+ * answeredByCaller): "no session" there must mean the person, so any other caller that names none
+ * goes on as an outside caller. Never pass the raw header to those (the ratchet:
+ * tests/web/routes/no-sid-is-not-person-ratchet.test.ts).
  */
 import type { Request } from 'express'
 import { isRemoteHostOrigin } from '../../lib/caller-origin.js'
@@ -15,9 +21,28 @@ import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { isPersonCaller } from './person-caller.js'
 
-export async function changedBy(req: Request): Promise<string> {
+type CallerRequest = Parameters<typeof isPersonCaller>[0]
+
+/** The sid resolveCaller reads as an outside caller (session-send-core.ts): never a session, never the person. */
+export const OUTSIDE_CALLER_SID = 'external'
+
+/** The session id the caller names (`x-walnut-caller-sid`), trimmed; undefined when it names none. */
+export function callerSidHeader(req: CallerRequest): string | undefined {
   const raw = req.headers['x-walnut-caller-sid']
-  const sid = (Array.isArray(raw) ? raw[0] : raw)?.trim()
+  return (Array.isArray(raw) ? raw[0] : raw)?.trim() || undefined
+}
+
+/**
+ * The caller's session id for a core rule that reads "none" as the person: its own, none only for the
+ * person himself (isPersonCaller), else OUTSIDE_CALLER_SID (a local process with no proof, a script
+ * marked as an automation, a call through a host's link that names no session).
+ */
+export function callerSidOrOutside(req: CallerRequest): string | undefined {
+  return callerSidHeader(req) ?? (isPersonCaller(req) ? undefined : OUTSIDE_CALLER_SID)
+}
+
+export async function changedBy(req: Request): Promise<string> {
+  const sid = callerSidHeader(req)
   const origin = requestOrigin(req)
   const via = isRemoteHostOrigin(origin) ? ` via ${origin}` : ''
   if (!sid) return isPersonCaller(req) ? 'human' : `agent${via}`

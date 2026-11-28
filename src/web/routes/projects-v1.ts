@@ -38,6 +38,7 @@ import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { handsToAppErrorHandler } from '../middleware/link-failure-answer.js'
 import { isInboxProject } from '../../core/inbox-project.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const projectsV1Router = Router()
 
@@ -107,7 +108,7 @@ projectsV1Router.post('/projects', async (req: Request, res: Response, next: Nex
     }
     const { projectSourceRefusal } = await import('../../core/plugins/integration-list.js')
     const refusal = await projectSourceRefusal(typeof source === 'string' ? source : 'local',
-      req.get('x-walnut-caller-sid') || undefined, (req.body as { user_words?: unknown }).user_words)
+      callerSidOrOutside(req), (req.body as { user_words?: unknown }).user_words)
     if (refusal) {
       sendError(res, 403, 'user_decision', refusal)
       return

@@ -29,6 +29,7 @@ import { BriefWriteError, writeNodeBrief, type BriefEdit } from '../../core/sess
 import { compactBrief, noteRulesGiven, rulesDue } from '../../core/sessions/brief-compact.js'
 import { briefSourcesOf, type BriefWriter } from '../../core/sessions/brief-source.js'
 import { resolveBoardCaller } from '../../core/boards/board-team.js'
+import { callerSidOrOutside } from './changed-by.js'
 import { listTasks } from '../../core/task-manager.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
 import { log } from '../../logging/index.js'
@@ -119,10 +120,11 @@ briefV1Router.get('/tasks/:id/brief', route(async (req, res) => {
   })
 }))
 
-/** Who writes, from the request alone: no caller session is a person (the primary); a session Walnut
- *  knows is kept with its task when it has one; a header naming no known session is an unknown agent. */
-async function briefWriter(callerSid: string | undefined): Promise<BriefWriter> {
-  const sid = callerSid?.trim()
+/** Who writes, from the request alone: no caller session is the person only for his own request
+ *  (changed-by.ts callerSidOrOutside); a session Walnut knows is kept with its task when it has one; a
+ *  header naming no known session, or a caller with none that is not the person, is an unknown agent. */
+async function briefWriter(req: Request): Promise<BriefWriter> {
+  const sid = callerSidOrOutside(req)
   if (!sid) return { by: 'human' }
   const caller = await resolveBoardCaller(sid).catch(() => null)
   if (caller?.kind === 'task') return { by: `task:${caller.taskId}`, sessionId: caller.sessionId }
@@ -155,7 +157,7 @@ briefV1Router.put('/tasks/:id/brief', route(async (req, res) => {
   if (content === undefined && !edits) throw new RouteError(400, 'bad_request', 'content (string) or edits ([{ old, new }]) is required')
   const lang = await uiLanguage()
   const callerSid = header(req, 'x-walnut-caller-sid')
-  const out = await writeNodeBrief(task.id, { ...(content !== undefined ? { content } : {}), ...(edits ? { edits } : {}), ...(lang ? { language: lang } : {}) }, await briefWriter(callerSid))
+  const out = await writeNodeBrief(task.id, { ...(content !== undefined ? { content } : {}), ...(edits ? { edits } : {}), ...(lang ? { language: lang } : {}) }, await briefWriter(req))
   // Who reads, as of its last compaction: a summary drops the rules it was given, so a session
   // past a compaction is a new reader of them (SessionRecord.lastCompactUuid).
   const sid = callerSid

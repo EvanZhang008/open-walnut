@@ -27,6 +27,7 @@ import {
   deleteRoutingRule, noteRoutedItem, readRoutingRules, ruleMatchText, RoutingRuleError, setRoutingRule,
   type RoutingRuleAuthor, type RoutingRuleInput, type TriageRoutingRule,
 } from '../../core/triage/routing-rules.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const triageRulesV1Router = Router()
 
@@ -61,9 +62,9 @@ async function taskOf(id: string): Promise<TaskLook | null> {
   }
 }
 
-/** The caller's task, or null for a person (no session header). */
+/** The caller's task, or null for the person (no session header, his own request: changed-by.ts). */
 async function callerTask(req: Request): Promise<{ sid: string; task: TaskLook | null } | null> {
-  const sid = header(req, 'x-walnut-caller-sid')
+  const sid = callerSidOrOutside(req)
   if (!sid) return null
   const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
   const record = await getSessionByClaudeId(sid).catch(() => null)

@@ -1,9 +1,10 @@
 /**
  * Who a send to a session came from, read from its source: a person's own words
  * or an agent's (another task, Walnut's notices, triggers, routines, hooks).
- * Pure and dependency-free, so callers that mock the queue still get the rule.
+ * Free of the queue and the stores, so callers that mock the queue still get the rule.
  */
 import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER, senderLabel } from '../../lib/cli-sender.js';
+import { isPersonCaller } from '../../web/routes/person-caller.js';
 import { ambientAutomatedClient, automatedClientLabel } from './automated-client.js';
 
 /**
@@ -68,32 +69,32 @@ export function isPersonSource(source: string | undefined): boolean {
   return queueSentBy(source) === 'person' || (PERSON_START_SOURCES.has(source ?? '') && !ambientAutomatedClient());
 }
 
-type HeaderBag = Record<string, string | string[] | undefined>;
-const headerOf = (headers: HeaderBag, name: string): string => {
-  const v = headers[name];
+/** What a route's source reads of its request: its headers and socket (person-caller.ts). */
+type RouteRequest = Parameters<typeof isPersonCaller>[0];
+const headerOf = (req: RouteRequest, name: string): string => {
+  const v = req.headers[name];
   return (Array.isArray(v) ? v[0] : v)?.trim() ?? '';
 };
 
 /**
- * The source a route reports for a request: its person source, unless the request is not a person's.
- * An agent's request names its session (`x-walnut-caller-sid`, put on every request made through the
- * `walnut` CLI, the `api` op or MCP), a script's names itself an automation
- * (`x-walnut-caller-kind`, cli-sender.ts), and a browser under automation is one too
- * (automated-client.ts). Any of them reaching a person's route is not a person.
+ * The source a route reports for a request: its person source, only for the person's own request
+ * (web/routes/person-caller.ts isPersonCaller). An agent's request names its session
+ * (`x-walnut-caller-sid`, put on every request made through the `walnut` CLI, the `api` op or MCP),
+ * a script's names itself an automation (`x-walnut-caller-kind`, cli-sender.ts), a local process
+ * with no proof of the person's client and a call through a host's link are no person either, and
+ * a browser under automation is one too (automated-client.ts). Any of them reaching a person's
+ * route is not a person.
  */
-export function routeSource(personSource: string, headers: HeaderBag): string {
-  if (headerOf(headers, 'x-walnut-caller-sid') || headerOf(headers, CALLER_KIND_HEADER) === 'automation') return 'api-agent';
-  return ambientAutomatedClient() ? AUTOMATED_SEND_SOURCE : personSource;
+export function routeSource(personSource: string, req: RouteRequest): string {
+  if (headerOf(req, 'x-walnut-caller-sid') || headerOf(req, CALLER_KIND_HEADER) === 'automation') return 'api-agent';
+  if (ambientAutomatedClient()) return AUTOMATED_SEND_SOURCE;
+  return isPersonCaller(req) ? personSource : 'api-agent';
 }
 
 /** A first message needs the automation's name as well as its sender class. */
-export function startRouteSource(personSource: string, headers: HeaderBag): string {
-  if (headerOf(headers, 'x-walnut-caller-sid')) return 'api-agent';
+export function startRouteSource(personSource: string, req: RouteRequest): string {
+  if (headerOf(req, 'x-walnut-caller-sid')) return 'api-agent';
   const automated = ambientAutomatedClient();
   if (automated) return `automation:${automatedClientLabel(automated)}`;
-  const kind = headerOf(headers, CALLER_KIND_HEADER).toLowerCase();
-  if (kind && !['person', 'human'].includes(kind)) {
-    return `automation:${senderLabel(headerOf(headers, SENDER_LABEL_HEADER))}`;
-  }
-  return personSource;
+  return isPersonCaller(req) ? personSource : `automation:${senderLabel(headerOf(req, SENDER_LABEL_HEADER))}`;
 }

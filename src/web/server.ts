@@ -2304,8 +2304,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // A person's own request is marked for the work it runs, until its response ends: on a revoked
   // host only such a call runs a process or hands it data (core/session-channel/person-call.ts).
   {
-    const [{ markPersonRequest }, { isPersonCaller }] = await Promise.all([import('../core/session-channel/person-call.js'), import('./routes/person-caller.js')])
-    app.use('/api', (req, res, next) => { if (isPersonCaller(req)) markPersonRequest(res, next); else next() })
+    const [{ markPersonRequest }, { isPersonCaller }, { stampUnproven }, { requestOrigin }, { classifyLocalRequest }] = await Promise.all([
+      import('../core/session-channel/person-call.js'), import('./routes/person-caller.js'),
+      import('./routes/local-person-proof.js'), import('./middleware/request-origin.js'), import('./middleware/local-trust.js'),
+    ])
+    app.use('/api', (req, res, next) => {
+      // A request from this computer with no proof of a person's client is an automation's from here
+      // on, for every route and plugin below (routes/local-person-proof.ts).
+      stampUnproven(req, requestOrigin(req), classifyLocalRequest(req).trusted)
+      // Quiet: only a label for the work it runs; the routes that decide on it log what they refuse.
+      if (isPersonCaller(req, { quiet: true })) markPersonRequest(res, next); else next()
+    })
   }
   app.use('/api', (await import('./middleware/router-area-access.js')).routerAreaAccess)
   // A host replica answering alone (the Mac away, no companion standing in): a

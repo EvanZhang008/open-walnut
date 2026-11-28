@@ -108,7 +108,8 @@ export function normalizeHost(host: string | undefined | null): string {
 export type CallerTaskRow = Pick<Task, 'id' | 'title'> & Partial<Pick<Task, 'project' | 'group_id' | 'pinned' | 'focus_tier' | 'org_role' | 'org_leads' | 'walnut_agent'>>;
 
 /**
- * Classify the caller behind an `x-walnut-caller-sid` header. Reads the task's
+ * Classify the caller behind an `x-walnut-caller-sid` header (no sid is the person: a route passes
+ * web/routes/changed-by.ts callerSidOrOutside, never the raw header). Reads the task's
  * LIVE project and folder: `SessionRecord.project` is stamped when the session
  * starts and goes stale the moment the task moves. `readTask`: where the caller's
  * task is read (a host's follower reads its copy plus its own journal's writes,

@@ -43,6 +43,7 @@ import {
 } from '../../core/org/org-store.js'
 import { createOrgNode, editOrgNode, editProjectVp, type OrgWriter } from '../../core/org/org-node-edit.js'
 import { orgDisplayTitle } from '../../core/org/org-tree.js'
+import { callerSidOrOutside } from './changed-by.js'
 
 export const orgV1Router = Router()
 
@@ -163,9 +164,8 @@ orgV1Router.post('/org/contact', async (req: Request, res: Response, next: NextF
     primaryOnly('Org contacts are resolved')
     const to = typeof req.body?.to === 'string' ? req.body.to : ''
     // Who asks decides whether a lead that handed over is passed by (org/retired-lead.ts).
-    const rawSid = req.headers['x-walnut-caller-sid']
     const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
-    const caller = await resolveCaller(Array.isArray(rawSid) ? rawSid[0] : rawSid)
+    const caller = await resolveCaller(callerSidOrOutside(req))
     const askerTaskId = caller.kind === 'human' ? undefined : caller.kind === 'session' ? caller.record.taskId ?? '' : ''
     // The org is off (org-enabled.ts): an agent's org_send is refused, a person still reaches it.
     if (caller.kind !== 'human') {
@@ -237,7 +237,8 @@ orgV1Router.post('/org/vp', async (req: Request, res: Response, next: NextFuncti
 // a create names what it makes, so it brings a deleted project back for either; the instructions
 // record who wrote them, which the Org page shows.
 export async function nodeCaller(req: Request): Promise<{ human: boolean; writer: OrgWriter }> {
-  const sid = header(req, 'x-walnut-caller-sid')
+  // No session named is the person only for his own request; any other such caller is an agent (changed-by.ts).
+  const sid = callerSidOrOutside(req)
   if (!sid) return { human: true, writer: { by: 'human' } }
   const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
   const caller = await resolveCaller(sid)
@@ -390,7 +391,7 @@ orgV1Router.put('/org/settings', async (req: Request, res: Response, next: NextF
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'org' }, ['web-ui'], { source: 'api' })
     if (wasOn !== settings.enabled) {
       const { log } = await import('../../logging/index.js')
-      log.task.info(settings.enabled ? 'org: turned on' : 'org: turned off', { by: header(req, 'x-walnut-caller-sid') ? 'agent' : 'human' })
+      log.task.info(settings.enabled ? 'org: turned on' : 'org: turned off', { by: callerSidOrOutside(req) ? 'agent' : 'human' })
     }
     res.json(settings)
   } catch (err) {
@@ -441,7 +442,7 @@ orgV1Router.post('/org/nodes/:id/brief-refresh', async (req: Request, res: Respo
       return
     }
     const raw = (req.body ?? {}) as { by?: unknown }
-    const by = header(req, 'x-walnut-caller-sid') ? 'agent' : raw.by === 'phone' ? 'phone' : 'web'
+    const by = callerSidOrOutside(req) ? 'agent' : raw.by === 'phone' ? 'phone' : 'web'
     const { requestBriefRefresh } = await import('../../core/sessions/brief-refresh.js')
     res.json(await requestBriefRefresh(String(req.params.id), by))
   } catch (err) {

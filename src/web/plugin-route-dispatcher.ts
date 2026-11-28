@@ -1,9 +1,9 @@
 import express, { Router, type Request, type RequestHandler } from 'express'
 import type { IntegrationRegistry } from '../core/integration-registry.js'
 import { JobRouteError } from '../core/plugin-jobs/serve.js'
-import { LOCAL_ORIGIN, ORIGIN_HEADER, withCallerOrigin } from '../lib/caller-origin.js'
-import { CALLER_KIND_HEADER } from '../lib/cli-sender.js'
-import { loopbackPersonStands } from './routes/local-person-proof.js'
+import { ORIGIN_HEADER, withCallerOrigin } from '../lib/caller-origin.js'
+import { stampUnproven } from './routes/local-person-proof.js'
+import { classifyLocalRequest } from './middleware/local-trust.js'
 import { requestOrigin } from './middleware/request-origin.js'
 import {
   PluginRuntimeRelayError,
@@ -103,10 +103,6 @@ function requestBody(request: Request): Buffer {
   return Buffer.from(JSON.stringify(request.body))
 }
 
-const CALLER_SID_HEADER = 'x-walnut-caller-sid'
-/** The caller-kind a plugin sees on a local request with no proof of the person (see above). */
-export const UNPROVEN_LOCAL_KIND = 'unproven-local'
-
 export function createPluginRouteDispatcher(
   registry: IntegrationRegistry,
   options: PluginRouteDispatcherOptions = {},
@@ -133,11 +129,9 @@ export function createPluginRouteDispatcher(
     const origin = requestOrigin(req)
     req.headers[ORIGIN_HEADER] = origin
     // A request from this computer with no proof that it is one of the person's own clients reaches
-    // the plugin marked as an automation, so every plugin's person-only check (it reads these marks)
-    // refuses it as the host's own routes do (routes/local-person-proof.ts).
-    if (origin === LOCAL_ORIGIN && !req.headers[CALLER_SID_HEADER] && !req.headers[CALLER_KIND_HEADER] && !loopbackPersonStands(req)) {
-      req.headers[CALLER_KIND_HEADER] = UNPROVEN_LOCAL_KIND
-    }
+    // the plugin marked as an automation (the /api middleware stamps it too; this mount may stand
+    // alone), so every plugin's person-only check refuses it as the host's routes do.
+    stampUnproven(req, origin, classifyLocalRequest(req).trusted)
     const forward = async (send: (request: PluginHttpRelayRequest) => Promise<PluginHttpRelayResponse>) => {
       try {
         const response = await send({

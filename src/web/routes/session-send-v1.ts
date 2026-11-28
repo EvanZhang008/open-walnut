@@ -209,10 +209,10 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     const namedThread = threadIdOf(req.body?.threadId) ? req.body.threadId as string : undefined
     // His answer from a card names no thread: the decision letter its thread holds is answered with
     // his words, the same way (core/org/card-answer-thread.ts).
-    const cardLetter = !namedThread && record.taskId && routeSource('mobile', req.headers) === 'mobile'
+    const cardLetter = !namedThread && record.taskId && routeSource('mobile', req) === 'mobile'
       ? await (await import('../../core/org/card-answer-thread.js')).cardAnswerLetter(record.taskId, text) : null
     const sentThread = namedThread ?? cardLetter?.threadId
-    if (sentThread && record.taskId && routeSource('mobile', req.headers) === 'mobile') {
+    if (sentThread && record.taskId && routeSource('mobile', req) === 'mobile') {
       const { answerLetterOnThread } = await import('../../core/org/letter-follow-up.js')
       const answered = await answerLetterOnThread({
         taskId: record.taskId, threadId: sentThread, text: cardLetter?.words ?? text,
@@ -236,7 +236,7 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       }
     }
     const outputMode = await prepareHintedSend(sessionId, record, enqueueText ?? text, {
-      sentBy: routeSource('mobile', req.headers) === 'mobile' ? 'person' : 'agent', ...(voice ? { requested: { 'voice-reply': {} } } : {}),
+      sentBy: routeSource('mobile', req) === 'mobile' ? 'person' : 'agent', ...(voice ? { requested: { 'voice-reply': {} } } : {}),
       // A retry reuses its qm- id: an Org node's Threads file it once (core/org/thread-capture.ts).
       ...(clientMessageId ? { threadKey: clientMessageId } : {}),
       // Additive: sent from a thread's Follow up on the phone, filed under that thread (the
@@ -261,7 +261,7 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     const interruptNow = interrupt && !(clientMessageId
       && ((await findQueuedMessage(clientMessageId)) || settledLine))
     const msg = await sendMessageToSession(sessionId, text, {
-      source: routeSource('mobile', req.headers),
+      source: routeSource('mobile', req),
       taskId: record.taskId,
       ...(cliText !== text ? { enqueueMessage: cliText } : {}),
       ...(clientMessageId ? { messageId: clientMessageId } : {}),
