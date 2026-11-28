@@ -24,7 +24,7 @@ import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { ambientAutomatedClient } from '../../core/sessions/automated-client.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { isOnBehalfOfRemote, requestOrigin } from '../middleware/request-origin.js'
-import { claimedRemoteStands, loopbackPersonStands } from './local-person-proof.js'
+import { claimedRemoteStands, loopbackPersonStands, noSessionStands } from './local-person-proof.js'
 import { classifyLocalRequest } from '../middleware/local-trust.js'
 
 /** What the rule reads of a request: its headers and its socket (an HTTP request, or a WebSocket upgrade). */
@@ -46,6 +46,17 @@ export function isPersonCaller(req: CallerRequest, opts: { quiet?: boolean } = {
   }
   // This computer: only with what the person's own clients send (local-person-proof.ts).
   return origin === LOCAL_ORIGIN && loopbackPersonStands(req, opts)
+}
+
+/**
+ * For a decision that read "no session id" as the person before 2026-11-28 (changed-by.ts
+ * callerSidOrOutside, send-sent-by.ts routeSource, an action card's or inbox item's run, a socket
+ * send): isPersonCaller in enforce, the old reading outside it (local-person-proof.ts noSessionStands).
+ * `automated` also counts a browser under automation as no person (isPersonNotAutomation).
+ */
+export function noSessionIsPerson(req: CallerRequest, opts: { automated?: boolean } = {}): boolean {
+  const person = isPersonCaller(req, { quiet: true }) && !(opts.automated && ambientAutomatedClient())
+  return noSessionStands(req, person)
 }
 
 /** A person's own request, and no browser under automation (see the file comment). */

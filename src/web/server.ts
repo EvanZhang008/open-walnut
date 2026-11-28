@@ -2304,11 +2304,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // A person's own request is marked for the work it runs, until its response ends: on a revoked
   // host only such a call runs a process or hands it data (core/session-channel/person-call.ts).
   {
-    const [{ markPersonRequest }, { isPersonCaller }, { stampUnproven }, { requestOrigin }, { classifyLocalRequest }] = await Promise.all([
+    const [{ markPersonRequest }, { isPersonCaller }, { stampUnproven, takeForwardProof }, { requestOrigin }, { classifyLocalRequest }] = await Promise.all([
       import('../core/session-channel/person-call.js'), import('./routes/person-caller.js'),
       import('./routes/local-person-proof.js'), import('./middleware/request-origin.js'), import('./middleware/local-trust.js'),
     ])
     app.use('/api', (req, res, next) => {
+      // This server's own forward proof is read here once and never reaches a route or plugin.
+      takeForwardProof(req)
       // A request from this computer with no proof of a person's client is an automation's from here
       // on, for every route and plugin below (routes/local-person-proof.ts).
       stampUnproven(req, requestOrigin(req), classifyLocalRequest(req).trusted)

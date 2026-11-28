@@ -19,7 +19,7 @@ import type { Request } from 'express'
 import { isRemoteHostOrigin } from '../../lib/caller-origin.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 import { requestOrigin } from '../middleware/request-origin.js'
-import { isPersonCaller } from './person-caller.js'
+import { isPersonCaller, noSessionIsPerson } from './person-caller.js'
 
 type CallerRequest = Parameters<typeof isPersonCaller>[0]
 
@@ -38,7 +38,7 @@ export function callerSidHeader(req: CallerRequest): string | undefined {
  * marked as an automation, a call through a host's link that names no session).
  */
 export function callerSidOrOutside(req: CallerRequest): string | undefined {
-  return callerSidHeader(req) ?? (isPersonCaller(req) ? undefined : OUTSIDE_CALLER_SID)
+  return callerSidHeader(req) ?? (noSessionIsPerson(req) ? undefined : OUTSIDE_CALLER_SID)
 }
 
 export async function changedBy(req: Request): Promise<string> {

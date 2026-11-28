@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { isFollower } from '../../core/server-role.js';
 import { requestOrigin } from '../middleware/request-origin.js';
-import { isPersonNotAutomation } from './person-caller.js';
+import { noSessionIsPerson } from './person-caller.js';
 import { humanActionApiBase } from '../../ops/human-action-policy.js';
 import { sendV1Error, callPrimaryControl } from './v1-control-relay.js';
 import { ItemActionError } from '../../core/human-inbox/item-ledger.js';
@@ -27,7 +27,7 @@ async function relay(req: Request, res: Response, operation: string): Promise<bo
   const outcome = await callPrimaryControl(`server.human-inbox.item-${operation}` as Parameters<typeof callPrimaryControl>[0], '__server__', {
     letterId: param(req, 'letter'), itemId: param(req, 'item'), body: req.body, query: req.query, taskId: param(req, 'taskId'),
     // Whether the caller here is the person: the leader runs the plan in his name only then.
-    asPerson: isPersonNotAutomation(req),
+    asPerson: noSessionIsPerson(req, { automated: true }),
   }, 8_000);
   if (!outcome.ok) {
     const notSent = 'notSent' in outcome.failure && outcome.failure.notSent === true;
@@ -53,7 +53,7 @@ humanInboxItemsV1Router.post(`${ROOT}/prepare`, (req, res, next) => guard(res, n
 humanInboxItemsV1Router.post(`${ROOT}/execute`, (req, res, next) => guard(res, next, async () => {
   if (await relay(req, res, 'execute')) return;
   const { executeInboxItem, queryInboxItem } = await import('../../core/human-inbox/item-execution.js');
-  const receipt = await executeInboxItem(param(req, 'letter'), param(req, 'item'), req.body, requestOrigin(req), humanActionApiBase(req), isPersonNotAutomation(req));
+  const receipt = await executeInboxItem(param(req, 'letter'), param(req, 'item'), req.body, requestOrigin(req), humanActionApiBase(req), noSessionIsPerson(req, { automated: true }));
   const result = await queryInboxItem(param(req, 'letter'), param(req, 'item'), requestOrigin(req));
   if (!res.headersSent) res.status(receipt.status === 'pending' ? 202 : 200).json({ ...result, receipt });
 }));

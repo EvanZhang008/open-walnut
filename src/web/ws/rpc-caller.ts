@@ -11,6 +11,7 @@
  * the dispatcher, which always sets it (tests/web/routes/no-sid-is-not-person-ratchet.test.ts).
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { localProofMode } from '../routes/local-person-proof.js'
 
 const store = new AsyncLocalStorage<{ person: boolean }>()
 
@@ -19,7 +20,10 @@ export function withRpcCaller<T>(person: boolean, fn: () => T): T {
   return store.run({ person }, fn)
 }
 
-/** Is the socket call running now the person's own (see the file comment)? */
+/**
+ * Is the socket call running now the person's own (see the file comment)? Only in enforce: outside
+ * it every socket send keeps the old reading, the person (local-person-proof.ts noSessionStands).
+ */
 export function rpcCallerIsPerson(): boolean {
-  return store.getStore()?.person ?? true
+  return (store.getStore()?.person ?? true) || localProofMode() !== 'enforce'
 }

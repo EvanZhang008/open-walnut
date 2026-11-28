@@ -124,8 +124,8 @@ describe('a missing caller session id is never the person by itself', () => {
     expect(bad).toEqual([])
     const src = code('src/core/sessions/send-sent-by.ts')
     const body = (name: string) => src.slice(src.indexOf(`export function ${name}(`), src.indexOf('\n}\n', src.indexOf(`export function ${name}(`)))
-    expect(body('routeSource')).toMatch(/isPersonCaller\(req\)/)
-    expect(body('startRouteSource')).toMatch(/isPersonCaller\(req\)/)
+    expect(body('routeSource')).toMatch(/noSessionIsPerson\(req\)/)
+    expect(body('startRouteSource')).toMatch(/noSessionIsPerson\(req\)/)
   })
 
   it('a socket call frames words as the person only from the person\'s own socket', () => {

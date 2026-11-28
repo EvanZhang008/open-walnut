@@ -38,7 +38,7 @@ import { isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { requestOrigin } from '../middleware/request-origin.js'
-import { isPersonNotAutomation } from './person-caller.js'
+import { noSessionIsPerson } from './person-caller.js'
 import { SENDER_LABEL_HEADER } from '../../lib/cli-sender.js'
 import { humanActionRefusal, humanActionApiBase } from '../../ops/human-action-policy.js'
 
@@ -163,7 +163,7 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
       // no session that is not his (a local process, a script) runs as an automation, never laundered
       // into his own call by this route (2026-11-28 review).
       ...(sid ? { callerMode: 'session' as const, callerSid: sid }
-        : isPersonNotAutomation(req) ? { callerMode: 'human' as const } : { sender: senderOf(req) }),
+        : noSessionIsPerson(req, { automated: true }) ? { callerMode: 'human' as const } : { sender: senderOf(req) }),
       origin,
     })
     const ms = Date.now() - startedAt

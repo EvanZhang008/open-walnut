@@ -34,6 +34,7 @@ import { getQueue, resetCache } from '../../../src/core/session-message-queue.js
 import { createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js'
 import { queueSentBy } from '../../../src/core/sessions/send-sent-by.js'
 import { withRpcCaller } from '../../../src/web/ws/rpc-caller.js'
+import { setLocalProofModeForTest } from '../../../src/web/routes/local-person-proof.js'
 
 let seq = 0
 async function newSession(): Promise<string> {
@@ -52,8 +53,10 @@ beforeEach(async () => {
   bus.clear()
   methods.clear()
   registerSessionChatRpc()
+  setLocalProofModeForTest('enforce')
 })
 afterEach(async () => {
+  setLocalProofModeForTest('off')
   bus.clear()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
@@ -65,6 +68,14 @@ describe('session:send frames the person only from the person\'s socket', () => 
     const [row] = await getQueue(sid)
     expect(row!.sentBy).toBe('agent')
     expect(queueSentBy('api-agent')).toBe('agent')
+  })
+
+  it('outside enforce a socket send keeps the old reading, the person', async () => {
+    setLocalProofModeForTest('observe')
+    const sid = await newSession()
+    await withRpcCaller(false, () => call('session:send', { sessionId: sid, message: 'from a local process' }))
+    const [row] = await getQueue(sid)
+    expect(row!.sentBy).toBe('person')
   })
 
   it('the person\'s socket queues the person\'s row', async () => {

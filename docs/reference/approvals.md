@@ -224,7 +224,13 @@ Walnut wrote with `mode: "biometric"` or pinned keys is answered with a tap like
   computer counts as the person only with what his own clients send, a browser's fetch metadata
   (`Sec-Fetch-Site`, `Origin`) or the person's `walnut` CLI mark (`routes/local-person-proof.ts`;
   `WALNUT_LOCAL_PERSON_PROOF=enforce|observe|off`, his own install `observe` first). Plugins get
-  the same verdict as `x-walnut-caller-kind: unproven-local` from the dispatcher.
+  the same verdict as `x-walnut-caller-kind: unproven-local` from the dispatcher. The decisions
+  that used to read a missing session id as the person (a route's sender source, the caller handed
+  to a core rule, an action card's run, a socket send) follow it only in `enforce`
+  (`noSessionIsPerson`); in `observe` they keep the old reading and log what would change. A
+  loopback call that claims to be for the phone counts only with this server's own forward proof
+  (`lib/forward-proof.ts`), which the `/api` middleware checks and takes off before any route or
+  plugin sees it.
 - **Bound and used once.** A request's digest covers its id, mode, times, host, task, what and
   detail. An answer names the digest of the request its screen showed (the web console, the Mac app
   and the current iPhone app always do; an older iPhone app sends none, and a record never changes

@@ -69,15 +69,21 @@ describe('the shared readers, with the local proof enforced', () => {
   })
 })
 
-describe('the shared readers with the proof off (every test server): the old rule', () => {
-  it('a header-less loopback request is still the person', () => {
-    expect(callerSidOrOutside(req(CURL))).toBeUndefined()
-    expect(routeSource('ui', req(CURL))).toBe('ui')
-    expect(startRouteSource('quick-start', req(CURL))).toBe('quick-start')
-    // A script that names itself never was.
-    expect(routeSource('ui', req({ ...CURL, 'x-walnut-caller-kind': 'automation' }))).toBe('api-agent')
-    expect(callerSidOrOutside(req({ ...CURL, 'x-walnut-caller-kind': 'automation' }))).toBe(OUTSIDE_CALLER_SID)
-  })
+describe('the shared readers outside enforce (off on every test server, observe first on the real install): the old rule', () => {
+  for (const mode of ['off', 'observe'] as const) {
+    it(`${mode}: a header-less loopback request is still the person, and a script keeps what it had`, () => {
+      setLocalProofModeForTest(mode)
+      expect(callerSidOrOutside(req(CURL))).toBeUndefined()
+      expect(routeSource('ui', req(CURL))).toBe('ui')
+      expect(startRouteSource('quick-start', req(CURL))).toBe('quick-start')
+      // A script that names itself was never a route's person source, and still is not.
+      expect(routeSource('ui', req({ ...CURL, 'x-walnut-caller-kind': 'automation' }))).toBe('api-agent')
+      expect(startRouteSource('quick-start', req({ ...CURL, 'x-walnut-caller-kind': 'automation', 'x-walnut-sender': 'nightly' }))).toBe('automation:nightly')
+      // A core rule kept reading a script's call as the person's own (a cron's task_start keeps its
+      // mode): only enforce changes that (2026-11-28 review), so observe changes nothing.
+      expect(callerSidOrOutside(req({ ...CURL, 'x-walnut-caller-kind': 'automation' }))).toBeUndefined()
+    })
+  }
 })
 
 function app() {

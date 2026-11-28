@@ -17,7 +17,7 @@ import { createPluginBodyParser, createPluginRouteDispatcher } from '../../../sr
 import { forwardProofHeader } from '../../../src/lib/forward-proof.js'
 import { isPersonCaller } from '../../../src/web/routes/person-caller.js'
 import {
-  initLocalPersonProof, localPersonProof, localProofMode, parseLocalProofMode, setLocalProofModeForTest, UNPROVEN_LOCAL_SENDER, type LocalProofMode,
+  initLocalPersonProof, localPersonProof, takeForwardProof, localProofMode, parseLocalProofMode, setLocalProofModeForTest, UNPROVEN_LOCAL_SENDER, type LocalProofMode,
 } from '../../../src/web/routes/local-person-proof.js'
 import { createMockPlugin } from '../../core/plugin-test-utils.js'
 
@@ -97,6 +97,21 @@ describe('isPersonCaller, the rule every person-only route shares', () => {
     setLocalProofModeForTest('enforce')
     const phone = { headers: { host: 'macbox.lan:3456', authorization: 'Bearer device-token', 'user-agent': 'Walnut/1.0 CFNetwork/3860.700.1 Darwin/25.6.0' }, socket: { remoteAddress: '192.168.1.20', localPort: 3456 } }
     expect(isPersonCaller(phone)).toBe(true)
+  })
+})
+
+describe('the forward proof never reaches a route or a plugin', () => {
+  it('is read once and taken off the request, and the request keeps its verdict', () => {
+    setLocalProofModeForTest('enforce')
+    const own = local({ ...OWN_FORWARD })
+    takeForwardProof(own)
+    expect(Object.keys(own.headers).some((h) => /forward-proof/.test(h))).toBe(false)
+    expect(isPersonCaller(own)).toBe(true)
+    // A wrong proof is taken off too, and proves nothing.
+    const forged = local({ ...CLAIMS_REMOTE, 'x-walnut-forward-proof': 'guess' })
+    takeForwardProof(forged)
+    expect(Object.keys(forged.headers).some((h) => /forward-proof/.test(h))).toBe(false)
+    expect(isPersonCaller(forged)).toBe(false)
   })
 })
 

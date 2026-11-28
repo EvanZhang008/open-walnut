@@ -22,6 +22,8 @@ import { canonicalForms, isHealthServerPath, isPlacesServerPath, localOnlyRoutes
 import { executeOp, getOp, listOpEntries, definePluginOp, removePluginOps } from '../../../src/ops/index.js'
 import { controlRelayOrigin } from '../../../src/core/sessions/control-host-policy.js'
 import { labelPluginFetch } from '../../../src/core/plugins/plugin-fetch-origin.js'
+import { forwardProofHeader } from '../../../src/lib/forward-proof.js'
+import { setSelfApiRoot } from '../../../src/lib/self-api-root.js'
 
 const HOST = hostOrigin('remote-dev')
 const req = (remoteAddress: string, headers: Record<string, string | string[]> = {}) => ({
@@ -429,6 +431,22 @@ describe('a plugin\'s fetch back to this server', () => {
     await withCallerOrigin(REMOTE_HTTP_ORIGIN, async () => {
       expect(labelPluginFetch('http://127.0.0.1:3456/x', { [ORIGIN_HEADER]: HOST })).toEqual({ [ORIGIN_HEADER]: HOST })
       expect(labelPluginFetch('http://127.0.0.1:3456/x', {})).toEqual({ [ORIGIN_HEADER]: REMOTE_HTTP_ORIGIN })
+    })
+  })
+})
+
+describe('the forward proof on a plugin\'s fetch (lib/forward-proof.ts)', () => {
+  afterEach(() => setSelfApiRoot(null))
+
+  it('goes only to a URL that names this server itself, never on a loopback Host header alone', async () => {
+    setSelfApiRoot('http://127.0.0.1:3456')
+    await withCallerOrigin(REMOTE_HTTP_ORIGIN, async () => {
+      expect(labelPluginFetch('http://127.0.0.1:3456/api/x', {})).toEqual({ [ORIGIN_HEADER]: REMOTE_HTTP_ORIGIN, ...forwardProofHeader() })
+      expect(labelPluginFetch('http://localhost:3456/api/x', {})).toEqual({ [ORIGIN_HEADER]: REMOTE_HTTP_ORIGIN, ...forwardProofHeader() })
+      // Another server that a plugin points at with a loopback Host header gets the origin label, never the secret.
+      expect(labelPluginFetch('http://192.0.2.7:3456/x', { host: 'localhost:3456' })).toEqual({ host: 'localhost:3456', [ORIGIN_HEADER]: REMOTE_HTTP_ORIGIN })
+      // Another port on this computer is another program.
+      expect(labelPluginFetch('http://127.0.0.1:9999/x', {})).toEqual({ [ORIGIN_HEADER]: REMOTE_HTTP_ORIGIN })
     })
   })
 })

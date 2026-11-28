@@ -119,7 +119,7 @@ function routeOf(url: string | undefined): string {
     .map((part) => (/\d/.test(part) || part.length > 24 ? ':id' : part)).join('/')
 }
 
-function note(kind: 'local' | 'claimed-remote', req: { headers: IncomingHttpHeaders; url?: string; method?: string }): void {
+function note(kind: 'local' | 'claimed-remote' | 'no-session', req: { headers: IncomingHttpHeaders; url?: string; method?: string }): void {
   const path = routeOf(req.url)
   const ua = uaClass(req.headers)
   const key = `${mode}|${kind}|${req.method ?? ''}|${path}|${ua}`
@@ -129,6 +129,7 @@ function note(kind: 'local' | 'claimed-remote', req: { headers: IncomingHttpHead
   if (logged.size > 2000) logged.clear()
   log.web.warn(mode === 'enforce' ? 'local request not counted as the person: no proof' : 'local request would not count as the person: no proof', {
     mode, kind, method: req.method ?? '', path, ua,
+    ...(kind === 'no-session' ? { callerKind: one(req.headers, CALLER_KIND_HEADER) || 'none', sender: one(req.headers, SENDER_LABEL_HEADER).slice(0, 40) || 'none' } : {}),
   })
 }
 
@@ -146,12 +147,38 @@ export function loopbackPersonStands(req: ProofRequest, opts: { quiet?: boolean 
   return mode === 'observe'
 }
 
+/** Requests whose forward proof the /api middleware checked and took off (takeForwardProof). */
+const forwardProven = new WeakSet<object>()
+
+/**
+ * Check a request's forward proof and take the header off, so no route, plugin or job below ever
+ * sees the secret (a plugin reads its request's headers). The verdict stays with the request.
+ */
+export function takeForwardProof(req: ProofRequest): void {
+  if (!(FORWARD_PROOF_HEADER in req.headers)) return
+  if (isForwardProof(req.headers[FORWARD_PROOF_HEADER])) forwardProven.add(req)
+  delete req.headers[FORWARD_PROOF_HEADER]
+}
+
 /** Whether a loopback request claiming to be for a paired device is this server's own forward. */
 export function claimedRemoteStands(req: ProofRequest, opts: { quiet?: boolean } = {}): boolean {
   if (mode === 'off') return true
-  if (isForwardProof(req.headers[FORWARD_PROOF_HEADER])) return true
+  if (forwardProven.has(req) || isForwardProof(req.headers[FORWARD_PROOF_HEADER])) return true
   if (!opts.quiet) note('claimed-remote', req)
   return mode === 'observe'
+}
+
+/**
+ * For a decision that read a missing session id as the person before 2026-11-28 (a caller's sid
+ * handed to a core rule, a route's sender source, an action card's or inbox item's run, a socket
+ * send): in enforce, the caller must be the person (`isPerson`, person-caller.ts); outside it the
+ * old reading holds, so observe changes nothing, and observe logs each kind of call the switch would
+ * turn away (a script marked as an automation, a call through a host's link) before it does.
+ */
+export function noSessionStands(req: ProofRequest, isPerson: boolean): boolean {
+  if (mode === 'enforce') return isPerson
+  if (mode === 'observe' && !isPerson) note('no-session', req)
+  return true
 }
 
 /** The sender label a stamped request carries (cli-sender.ts SENDER_LABEL_HEADER). */
