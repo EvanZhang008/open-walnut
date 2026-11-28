@@ -29,11 +29,21 @@ final class SessionChangesUITests: XCTestCase {
 
     /// Types only once the keyboard is up, so a keystroke never lands on a
     /// target that takes no text (the simulator beeps for each one).
+    ///
+    /// `typeText` returns once the keys are sent, and the box takes them a moment later: a step that
+    /// acts on the words right after (Add, Save, Send Now) took the first letters only (CI run
+    /// 45998577601: Add took "Wh" of "Why import useState here?", and the next step found no card with
+    /// the words). The step ends once the box holds every word typed (`waitForValue`'s class).
     private func type(_ app: XCUIApplication, _ field: XCUIElement, _ text: String) {
         XCTAssertTrue(field.waitForExistence(timeout: 10), "no field to type into")
         if !app.keyboards.firstMatch.waitForExistence(timeout: 3) { field.tap() }
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "no keyboard: nothing typed")
+        let before = field.value as? String ?? ""
         field.typeText(text)
+        let holds = waitToMatch(field, NSPredicate { object, _ in
+            ((object as? XCUIElement)?.value as? String)?.contains(text) == true
+        }, timeout: 5)
+        XCTAssertTrue(holds, "the box holds \"\((field.value as? String) ?? "")\" after typing \"\(text)\" into \"\(before)\"")
     }
 
     /// A beat between steps, so the screen recording shows each one.
