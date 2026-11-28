@@ -4,9 +4,10 @@
  * through the companion too), never a session on another host. The one rule the person-only routes
  * share (approvals-v1.ts, browser-v1.ts, topics-v1.ts).
  *
- * Known limit, the same on every route that uses it: a process on this computer that leaves those
- * headers off passes as the person. So it guards against an agent working through Walnut's tools,
- * not against a hostile process here.
+ * A request from this computer needs more: what only the person's own clients send, a browser's
+ * fetch metadata or the person's `walnut` CLI (local-person-proof.ts), so a bare local process (a
+ * session's own `curl localhost`) is not the person. A process that forges those headers on purpose
+ * still passes: this guards against an agent's plain request, not against a hostile program here.
  *
  * `isPersonNotAutomation` adds: a browser under automation is never the person on the user's own
  * install (core/sessions/automated-client.ts; the middleware scopes it only there, so a throwaway
@@ -23,9 +24,10 @@ import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { ambientAutomatedClient } from '../../core/sessions/automated-client.js'
 import { ambientTestRun } from '../../core/test-run.js'
 import { isOnBehalfOfRemote, requestOrigin } from '../middleware/request-origin.js'
+import { loopbackPersonStands } from './local-person-proof.js'
 
 /** What the rule reads of a request: its headers and its socket (an HTTP request, or a WebSocket upgrade). */
-type CallerRequest = { headers: IncomingHttpHeaders; socket?: { remoteAddress?: string; localPort?: number } }
+type CallerRequest = { headers: IncomingHttpHeaders; socket?: { remoteAddress?: string; localPort?: number }; url?: string; method?: string }
 
 function header(req: CallerRequest, name: string): string | undefined {
   const raw = req.headers[name]
@@ -36,8 +38,10 @@ function header(req: CallerRequest, name: string): string | undefined {
 /** A person's own request (see the file comment); a `/ws` upgrade reads the same (ws/handler.ts). */
 export function isPersonCaller(req: CallerRequest): boolean {
   const origin = requestOrigin(req)
-  return !header(req, 'x-walnut-caller-sid') && !header(req, CALLER_KIND_HEADER)
-    && (origin === LOCAL_ORIGIN || origin === REMOTE_HTTP_ORIGIN)
+  if (header(req, 'x-walnut-caller-sid') || header(req, CALLER_KIND_HEADER)) return false
+  if (origin === REMOTE_HTTP_ORIGIN) return true
+  // This computer: only with what the person's own clients send (local-person-proof.ts).
+  return origin === LOCAL_ORIGIN && loopbackPersonStands(req)
 }
 
 /** A person's own request, and no browser under automation (see the file comment). */

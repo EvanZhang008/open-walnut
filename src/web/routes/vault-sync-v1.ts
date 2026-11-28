@@ -20,8 +20,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import { ambientTestRun } from '../../core/test-run.js'
-import { requestOrigin } from '../middleware/request-origin.js'
-import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
+import { isPersonCaller } from './person-caller.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { sendVaultRefusal } from './vault-answer.js'
 
@@ -48,8 +47,8 @@ function here(res: Response): boolean {
 
 /** No session caller, no CLI automation mark, this machine or a paired device: the person's shape. */
 function personShape(req: Request): boolean {
-  const origin = requestOrigin(req)
-  return !header(req, 'x-walnut-caller-sid') && !header(req, CALLER_KIND_HEADER) && (origin === LOCAL_ORIGIN || origin === REMOTE_HTTP_ORIGIN)
+  // The one rule every person-only route shares (person-caller.ts).
+  return isPersonCaller(req)
 }
 
 async function hasSession(req: Request): Promise<boolean> {

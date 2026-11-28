@@ -37,7 +37,8 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isOnBehalfOfRemote, requestOrigin } from '../middleware/request-origin.js'
 import { classifyLocalRequest } from '../middleware/local-trust.js'
-import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
+import { isPersonCaller } from './person-caller.js'
+import { LOCAL_ORIGIN } from '../../lib/caller-origin.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
 import { isFollower } from '../../core/server-role.js'
 import { ambientTestRun } from '../../core/test-run.js'
@@ -77,9 +78,8 @@ export function gate(req: Request, res: Response, readStatus = false): boolean {
     res.status(403).json({ error: 'A test run cannot open the vault: it is the person\'s real one.', code: 'test_run' })
     return false
   }
-  const origin = requestOrigin(req)
-  const person = !header(req, 'x-walnut-caller-sid') && !header(req, CALLER_KIND_HEADER)
-    && (origin === LOCAL_ORIGIN || origin === REMOTE_HTTP_ORIGIN)
+  // The one rule every person-only route shares (person-caller.ts).
+  const person = isPersonCaller(req)
   if (!person) {
     res.status(403).json({ error: 'Only a person opens the vault: an agent asks through walnut pass, which a person approves.', code: 'human_only' })
     return false

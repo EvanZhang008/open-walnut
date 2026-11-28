@@ -24,9 +24,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isFollower } from '../../core/server-role.js'
 import { ambientTestRun } from '../../core/test-run.js'
-import { requestOrigin } from '../middleware/request-origin.js'
-import { LOCAL_ORIGIN, REMOTE_HTTP_ORIGIN } from '../../lib/caller-origin.js'
-import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
+import { isPersonCaller } from './person-caller.js'
 import type { ApprovalCreator, ApprovalWaiter } from '../../core/vault/agent.js'
 import { vaultSyncV1Router } from './vault-sync-v1.js'
 import { sendVaultRefusal } from './vault-answer.js'
@@ -59,8 +57,8 @@ function here(res: Response): boolean {
 
 /** The person's own routes: no session caller, no automation mark, this machine or a paired device, and a vault session. */
 async function person(req: Request, res: Response): Promise<boolean> {
-  const origin = requestOrigin(req)
-  const ok = !header(req, 'x-walnut-caller-sid') && !header(req, CALLER_KIND_HEADER) && (origin === LOCAL_ORIGIN || origin === REMOTE_HTTP_ORIGIN)
+  // The one rule every person-only route shares (person-caller.ts).
+  const ok = isPersonCaller(req)
   if (!ok) {
     res.status(403).json({ error: 'Only a person changes what agents may use.', code: 'human_only' })
     return false

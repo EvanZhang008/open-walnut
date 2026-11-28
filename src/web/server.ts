@@ -2127,6 +2127,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     unsubscribeEngineConfigResend = await wireEngineConfigResend()
   }
 
+  // Whether a request from this computer needs a person's client's proof to count as the person (routes/local-person-proof.ts).
+  await (await import('./routes/local-person-proof.js')).initLocalPersonProof()
   const app = express()
   currentApp = app
   if (options.beforeRoutes) app.use(options.beforeRoutes)
