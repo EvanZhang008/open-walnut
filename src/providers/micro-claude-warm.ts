@@ -46,6 +46,7 @@ import {
 } from './claude-stream-parser.js';
 import { prewarmOneShot, startOneShot, _resetLocalOneShotForTest, type OneShotHandle } from './oneshot-client.js';
 import { streamJsonUserLine } from './stream-json-input.js';
+import { accountDoorsClosedWhy } from '../core/leader/switch/doors.js';
 
 export interface WarmSpec {
   /** REPLACES the CLI system prompt (slim child). */
@@ -136,6 +137,8 @@ function buildSpawn(spec: WarmSpec): { command: string; args: string[]; cwd: str
     '--setting-sources', '',
     '--bare',
   ];
+  // On a copy of the person's data (closeAccountDoors) no MCP server of his own loads: they reach his real accounts.
+  if (accountDoorsClosedWhy()) args.push('--strict-mcp-config');
   if (spec.effort) args.push('--effort', spec.effort);
   // The user's modelOverrides, so the alias resolves as their CLI resolves it.
   const settings = slimChildSettingsArg();

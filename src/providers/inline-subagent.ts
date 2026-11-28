@@ -33,6 +33,7 @@ import {
   type ClaudeStreamResult,
 } from './claude-stream-parser.js';
 import { startOneShot, type OneShotExit, type OneShotHandle } from './oneshot-client.js';
+import { accountDoorsClosedWhy } from '../core/leader/switch/doors.js';
 
 // ── Types ──
 
@@ -234,6 +235,8 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   if (bare) {
     args.push('--bare');
   }
+  // On a copy of the person's data (closeAccountDoors) no MCP server of his own loads: they reach his real accounts.
+  if (accountDoorsClosedWhy()) args.push('--strict-mcp-config');
 
   // Clean env — remove CLAUDECODE to prevent nested session detection.
   // API keys (ANTHROPIC_API_KEY etc.) are intentionally preserved so the subprocess can authenticate.

@@ -1444,7 +1444,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // server's Mail page marked the person's real Gmail messages read).
   {
     const { accountIsolationReason } = await import('../core/remote-sync-isolation.js')
-    const why = accountIsolationReason()
+    // A data dir copied by hand on this machine, served by a plain `walnut web` while the original runs too.
+    const why = accountIsolationReason() ?? (IS_EPHEMERAL ? null : await (await import('../core/home-move.js')).copyOfLiveHomeOnThisMachine(WALNUT_HOME))
     // A sync plugin's documented end-to-end test (WALNUT_ALLOW_REMOTE_SYNC_IN_TEST=1) opens task sync only.
     const open = process.env.WALNUT_ALLOW_REMOTE_SYNC_IN_TEST === '1' ? (['task-sync'] as const) : []
     ;(await import('../core/leader/switch/doors.js')).closeAccountDoors(why, open)

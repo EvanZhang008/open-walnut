@@ -33,7 +33,8 @@ import { bunGlobal } from '../lib/runtime.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
 import { WALNUT_HOME, IS_EPHEMERAL, PLUGIN_STORES_DIR } from '../constants.js';
 import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
-import { notePluginCodeDir } from './plugins/copy-network-guard.js';
+import { markPluginCallbacks, markPluginFn, notePluginCodeDir } from './plugins/copy-network-guard.js';
+import { accountDoorsClosedWhy } from './leader/switch/doors.js';
 import { getVersion, isVersionKnown } from './version.js';
 import { createSubsystemLogger } from '../logging/index.js';
 import { getConfig, migrateStoredConfig, updatePluginConfig } from './config-manager.js';
@@ -1990,8 +1991,13 @@ async function loadPlugin(
           })
         : builder.api;
       if (deactivateFn) context.onDispose(deactivateFn);
+      // On a copy of the person's data a plugin that is not built in runs its callbacks in a frame the
+      // network guard can see (plugins/copy-network-guard.ts): a tail call cannot hide it.
+      const onCopy = !isBuiltin && accountDoorsClosedWhy() !== null;
+      const pluginApi = onCopy ? markPluginCallbacks(injectedApi) : injectedApi;
+      const activate = onCopy ? markPluginFn(registerFn) : registerFn;
       const activation = Promise.resolve()
-        .then(() => registerFn!(injectedApi))
+        .then(() => activate!(pluginApi))
         .then((value) => {
           if (value && typeof value === 'object' && typeof (value as { dispose?: unknown }).dispose === 'function') {
             context.own(value as { dispose(): void | Promise<void> });

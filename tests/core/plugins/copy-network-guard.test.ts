@@ -97,6 +97,89 @@ describe('a plugin\'s own network on a copy', () => {
   })
 })
 
+describe('a plugin\'s sync callback that tail-calls fetch', () => {
+  it('is refused once its API marks the callbacks it hands Walnut (a tail call drops its own frame)', async () => {
+    sent.length = 0
+    // The plugin's code: a sync arrow whose only call is fetch, in tail position.
+    const callback = (await import(pathToFileURL(path.join(dir, 'server.mjs')).href)).post as () => unknown
+    const timers: Array<() => unknown> = []
+    const api = { timers: { timeout(handler: () => unknown) { timers.push(handler) } } }
+    const tailCaller = new Function("return () => fetch('https://api.example.invalid/v1/tail', { method: 'POST' })")() as () => Promise<unknown>
+    guard.markPluginCallbacks(api).timers.timeout(tailCaller)
+    await expect(Promise.resolve().then(() => timers[0]!())).rejects.toThrow(/plugin-fetch own:POST/)
+    expect(sent).toEqual([])
+    // The same callback handed over unmarked leaves no frame to see: the mark is what catches it.
+    await tailCaller()
+    expect(sent).toEqual(['POST https://api.example.invalid/v1/tail'])
+    void callback
+  })
+
+  it('keeps one wrapper per function (an off() finds what on() got), binds methods to their own object, and leaves stores alone', () => {
+    const seen: unknown[] = []
+    class Store { #v = 1; get() { return this.#v } }
+    const store = new Store()
+    const api = {
+      events: { on(fn: unknown) { seen.push(fn) }, off(fn: unknown) { seen.push(fn) } },
+      store,
+      name: 'x',
+    }
+    const marked = guard.markPluginCallbacks(api)
+    const handler = () => 1
+    marked.events.on(handler)
+    marked.events.off(handler)
+    expect(seen[0]).toBe(seen[1])
+    expect(seen[0]).not.toBe(handler)
+    expect((seen[0] as () => number)()).toBe(1)
+    expect(marked.store).toBe(store)
+    expect(marked.store.get()).toBe(1)
+    expect(marked.name).toBe('x')
+    expect(marked.events).toBe(marked.events)
+  })
+})
+
+describe('a callback handed over inside a spec, or to an object an API method answers', () => {
+  const tail = () => new Function("return () => fetch('https://api.example.invalid/v1/spec', { method: 'POST' })")() as () => Promise<unknown>
+
+  it('a spec method that tail-calls fetch (walnut.tool({ execute }), registerSync({ createTask })) is refused', async () => {
+    sent.length = 0
+    const held: Array<{ execute: () => unknown; nested: { createTask: () => unknown } }> = []
+    const api = { tool(spec: (typeof held)[number]) { held.push(spec) } }
+    const spec = { execute: tail(), nested: { createTask: tail() } }
+    guard.markPluginCallbacks(api).tool(spec)
+    expect(held[0]).toBe(spec) // the same object, its methods marked in place
+    await expect(Promise.resolve().then(() => held[0]!.execute())).rejects.toThrow(/plugin-fetch own:POST/)
+    await expect(Promise.resolve().then(() => held[0]!.nested.createTask())).rejects.toThrow(/plugin-fetch own:POST/)
+    expect(sent).toEqual([])
+  })
+
+  it('a client an API method answers marks the callbacks given to it (services.require(...).onChange(cb))', async () => {
+    sent.length = 0
+    const listeners: Array<() => unknown> = []
+    const api = { services: { require() { return { onChange(cb: () => unknown) { listeners.push(cb) } } } } }
+    guard.markPluginCallbacks(api).services.require().onChange(tail())
+    await expect(Promise.resolve().then(() => listeners[0]!())).rejects.toThrow(/plugin-fetch own:POST/)
+    expect(sent).toEqual([])
+  })
+
+  it('keeps a handler\'s arity and name, leaves a class and a frozen namespace as they are', () => {
+    const seen: unknown[] = []
+    class Adapter { ok() { return 1 } }
+    const frozen = Object.freeze({ on(fn: unknown) { seen.push(fn) } })
+    const api = { routes: { use(fn: unknown) { seen.push(fn) } }, frozen, make(C: unknown) { seen.push(C) } }
+    const marked = guard.markPluginCallbacks(api)
+    function onError(_e: unknown, _q: unknown, _r: unknown, _n: unknown) { return 0 }
+    marked.routes.use(onError)
+    expect((seen[0] as () => unknown).length).toBe(4)
+    expect((seen[0] as () => unknown).name).toBe('onError')
+    marked.make(Adapter)
+    expect(seen[1]).toBe(Adapter)
+    // A frozen object's method is answered as it is (a Proxy may not answer it with another value).
+    expect(() => marked.frozen.on).not.toThrow()
+    marked.frozen.on(onError)
+    expect(seen[2]).toBe(onError)
+  })
+})
+
 describe('the parts', () => {
   it('a plugin frame anywhere on the stack counts (a tail call drops the direct caller)', () => {
     const at = (p: string) => `    at fn (${p}:1:1)`
@@ -128,8 +211,10 @@ describe('the boot installs it on a copy only', () => {
     expect(src.lastIndexOf('if (why) {', at)).toBeGreaterThan(src.lastIndexOf('closeAccountDoors(why', at))
   })
 
-  it('the loader records every plugin that is not built in', () => {
+  it('the loader records every plugin that is not built in, and on a copy marks its callbacks', () => {
     const src = fs.readFileSync(path.resolve(__dirname, '../../../src/core/integration-loader.ts'), 'utf-8')
     expect(src).toMatch(/if \(!isBuiltin\) notePluginCodeDir\(pluginDir\)/)
+    expect(src).toMatch(/const onCopy = !isBuiltin && accountDoorsClosedWhy\(\) !== null/)
+    expect(src).toMatch(/\.then\(\(\) => activate!\(pluginApi\)\)/)
   })
 })

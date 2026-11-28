@@ -23,6 +23,7 @@
  * manages active ClaudeCodeSession instances, reconnects on startup.
  */
 
+import { accountDoorsClosedWhy } from '../core/leader/switch/doors.js'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -3112,6 +3113,11 @@ export class ClaudeCodeSession {
     // (inline-subagent.ts). Local only: those settings are this machine's.
     const slim = profile?.slim === true && !host
     if (slim) sessionArgs.push('--setting-sources', '', '--strict-mcp-config')
+    // A session of a server on a copy of the person's data (closeAccountDoors) loads only the MCP
+    // servers Walnut mounts (--mcp-config: its own, the profile's), never the person's own from
+    // ~/.claude.json, a project's .mcp.json or a Claude Code plugin: those reach his real accounts
+    // (Slack, mail) with his real sign-ins. Bash and the CLIs it runs are not closed this way.
+    else if (accountDoorsClosedWhy()) sessionArgs.push('--strict-mcp-config')
     if (profile?.areaId) sessionArgs.push('--disable-slash-commands')
     // The in-session `walnut` CLI (and the walnut MCP child) must reach the
     // server that launched this session. They default to :3456, so a session of

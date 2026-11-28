@@ -481,3 +481,25 @@ describe('resolveResumeArgs fails closed for area sessions', () => {
     expect(resolved.profile).toBeUndefined()
   })
 })
+
+describe('a session of a server on a copy of the person\'s data', () => {
+  it('loads only the MCP servers Walnut mounts: --strict-mcp-config, and none on the real Walnut', async () => {
+    const { closeAccountDoors } = await import('../../src/core/leader/switch/doors.js')
+    const real = await spawnArgs({ taskId: 't-plain-real' })
+    expect(real).not.toContain('--strict-mcp-config')
+    closeAccountDoors('an ephemeral server')
+    try {
+      const copy = await spawnArgs({ taskId: 't-plain-copy' })
+      expect(copy.filter((a) => a === '--strict-mcp-config')).toHaveLength(1)
+      // What Walnut mounts is the same as on the real Walnut (its own server rides --mcp-config at spawn).
+      expect(flagValue(copy, '--mcp-config')).toBe(flagValue(real, '--mcp-config'))
+      // Its own settings still load (hooks, permissions): only the person's MCP servers stay out.
+      expect(copy).not.toContain('--setting-sources')
+      // A slim profile says it once.
+      const slim = await spawnArgs({ taskId: 't-router-copy', profile: routerAreaProfile(AREA_ID) })
+      expect(slim.filter((a) => a === '--strict-mcp-config')).toHaveLength(1)
+    } finally {
+      closeAccountDoors(null)
+    }
+  })
+})

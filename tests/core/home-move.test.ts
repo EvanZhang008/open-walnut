@@ -8,7 +8,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { FORMER_HOMES_MAX, homeRecordFile, judgeHome, noteHome, type HomeRecord, type SwitchedFrom } from '../../src/core/home-move.js'
+import { FORMER_HOMES_MAX, copyOfLiveHomeOnThisMachine, homeCopyFile, homeRecordFile, judgeHome, noteHome, type HomeRecord, type SwitchedFrom } from '../../src/core/home-move.js'
+import { DATA_COPY_MARKER, OWN_ACCOUNTS_FLAG } from '../../src/core/remote-sync-isolation.js'
 
 const M = 'f'.repeat(32)
 const W = 'a'.repeat(32)
@@ -222,5 +223,94 @@ describe('noteHome: the record on disk', () => {
     fs.writeFileSync(homeRecordFile(now), '{ not json')
     expect(await noteHome(now, M, W)).toEqual([])
     expect(JSON.parse(fs.readFileSync(homeRecordFile(now), 'utf8'))).toEqual({ machineId: M, home: now })
+  })
+})
+
+/**
+ * 2026-11-27: a copy of the person's data served by a plain `walnut web` wrote to his real accounts,
+ * as an ephemeral server did. A hand-made copy on this machine whose original is served here too
+ * keeps its account doors closed (web/server.ts); the person's real Walnut is never shut by it.
+ */
+describe('copyOfLiveHomeOnThisMachine: a data dir copied by hand on this machine', () => {
+  let base: string
+  const argv = process.argv
+  const LIVE = 424242
+  const live = (pid: number) => pid === LIVE
+  beforeEach(() => { base = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-home-copy-')) })
+  afterEach(() => { process.argv = argv; fs.rmSync(base, { recursive: true, force: true }) })
+  /** `real` as a served Walnut (its id, its record, its server's lock), and a `cp -a` of it. */
+  const realAndCopy = (opts: { running?: boolean } = {}) => {
+    const real = path.join(base, 'real')
+    fs.mkdirSync(path.join(real, 'local'), { recursive: true })
+    fs.writeFileSync(path.join(real, 'auth.json'), JSON.stringify({ instanceId: W, devices: [] }))
+    fs.writeFileSync(homeRecordFile(real), JSON.stringify({ machineId: M, home: real }))
+    if (opts.running !== false) fs.writeFileSync(path.join(real, 'server.lock.json'), JSON.stringify({ pid: LIVE, port: 3456, startedAt: 'x' }))
+    const copy = path.join(base, 'copy')
+    fs.cpSync(real, copy, { recursive: true })
+    fs.rmSync(path.join(copy, 'server.lock.json'), { force: true })
+    return { real, copy }
+  }
+  const judge = (home: string) => copyOfLiveHomeOnThisMachine(home, { isLive: live })
+
+  it('is a copy while the original runs, on this boot and the next (after the record names the copy)', async () => {
+    const { real, copy } = realAndCopy()
+    expect(await judge(copy)).toMatch(/copy of the Walnut at .*real, which this machine serves now/)
+    expect(JSON.parse(fs.readFileSync(homeCopyFile(copy), 'utf8'))).toMatchObject({ copiedFrom: real })
+    await noteHome(copy, M, W)
+    expect(JSON.parse(fs.readFileSync(homeRecordFile(copy), 'utf8')).home).toBe(copy)
+    expect(await judge(copy)).toMatch(/copy of the Walnut at/)
+    // Nothing is kept at the root (git-sync would commit it) and no lasting mark is written.
+    expect(fs.existsSync(path.join(copy, DATA_COPY_MARKER))).toBe(false)
+  })
+
+  it('opens by itself once the original stops: a copy made to move, a backup left beside the real one', async () => {
+    const { real, copy } = realAndCopy()
+    expect(await judge(copy)).not.toBeNull()
+    fs.rmSync(path.join(real, 'server.lock.json'))
+    expect(await judge(copy)).toBeNull()
+    // The original still on disk and holding the id, its server dead (a stale lock): open too.
+    fs.writeFileSync(path.join(real, 'server.lock.json'), JSON.stringify({ pid: 1_000_000_001, port: 3456, startedAt: 'x' }))
+    expect(await judge(copy)).toBeNull()
+  })
+
+  it('a move back over a restored backup: the live one is the real one, never shut', async () => {
+    // The person moved to `copy`, then restored a backup at the old path, which nothing serves.
+    const { real, copy } = realAndCopy({ running: false })
+    fs.writeFileSync(path.join(copy, 'server.lock.json'), JSON.stringify({ pid: process.pid, port: 3456, startedAt: 'x' }))
+    expect(await judge(copy)).toBeNull()
+    void real
+  })
+
+  it('the real one is never a copy, nor the same folder under another spelling or mount', async () => {
+    const { real } = realAndCopy()
+    expect(await judge(real)).toBeNull()
+    const link = path.join(base, 'link')
+    fs.symlinkSync(real, link)
+    fs.writeFileSync(homeRecordFile(real), JSON.stringify({ machineId: M, home: link }))
+    fs.writeFileSync(path.join(real, 'server.lock.json'), JSON.stringify({ pid: LIVE, port: 3456, startedAt: 'x' }))
+    expect(await judge(real)).toBeNull()
+    // Judged by device and inode, not by path: the folder through the link is this folder.
+    expect(await judge(link)).toBeNull()
+  })
+
+  it('a copy holding another Walnut id is no copy of this one', async () => {
+    const { real, copy } = realAndCopy()
+    fs.writeFileSync(path.join(real, 'auth.json'), JSON.stringify({ instanceId: 'b'.repeat(32), devices: [] }))
+    expect(await judge(copy)).toBeNull()
+  })
+
+  it('not judged: leader-switch state, a fixture\'s own home', async () => {
+    const { copy } = realAndCopy()
+    fs.mkdirSync(path.join(copy, 'local', 'leader-switch'))
+    expect(await judge(copy)).toBeNull()
+    fs.rmSync(path.join(copy, 'local', 'leader-switch'), { recursive: true })
+    process.argv = [...argv, OWN_ACCOUNTS_FLAG]
+    expect(await judge(copy)).toBeNull()
+  })
+
+  it('a copy started with another HOME (another machine id in its record) is judged by the live original alike', async () => {
+    const { real, copy } = realAndCopy()
+    fs.writeFileSync(homeRecordFile(copy), JSON.stringify({ machineId: 'e'.repeat(32), home: real }))
+    expect(await judge(copy)).toMatch(/copy of the Walnut at/)
   })
 })

@@ -50,6 +50,7 @@ import { resolveClaudeCliExecutable } from '../../core/claude-cli-detect.js';
 import { claudeFallbackCommand } from '../../core/test-claude-guard.js';
 import { withUtilityQosClamp } from '../../lib/background-qos.js';
 import { randomUUID } from 'node:crypto';
+import { accountDoorsClosedWhy } from '../../core/leader/switch/doors.js';
 import {
   buildToolProtocolSection, parseProtocolReply, synthesizeToolUseBlocks,
   serializeToolResults, isToolResultTurn, conversationKey, PROTOCOL_RETRY_PROMPT,
@@ -530,6 +531,8 @@ export function buildArgs(opts: AdapterCallOptions): string[] {
     '--tools', '',                      // disable ALL built-in tools (deny-all)
     // No --settings override: the user's settings.json (and so their auth) applies as-is.
   ];
+  // On a copy of the person's data (closeAccountDoors) no MCP server of his own loads: they reach his real accounts.
+  if (accountDoorsClosedWhy()) args.push('--strict-mcp-config');
   // The Personal AI persona replaces the CLI's default coding-agent system prompt so
   // it answers as the Personal AI, not as a code assistant. --system-prompt (replace)
   // is verified to exist in the fork.

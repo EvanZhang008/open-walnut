@@ -231,6 +231,38 @@ describe('an MCP write on a copy is refused before the server is asked', () => {
   })
 })
 
+/**
+ * Every file that starts a `claude -p` (its argv names `'--output-format', 'stream-json'`) keeps
+ * the person's own MCP servers out on a copy: it pushes --strict-mcp-config when the account doors
+ * are closed. A new launcher fails here until it does, or names the file that does it for it.
+ */
+const CLAUDE_LAUNCH_STRICT_BY: Record<string, string> = {
+  // The session argv builder: its caller passes the session's flags in (sessionArgs).
+  'providers/claude-session-argv.ts': 'providers/claude-code-session.ts',
+}
+
+describe('every claude launcher loads none of the person\'s MCP servers on a copy', () => {
+  const files: string[] = []
+  const walk = (d: string) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name)
+      if (e.isDirectory()) walk(p)
+      else if (e.name.endsWith('.ts') && fs.readFileSync(p, 'utf-8').split('\n').some((l) => !/^\s*(?:\*|\/\/|\/\*)/.test(l) && /'--output-format',\s*'stream-json'/.test(l))) files.push(path.relative(SRC, p))
+    }
+  }
+  walk(SRC)
+
+  it.each(files)('%s', (rel) => {
+    const by = CLAUDE_LAUNCH_STRICT_BY[rel] ?? rel
+    const src = fs.readFileSync(path.join(SRC, by), 'utf-8')
+    expect(src, `${by}: push '--strict-mcp-config' when accountDoorsClosedWhy() names a copy`).toMatch(/accountDoorsClosedWhy\(\)\)\s*(?:sessionArgs|args)\.push\('--strict-mcp-config'\)/)
+  })
+
+  it('finds the launchers it knows', () => {
+    expect(files).toEqual(expect.arrayContaining(['providers/inline-subagent.ts', 'model/providers/adapter-claude-cli.ts', 'providers/micro-claude-warm.ts', 'providers/claude-session-argv.ts']))
+  })
+})
+
 describe('which servers are copies of the person\'s data (accountIsolationReason)', () => {
   const argv = process.argv
   const env = { VITEST: process.env.VITEST, VITEST_WORKER_ID: process.env.VITEST_WORKER_ID, NODE_ENV: process.env.NODE_ENV }
@@ -306,6 +338,8 @@ describe('the boot closes the account doors before anything reaches an account',
     const close = body.indexOf('closeAccountDoors(why')
     expect(close, 'startServer closes the account doors').toBeGreaterThan(-1)
     expect(body.slice(0, close)).toMatch(/accountIsolationReason\(\)/)
+    // A copy made by hand on this machine whose original runs too (home-move.ts) closes them alike.
+    expect(body.slice(0, close)).toMatch(/const why = accountIsolationReason\(\) \?\? \(IS_EPHEMERAL \? null : await \(await import\('\.\.\/core\/home-move\.js'\)\)\.copyOfLiveHomeOnThisMachine\(WALNUT_HOME\)\)/)
     for (const later of ['loadPlugins(', 'registry.endLoading(', 'startMail']) {
       const at = body.indexOf(later)
       if (at > -1) expect(close, `the doors close before ${later}`).toBeLessThan(at)

@@ -192,17 +192,26 @@ server is isolated by construction, so nothing it does reaches the real Walnut:
   `accountIsolationReason` in `src/core/remote-sync-isolation.ts`: a snapshot the launcher marked
   with `data-copy.json`, or an ephemeral server; a server on a home of its own, a Playwright
   fixture server, the Demo or `scripts/walnut-sandbox.sh`, keeps its doors open with
-  `--_own-accounts`). A copy of the data dir made by hand is served with `bun run dev:ephemeral`,
-  never with a plain `walnut web`, which would take it for a real home. The snapshot mark also keeps plugin jobs off, even with
+  `--_own-accounts`). A copy of the data dir made by hand on the same machine and served by a plain
+  `walnut web` closes them too while the Walnut it was copied from runs here
+  (`copyOfLiveHomeOnThisMachine` in `src/core/home-move.ts`: its `local/home.json` names another
+  folder on this machine, by device and inode, that holds the same Walnut id and has a live server).
+  It is judged on every boot and never kept as a mark, so a copy made to move opens once the old one
+  stops. That check cannot see a copy of a Walnut on another machine or of one not running now, so
+  serve a hand copy with `bun run dev:ephemeral`. The snapshot mark also keeps plugin jobs off, even with
   `WALNUT_PLUGIN_JOBS_IN_TEST=1`. Reading still works: mail
   syncs in, a message opens, a Slack channel reads. Ratchet:
   `tests/core/leader/switch/account-doors-isolation.test.ts` (2026-11-27: opening messages in an
   ephemeral server's Mail page marked them read in the person's real Gmail).
 
-Plugins still load with the copied settings. A plugin's own network code that passes none of
-Walnut's doors (no `walnut.http.fetch`, no `walnut.mcp`, no mail or calendar provider) is not
-stopped, and a session started there still loads your real MCP servers and CLIs from `~/.claude`,
-so a test must still never drive such a send.
+Plugins still load with the copied settings. A plugin's own `fetch` and `node:http(s)` writes to a
+host off this machine are refused there (`src/core/plugins/copy-network-guard.ts`), but a child
+process a plugin starts itself is not watched. A Claude Code session started there runs with
+`--strict-mcp-config` (every `claude -p` Walnut starts there: sessions, subagents, model calls), so
+it loads none of your MCP servers from `~/.claude` (only those Walnut hands it); its Bash still runs
+your signed-in CLIs (`gh`, `aws` and the like), the hooks in your Claude Code settings still run, and
+another engine (Codex and the rest) still reads its own MCP settings. So a test must still never
+drive such a send.
 
 **Testing a task sync plugin.** No plugin syncs tasks on a test server, so tasks made there stay
 local, which is what almost every test wants. To test a sync plugin against its real service

@@ -132,6 +132,73 @@ function asRecord(raw: unknown): HomeRecord | null {
   }
 }
 
+/** Where a data dir judged a copy keeps what it was copied from (machine-local: never synced or backed up). */
+export function homeCopyFile(home: string): string {
+  return path.join(home, 'local', 'home-copy.json')
+}
+
+/**
+ * A data dir copied by hand on this machine (`cp -a ~/.open-walnut /x` served by a plain `walnut
+ * web`) while the Walnut it was copied from is served here too: why its account doors stay closed
+ * on this boot (web/server.ts), or null. It is a copy when another data dir on this machine (its
+ * record's former path, or the one an earlier boot found it copied from) is not this folder (by
+ * device and inode, so a bind mount or another spelling is the same folder), holds this Walnut's
+ * id, and has a live server of its own (its lock's pid alive here). The same OS account mostly
+ * cannot start such a copy at all (the session daemon is the original's); one started with another
+ * HOME or in a container can, and this closes it. Judged again on every boot, never kept as a mark: a copy
+ * made to move (the original stopped, or gone) opens by itself, so the person's real Walnut is
+ * never shut by a backup left beside it. Never throws.
+ *
+ * Not judged: a data dir with leader-switch state (a standby or a promoted holder legitimately took
+ * in another dir's record), a fixture's own home (`--_own-accounts`). Not seen: a copy of a Walnut
+ * on another machine or one not running now, one whose original was never served, one an older
+ * build already served before it knew where it came from. A stale lock whose pid was reused reads
+ * as live (the one false "copy": a move made after the old server was killed, with the old folder
+ * left; it opens once that pid ends).
+ */
+export async function copyOfLiveHomeOnThisMachine(home: string, opts: { isLive?: (pid: number) => boolean } = {}): Promise<string | null> {
+  try {
+    const { OWN_ACCOUNTS_FLAG } = await import('./remote-sync-isolation.js')
+    if (process.argv.includes(OWN_ACCOUNTS_FLAG)) return null
+    if (existsSync(path.join(home, 'local', 'leader-switch'))) return null
+    const mine = await (await import('./device-store.js')).instanceIdAt(home)
+    if (!mine) return null
+    const prev = asRecord(await readJson(homeRecordFile(home)))
+    const kept = await readJson(homeCopyFile(home)) as { copiedFrom?: unknown } | null
+    const candidates: string[] = []
+    // Whatever machine wrote the record: a live server there (its pid alive here) is on this machine,
+    // and a copy started with another HOME reads another machine id.
+    if (prev && prev.home !== home) candidates.push(prev.home)
+    if (typeof kept?.copiedFrom === 'string' && kept.copiedFrom && !candidates.includes(kept.copiedFrom)) candidates.push(kept.copiedFrom)
+    if (candidates.length === 0) return null
+    const here = await fs.stat(home)
+    const { instanceIdAt } = await import('./device-store.js')
+    const { readInstanceLockAt } = await import('./instance-lock.js')
+    const isLive = opts.isLive ?? pidAlive
+    for (const other of candidates) {
+      const there = await fs.stat(other).catch(() => null)
+      if (!there || (there.dev === here.dev && there.ino === here.ino)) continue
+      if ((await instanceIdAt(other)) !== mine) continue
+      if (typeof kept?.copiedFrom !== 'string' || kept.copiedFrom !== other) {
+        await fs.mkdir(path.dirname(homeCopyFile(home)), { recursive: true, mode: 0o700 })
+        await fs.writeFile(homeCopyFile(home), `${JSON.stringify({ copiedFrom: other, at: new Date().toISOString() })}\n`, { mode: 0o600 })
+      }
+      const lock = readInstanceLockAt(other)
+      if (!lock || lock.pid === process.pid || !isLive(lock.pid)) continue
+      log.leader.warn('this data dir is a copy of a Walnut this machine serves now: its account doors stay closed while that one runs', { home, copiedFrom: other, pid: lock.pid })
+      return `a copy of the Walnut at ${other}, which this machine serves now`
+    }
+    return null
+  } catch (err) {
+    log.leader.warn('home copy check: the home record could not be read; judged not a copy', { error: err instanceof Error ? err.message : String(err) })
+    return null
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
 async function readJson(file: string): Promise<unknown> {
   try { return JSON.parse(await fs.readFile(file, 'utf8')) } catch { return null }
 }
