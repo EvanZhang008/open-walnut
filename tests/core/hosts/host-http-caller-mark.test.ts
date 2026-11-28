@@ -51,7 +51,7 @@ beforeEach(() => {
 describe('host_http to the server\'s own host carries the caller\'s mark', () => {
   it('stamps the session id on a request to the server\'s loopback', async () => {
     await httpOnHost({ host: '__local__', ...SLACK_POST, headers: { 'content-type': 'application/json' } }, 'sess-1')
-    expect(headersSent()).toEqual({ 'content-type': 'application/json', 'x-walnut-caller-sid': 'sess-1' })
+    expect(headersSent()).toEqual({ 'content-type': 'application/json', 'x-walnut-caller-sid': 'sess-1', 'x-walnut-origin': 'host:devbox' })
   })
 
   it('stamps it whatever address reaches the server (a LAN name too), and with no headers given', async () => {
@@ -59,19 +59,21 @@ describe('host_http to the server\'s own host carries the caller\'s mark', () =>
     expect(headersSent()['x-walnut-caller-sid']).toBe('sess-1')
   })
 
-  it('replaces a caller mark the agent wrote itself, in any case', async () => {
-    await httpOnHost({ host: '__local__', ...SLACK_POST, headers: { 'X-Walnut-Caller-Sid': '', 'x-walnut-caller-kind': '' } }, 'sess-1')
-    const headers = headersSent()
-    expect(Object.keys(headers).map((k) => k.toLowerCase()).filter((k) => k.startsWith('x-walnut-caller'))).toEqual(['x-walnut-caller-sid'])
-    expect(headers['x-walnut-caller-sid']).toBe('sess-1')
+  it('drops every Walnut mark the agent wrote itself, in any case, and writes Walnut\'s own', async () => {
+    await httpOnHost({
+      host: '__local__', ...SLACK_POST,
+      headers: { 'X-Walnut-Caller-Sid': '', 'x-walnut-caller-kind': '', 'X-Walnut-Origin': '__local__', 'x-walnut-caller-plugin': 'slack', accept: '*/*' },
+    }, 'sess-1')
+    expect(headersSent()).toEqual({ accept: '*/*', 'x-walnut-caller-sid': 'sess-1', 'x-walnut-origin': 'host:devbox' })
   })
 
   it('marks a call with no session (a trigger check\'s) as automation', () => {
-    expect(outgoingHeaders({}, '__local__', { sid: '' })).toEqual({ 'x-walnut-caller-kind': 'automation' })
+    expect(outgoingHeaders({}, '__local__', { sid: '', host: 'devbox' })).toEqual({ 'x-walnut-caller-kind': 'automation' })
   })
 
-  it('sends another host only the caller\'s own headers: the session id is no business of an outside service', async () => {
-    await httpOnHost({ host: 'devbox2', url: 'http://127.0.0.1:5173/', headers: { accept: 'text/html' } }, 'sess-1')
-    expect(headersSent()).toEqual({ accept: 'text/html' })
+  it('marks a request to any other host as an automation, with no session id for an outside service', async () => {
+    // Another host can still be a Walnut console (an old leader's door, the server's machine under another name).
+    await httpOnHost({ host: 'devbox2', url: 'http://127.0.0.1:3456/api/plugins/slack/messages', headers: { accept: 'text/html', 'x-walnut-origin': '__local__' } }, 'sess-1')
+    expect(headersSent()).toEqual({ accept: 'text/html', 'x-walnut-caller-kind': 'automation' })
   })
 })

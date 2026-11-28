@@ -12,6 +12,7 @@
 import { log } from '../../logging/index.js'
 import { HostExecError, assertStillGranted, budgetLeft, callerOf, dial, grantFor, redact, targetHost, type Caller } from './host-exec.js'
 import { CALLER_KIND_HEADER } from '../../lib/cli-sender.js'
+import { ORIGIN_HEADER, hostOrigin } from '../../lib/caller-origin.js'
 
 export const MAX_REQUESTS_PER_TASK = 4
 const DEFAULT_MS = 30_000
@@ -32,26 +33,32 @@ export interface HttpParams {
 const CALLER_SID_HEADER = 'x-walnut-caller-sid'
 /** Walnut's own server runs on this host: a request there can reach its routes. */
 const SERVER_HOST = '__local__'
+/** Walnut's own marks of who calls: only Walnut writes them, never the agent's request. */
+const WALNUT_MARK = /^x-walnut-(caller-|origin$)/i
 
 /**
- * The headers a request goes out with. On the host Walnut's own server runs on, the request can
- * reach that server (its loopback, its LAN address), where a call with no caller mark reads as the
- * person at his own window (web/routes/person-caller.ts) and passes every person-only route: his
- * Slack console's post, an approval's answer (2026-11-28 review: a task on another host posted
- * through POST /api/plugins/slack/messages this way, past the approval letter). So it always carries
- * the calling session's mark, replacing any the caller wrote, as every op call does (ops/executor.ts).
- * Other hosts get only the caller's own headers: the session id is no business of an outside service.
+ * The headers a request goes out with. A request can reach a Walnut server (on the host it runs on,
+ * by loopback or a LAN name; on a host where an old leader's console door still answers), where a
+ * call with no caller mark reads as the person at his own window (web/routes/person-caller.ts) and
+ * passes every person-only route: his Slack console's post, an approval's answer (2026-11-28 review:
+ * a task on another host posted through POST /api/plugins/slack/messages this way, past the approval
+ * letter). So every request drops the Walnut marks the agent wrote and carries Walnut's own:
+ *   - to the server's host, the calling session's id and its own host as origin, so it reads exactly
+ *     as that session's op call does (ops/executor.ts); a call with no session (a trigger check's)
+ *     reads as an automation;
+ *   - to any other host, only that it is an automation: no session id for an outside service.
  */
-export function outgoingHeaders(params: Pick<HttpParams, 'headers'>, host: string, caller: Pick<Caller, 'sid'>): Record<string, string> | undefined {
-  if (host !== SERVER_HOST) return params.headers
+export function outgoingHeaders(
+  params: Pick<HttpParams, 'headers'>, host: string, caller: Pick<Caller, 'sid' | 'host'>,
+): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const [k, v] of Object.entries(params.headers ?? {})) {
-    const name = k.toLowerCase()
-    if (name === CALLER_SID_HEADER || name === CALLER_KIND_HEADER) continue
-    out[k] = v
+  for (const [k, v] of Object.entries(params.headers ?? {})) if (!WALNUT_MARK.test(k)) out[k] = v
+  if (host === SERVER_HOST && caller.sid) {
+    out[CALLER_SID_HEADER] = caller.sid
+    out[ORIGIN_HEADER] = hostOrigin(caller.host)
+  } else {
+    out[CALLER_KIND_HEADER] = 'automation'
   }
-  if (caller.sid) out[CALLER_SID_HEADER] = caller.sid
-  else out[CALLER_KIND_HEADER] = 'automation'
   return out
 }
 
@@ -80,7 +87,7 @@ export async function httpOnHost(params: HttpParams, callerSid: string | undefin
     // The dial took time: a revoke or the host's stop since the grant sends nothing.
     used = await assertStillGranted(caller.taskId, host, grantId)
     reply = await conn.send('http.request', {
-      url: params.url, method, ...(headers ? { headers } : {}),
+      url: params.url, method, headers,
       ...(typeof params.body === 'string' ? { body: params.body } : {}), ...(typeof params.body_base64 === 'string' ? { bodyBase64: params.body_base64 } : {}),
       timeoutMs,
     }, timeoutMs + 3_000) as Record<string, unknown>
