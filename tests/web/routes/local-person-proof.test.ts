@@ -11,7 +11,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import express, { Router } from 'express'
 import request from 'supertest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { log } from '../../../src/logging/index.js'
 import { IntegrationRegistry } from '../../../src/core/integration-registry.js'
 import { createPluginBodyParser, createPluginRouteDispatcher } from '../../../src/web/plugin-route-dispatcher.js'
 import { forwardProofHeader } from '../../../src/lib/forward-proof.js'
@@ -97,6 +98,32 @@ describe('isPersonCaller, the rule every person-only route shares', () => {
     setLocalProofModeForTest('enforce')
     const phone = { headers: { host: 'macbox.lan:3456', authorization: 'Bearer device-token', 'user-agent': 'Walnut/1.0 CFNetwork/3860.700.1 Darwin/25.6.0' }, socket: { remoteAddress: '192.168.1.20', localPort: 3456 } }
     expect(isPersonCaller(phone)).toBe(true)
+  })
+})
+
+describe('what the proof logs', () => {
+  it('logs each kind of unproven call at info, never warn or error, in observe and enforce (a warning is a health alarm)', () => {
+    const warn = vi.spyOn(log.web, 'warn')
+    const error = vi.spyOn(log.web, 'error')
+    const info = vi.spyOn(log.web, 'info')
+    try {
+      for (const mode of ['observe', 'enforce'] as const) {
+        setLocalProofModeForTest(mode)
+        const n = info.mock.calls.length
+        isPersonCaller({ ...local(CURL), url: `/api/log-level-probe-${mode}` })
+        isPersonCaller({ ...local(CLAIMS_REMOTE), url: `/api/log-level-probe-${mode}` })
+        expect(info.mock.calls.length, mode).toBeGreaterThan(n)
+      }
+      expect(warn).not.toHaveBeenCalled()
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore(); error.mockRestore(); info.mockRestore()
+    }
+  })
+
+  it('has no warn or error call at all in its source', () => {
+    const src = fs.readFileSync(path.join(REPO, 'src/web/routes/local-person-proof.ts'), 'utf8')
+    expect(src).not.toMatch(/log\.\w+\.(warn|error)\(/)
   })
 })
 

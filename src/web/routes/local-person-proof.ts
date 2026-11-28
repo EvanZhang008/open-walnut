@@ -127,7 +127,10 @@ function note(kind: 'local' | 'claimed-remote' | 'no-session', req: { headers: I
   if ((logged.get(key) ?? 0) + LOG_EVERY_MS > now) return
   logged.set(key, now)
   if (logged.size > 2000) logged.clear()
-  log.web.warn(mode === 'enforce' ? 'local request not counted as the person: no proof' : 'local request would not count as the person: no proof', {
+  // Info, never warn: these lines are the record observe exists to collect, and in enforce the
+  // expected turn-away of an agent's plain request; Walnut Health counts warnings (2026-11-28: about
+  // 30 an hour set off its log-spike alarm). A route that refuses one logs its own refusal.
+  log.web.info(mode === 'enforce' ? 'local request not counted as the person: no proof' : 'local request would not count as the person: no proof', {
     mode, kind, method: req.method ?? '', path, ua,
     ...(kind === 'no-session' ? { callerKind: one(req.headers, CALLER_KIND_HEADER) || 'none', sender: one(req.headers, SENDER_LABEL_HEADER).slice(0, 40) || 'none' } : {}),
   })
