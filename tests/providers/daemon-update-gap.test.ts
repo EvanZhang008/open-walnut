@@ -79,7 +79,7 @@ describe('the gap rule', () => {
     const now = new Date(2026, 10, 25, 13, 0).getTime()
     const why = daemonUpdateGapHold({ host: 'devbox', ageMs: 20 * 60_000, gapMs: GAP, now })!.why
     expect(why).toBe('its daemon started 20 min ago; Walnut replaces a host\'s daemon by itself at most once every 2 h, '
-      + 'so this update goes at 14:40 with the build of then (host_daemon_update devbox does it now)')
+      + 'so this update goes at 2:40 PM with the build of then (host_daemon_update devbox does it now)')
     expect(spanWords(100 * 60_000)).toBe('1 h 40 min')
   })
 

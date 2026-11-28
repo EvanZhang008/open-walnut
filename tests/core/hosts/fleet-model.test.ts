@@ -165,7 +165,7 @@ describe('the daemon row\'s update to come', () => {
   it('names the expected build, and the wait while it holds that build', () => {
     const w = { kind: 'postponed' as const, why: 'the gap', since: T, until: T + 60 * 60_000, expected: 'build-b' }
     expect(fleetDaemonUpdate('Dev box', 'build-a', 'build-b', w, T)).toEqual({
-      expected: 'build-b', update: { waits: 'The daemon update on Dev box waits (since 13:00, until 14:00): the gap', since: T, until: T + 60 * 60_000 },
+      expected: 'build-b', update: { waits: 'The daemon update on Dev box waits (since 1:00 PM, until 2:00 PM): the gap', since: T, until: T + 60 * 60_000 },
     })
     expect(fleetDaemonUpdate('Dev box', 'build-b', 'build-b', w, T)).toEqual({ expected: 'build-b' })
     expect(fleetDaemonUpdate('Dev box', 'build-a', 'build-c', w, T)).toEqual({ expected: 'build-c' })
