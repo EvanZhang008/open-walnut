@@ -141,7 +141,7 @@ export function DraftV6Body({
         )}
         <div className="session-panel-input draft-v6-input">
           {composer}
-          {startWhy && <div className="draft-v6-start-why" role="alert" data-testid="draft-v6-start-why">{startWhy}</div>}
+          {startWhy && <div className="draft-v6-start-why" data-fit-window="" role="alert" data-testid="draft-v6-start-why">{startWhy}</div>}
         </div>
         <DraftLowerRow draft={lowerDraft} where={where} walnut={walnut} narrow={narrow} tryChips={tryChips} composerText={composerText}
           getComposer={getComposer} openMenuNonce={openMenuNonce} onTaskFieldChange={onTaskFieldChange} onReturnFieldToWalnut={onReturnFieldToWalnut}

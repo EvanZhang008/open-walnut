@@ -22,6 +22,8 @@
  * pause screen, belongs in the plugin's own tree as an overlay. And a plugin that renders into
  * `document.body` itself (a portal there, `walnut.unsafe.dom`) has left its box on purpose.
  */
+
+import { movedBy } from '../utils/translate-by'
 import { log } from '@/utils/log'
 import { clippingAncestors } from '@/utils/clip-ancestors'
 
@@ -54,27 +56,8 @@ export function overlap(a: Box, b: Box): Box {
   return { left, top, width: Math.max(0, Math.min(a.left + a.width, b.left + b.width) - left), height: Math.max(0, Math.min(a.top + a.height, b.top + b.height) - top) }
 }
 
-/**
- * The plugin's own `translate` (a computed value: `none`, or one to three lengths) moved by
- * `x, y` px on top, so a dialog it centres with `translate: -50% -50%` keeps that.
- */
-export function movedBy(translate: string, x: number, y: number): string {
-  const parts: string[] = []
-  let depth = 0
-  let part = ''
-  for (const ch of translate.trim() === 'none' ? '' : translate.trim()) {
-    if (ch === '(') depth++
-    if (ch === ')') depth--
-    if (/\s/.test(ch) && depth === 0) {
-      if (part) parts.push(part)
-      part = ''
-    } else part += ch
-  }
-  if (part) parts.push(part)
-  const [ownX = '0px', ownY = '0px', ownZ] = parts
-  const add = (own: string, by: number) => (/^0(px)?$/.test(own) ? `${by}px` : `calc(${own} + ${by}px)`)
-  return [add(ownX, x), add(ownY, y), ...(ownZ ? [ownZ] : [])].join(' ')
-}
+// The plugin's own `translate` moved by x, y px on top: one helper, shared (utils/translate-by.ts).
+export { movedBy }
 
 /** A clip that keeps what `rect` draws, its overflowing and fixed descendants included, inside `area`. */
 export function clipTo(rect: Box, area: Box): string {

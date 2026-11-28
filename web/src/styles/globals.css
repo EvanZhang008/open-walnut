@@ -17729,54 +17729,7 @@ a.tag-chip:hover .tag-chip-value,
   flex-shrink: 0;
 }
 
-/* ── Question Popover (ask_question tool — floating above chat input) ── */
-
-.question-popover {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  right: 0;
-  margin-bottom: 4px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow-hover);
-  z-index: 50;
-  overflow: hidden;
-}
-
-.qp-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
-  background: color-mix(in srgb, var(--accent) 6%, var(--card-bg));
-  border-bottom: 1px solid var(--border);
-  font-size: var(--font-size-md);
-}
-
-.qp-header-icon {
-  font-size: 14px;
-}
-
-.qp-header-title {
-  font-weight: 600;
-  color: var(--fg);
-  flex: 1;
-}
-
-.qp-header-page {
-  font-size: var(--font-size-xs);
-  font-weight: 500;
-  color: var(--fg-muted);
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: var(--hover-bg, rgba(0,0,0,0.04));
-}
-
-.qp-body {
-  padding: 14px;
-}
+/* ── Question cards (ask_question tool, PromptCards.tsx) ── */
 
 .qp-chip {
   margin-bottom: 8px;
@@ -17834,28 +17787,6 @@ a.tag-chip:hover .tag-chip-value,
 }
 
 /* The "Other" box of a question card is the shared AnswerBox (styles/answer-box.css). */
-
-.qp-submit {
-  padding: 8px 16px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: opacity 0.12s;
-}
-
-.qp-submit:hover {
-  opacity: 0.88;
-}
-
-.qp-submit:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 
 /* ── Inline question indicators (inside message bubbles) ── */
 

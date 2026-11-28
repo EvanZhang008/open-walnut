@@ -321,6 +321,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
   return (
     <div
       className="quick-task-composer"
+      data-fit-window=""
       ref={popoverRef}
       role="dialog"
       aria-modal="true"

@@ -32,6 +32,7 @@ import { installEscapeBeepGuard } from './utils/escape-beep-guard';
 import { installMenuPressFocus } from './utils/menu-press-focus';
 import { installMotionMode } from './utils/motion';
 import { installOverlayExit } from './utils/overlay-exit';
+import { installInlineOverlayFit } from './utils/inline-overlay-fit';
 import { silenceAutomatedAudio } from './utils/automation-silence';
 import { installImageSizeHold } from './utils/image-size-hold';
 import { installVideoControls } from '../../src/lib/video-controls';
@@ -257,6 +258,8 @@ function bootApp(): void {
   // "reduced"), and the closing fade of every menu, popover and dialog (styles/motion.css).
   installMotionMode();
   installOverlayExit();
+  // A pop-up hung on its key by CSS (not portalled) is kept inside the window (inline-overlay-fit.ts).
+  installInlineOverlayFit();
   // A chat image drawn again (a reply's persisted row replacing its stream blocks)
   // keeps its box while it decodes, so nothing around it moves for a frame.
   installImageSizeHold();

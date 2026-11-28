@@ -982,6 +982,11 @@ show inline after the open ones, other completed hits that show the query fold i
   `useMenuPlacement` (measure real height → flip up/down → clamp to edges → `maxHeight` +
   `overflow-y:auto`). Never hand-roll placement math, never guess a height constant.
   Geometric regression suite: `tests/e2e/browser/kebab-menu-viewport-fit.spec.ts`.
+  A pop-up hung in its key's wrapper by CSS (`position: absolute; top|bottom: 100%`) is kept inside
+  the window by one layer, `utils/inline-overlay-fit.ts` (it flips the pop-up to the other side of
+  its key, or shifts and caps it); it places every `wn-overlay` and every `[data-fit-window]`, so a
+  hung pop-up needs one of the two (2026-11-28: the Agents page's last card opened its menu under the
+  window). Guard: `tests/web/inline-overlay-fit.test.ts`, `tests/e2e/browser/inline-overlay-fit.spec.ts`.
 - **Unbounded content never inlines into a menu.** If a section can grow after open (project
   list, async rows), render it as its OWN portalled flyout placed by the same hook
   (`MoveToProjectSection` is the model). A menu's height must not change because the user

@@ -90,7 +90,6 @@ const KNOWN_FADES = new Map<string, Reason>([
   ["styles/globals.css .dock-task-unpin transition", 'leaf'],
   ["styles/globals.css .bedrock-cred-group transition", 'leaf'],
   ["styles/globals.css .qp-option transition", 'leaf'],
-  ["styles/globals.css .qp-submit transition", 'leaf'],
   ["styles/globals.css .draft-decision-chip animation", 'leaf'],
   ["styles/globals.css .notes-save-status transition", 'leaf'],
   ["styles/globals.css .edit-diff-view-file transition", 'leaf'],

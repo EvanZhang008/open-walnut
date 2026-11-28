@@ -372,7 +372,7 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
             showingAll: showAll,
           })}
           {showAll && (
-            <div className="session-servers-overlay" data-testid="session-servers-overlay">
+            <div className="session-servers-overlay" data-testid="session-servers-overlay" data-fit-window="">
               {serverList('list', { onClose: () => setShowAll(false), pointAtOthers: pointOthers })}
             </div>
           )}
