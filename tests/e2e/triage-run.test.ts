@@ -189,8 +189,9 @@ describe('Inbox Triage runs, end to end', () => {
     // pinTier: null — background automation never adds a card to the pinned board.
     expect(task.pinned).toBeFalsy();
     // The title template with the clock and the batch size filled in: 22 Slack
-    // items is exactly what the action's count hint carried.
-    expect(task.title).toMatch(/^Triage · \d{2}:\d{2} · 22 items$/);
+    // items is exactly what the action's count hint carried. The clock is the one every
+    // screen writes (src/core/time-words.ts clockTime, "9:07 AM", since 913d783a14).
+    expect(task.title).toMatch(/^Triage · \d{1,2}:\d{2} [AP]M · 22 items$/);
 
     const sessions = await vi.waitFor(async () => {
       const list = await getSessionsForTask(task.id);
@@ -245,7 +246,7 @@ describe('Inbox Triage runs, end to end', () => {
     expect(second.id).not.toBe(firstTaskId);
     expect(second.project).toBe(TRIAGE_PROJECT);
     expect(second.pinned).toBeFalsy();
-    expect(second.title).toMatch(/^Triage · \d{2}:\d{2} · 24 items$/);
+    expect(second.title).toMatch(/^Triage · \d{1,2}:\d{2} [AP]M · 24 items$/);
 
     // Each run has its OWN session; the second never landed in the first's.
     const seenSessions = new Set<string>();
