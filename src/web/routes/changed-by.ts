@@ -19,7 +19,7 @@ import type { Request } from 'express'
 import { isRemoteHostOrigin } from '../../lib/caller-origin.js'
 import { callerUnprovenOf } from '../../lib/caller-unproven.js'
 import { requestOrigin } from '../middleware/request-origin.js'
-import { isPersonCaller, noSessionIsPerson } from './person-caller.js'
+import { callerMarkedNotPerson, isPersonCaller, noSessionIsPerson } from './person-caller.js'
 
 type CallerRequest = Parameters<typeof isPersonCaller>[0]
 
@@ -39,6 +39,18 @@ export function callerSidHeader(req: CallerRequest): string | undefined {
  */
 export function callerSidOrOutside(req: CallerRequest): string | undefined {
   return callerSidHeader(req) ?? (noSessionIsPerson(req) ? undefined : OUTSIDE_CALLER_SID)
+}
+
+/**
+ * The caller's session id for words or acts recorded in the person's name (a message into a session,
+ * a letter's answer, the person's Send now): callerSidOrOutside, and a caller that marked itself not
+ * the person (person-caller.ts callerMarkedNotPerson) is an outside caller in every proof mode.
+ * callerSidOrOutside keeps the old reading outside enforce for gates (a cron's task_start keeps its
+ * mode); no gate may make a script's words his (2026-11-28: in observe, a deep-test notice a script
+ * sent through task_send was stored as `sentBy: "person"`).
+ */
+export function wordsCallerSid(req: CallerRequest): string | undefined {
+  return callerSidOrOutside(req) ?? (callerMarkedNotPerson(req) ? OUTSIDE_CALLER_SID : undefined)
 }
 
 export async function changedBy(req: Request): Promise<string> {

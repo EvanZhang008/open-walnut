@@ -49,6 +49,19 @@ export function isPersonCaller(req: CallerRequest, opts: { quiet?: boolean } = {
 }
 
 /**
+ * The caller says itself that it is not the person: it names a session (`x-walnut-caller-sid`), or
+ * the CLI marked it an automation (`x-walnut-caller-kind`, lib/cli-sender.ts: a script, a
+ * LaunchAgent, cron). True in every proof mode: observe and off keep the old reading for a caller
+ * that names nothing, and the old reading never took a marked caller for the person (2026-11-28: in
+ * observe, a deep-test notice a script sent with the automation mark was stored as the user's words).
+ */
+export function callerMarkedNotPerson(req: CallerRequest): boolean {
+  // Any caller kind, as isPersonCaller reads it: only `automation` is ever sent, and a forged
+  // `person` kind is no proof of the person.
+  return !!(header(req, 'x-walnut-caller-sid') || header(req, CALLER_KIND_HEADER))
+}
+
+/**
  * For a decision that read "no session id" as the person before 2026-11-28 (changed-by.ts
  * callerSidOrOutside, send-sent-by.ts routeSource, an action card's or inbox item's run, a socket
  * send): isPersonCaller in enforce, the old reading outside it (local-person-proof.ts noSessionStands).

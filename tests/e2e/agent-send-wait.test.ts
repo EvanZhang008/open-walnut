@@ -232,6 +232,32 @@ describe('a send from a script outside every session', () => {
   }, 150_000)
 })
 
+describe('a script\'s send in each local proof mode (2026-11-28: observe stored a deep-test notice as the user\'s)', () => {
+  it.each(['observe', 'enforce'] as const)('%s: the row reads as the automation, never as the user', async (mode) => {
+    const { setLocalProofModeForTest } = await import('../../src/web/routes/local-person-proof.js')
+    setLocalProofModeForTest(mode)
+    try {
+      const target = await startOn(`Told by the deep test (${mode})`)
+      const words = `The deep test passes on main 199bb2cbde (${mode}).`
+      const res = await fetch(`http://127.0.0.1:${port}/api/v1/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'user-agent': 'Bun/1.4.4', 'x-walnut-op-call': '1', 'x-walnut-caller-kind': 'automation', 'x-walnut-sender': 'script' },
+        body: JSON.stringify({ to: target.taskId, title: 'Deep test passes again', text: words, expect_reply: false }),
+      })
+      expect(res.status).toBe(202)
+      const { messageId } = await res.json() as { messageId: string }
+      resetCache()
+      const row = (await getQueue(target.sid)).find((m) => m.id === messageId)
+      const text = row?.message ?? [...daemon.getCommandHistoryFor('start'), ...daemon.getCommandHistoryFor('send')]
+        .filter((c) => c.payload.sid === target.sid).map((c) => String(c.payload.message ?? '')).find((m) => m.includes(words)) ?? ''
+      expect(text).toContain('from="automation: script"')
+      if (row) expect(row.sentBy).not.toBe('person')
+    } finally {
+      setLocalProofModeForTest('off')
+    }
+  }, 60_000)
+})
+
 describe('org_send to a running task', () => {
   it('reads the session records, so a task whose row lost its session link is messaged, not started', async () => {
     const target = await startOn('Running teammate')

@@ -3,8 +3,8 @@
  * or an agent's (another task, Walnut's notices, triggers, routines, hooks).
  * Free of the queue and the stores, so callers that mock the queue still get the rule.
  */
-import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER, senderLabel } from '../../lib/cli-sender.js';
-import { noSessionIsPerson } from '../../web/routes/person-caller.js';
+import { SENDER_LABEL_HEADER, senderLabel } from '../../lib/cli-sender.js';
+import { callerMarkedNotPerson, noSessionIsPerson } from '../../web/routes/person-caller.js';
 import { ambientAutomatedClient, automatedClientLabel } from './automated-client.js';
 
 /**
@@ -86,7 +86,7 @@ const headerOf = (req: RouteRequest, name: string): string => {
  * route is not a person.
  */
 export function routeSource(personSource: string, req: RouteRequest): string {
-  if (headerOf(req, 'x-walnut-caller-sid') || headerOf(req, CALLER_KIND_HEADER) === 'automation') return 'api-agent';
+  if (callerMarkedNotPerson(req)) return 'api-agent';
   if (ambientAutomatedClient()) return AUTOMATED_SEND_SOURCE;
   return noSessionIsPerson(req) ? personSource : 'api-agent';
 }
@@ -96,7 +96,6 @@ export function startRouteSource(personSource: string, req: RouteRequest): strin
   if (headerOf(req, 'x-walnut-caller-sid')) return 'api-agent';
   const automated = ambientAutomatedClient();
   if (automated) return `automation:${automatedClientLabel(automated)}`;
-  const kind = headerOf(req, CALLER_KIND_HEADER).toLowerCase();
-  if (kind && !['person', 'human'].includes(kind)) return `automation:${senderLabel(headerOf(req, SENDER_LABEL_HEADER))}`;
+  if (callerMarkedNotPerson(req)) return `automation:${senderLabel(headerOf(req, SENDER_LABEL_HEADER))}`;
   return noSessionIsPerson(req) ? personSource : `automation:${senderLabel(headerOf(req, SENDER_LABEL_HEADER))}`;
 }

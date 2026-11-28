@@ -36,6 +36,7 @@ import { hasAiOnly, redactAiOnly } from '../../lib/ai-only-envelope.js'
 import { attachmentHeaderBlock } from '../../lib/attachment-headers.js'
 import { attributedUnlessAutomated } from '../../core/sessions/send-frame.js'
 import { rpcCallerIsPerson } from '../ws/rpc-caller.js'
+import { OUTSIDE_CALLER_SID } from './changed-by.js'
 import { oneSendAtATime, sameSendSettled } from '../../core/sessions/send-once.js'
 import { readHostOf } from '../../core/sessions/session-row-owner.js'
 
@@ -101,7 +102,10 @@ export function registerSessionChatRpc(): void {
       const { continueTaskConversation, taskConversation } = await import('../../core/sessions/task-session-claim.js')
       const conversation = await taskConversation(data.taskId, { retire: true })
       if (conversation) {
-        await continueTaskConversation(conversation, { text: data.message })
+        // The console's composer is the person's only from the person's own socket (ws/rpc-caller.ts,
+        // which decides it in enforce): any other socket's words continue the conversation as an
+        // outside caller's, never his, as its new-session start below frames them.
+        await continueTaskConversation(conversation, { text: data.message, ...(rpcCallerIsPerson() ? {} : { callerSid: OUTSIDE_CALLER_SID }) })
         return
       }
     }
@@ -260,10 +264,12 @@ export function registerSessionChatRpc(): void {
     const namedThread = typeof data.threadId === 'string' && /^th-[a-f0-9]{6,32}$/.test(data.threadId) ? data.threadId : undefined
     // His answer from a card names no thread: the decision letter its thread holds is answered with
     // his words, the same way (core/org/card-answer-thread.ts; 2026-11-25: such a letter stayed open).
-    const cardLetter = !namedThread && record?.taskId
+    // Only the person's own socket answers his letters (ws/rpc-caller.ts), as session-send-v1.ts
+    // answers one only for routeSource's person.
+    const cardLetter = person && !namedThread && record?.taskId
       ? await (await import('../../core/org/card-answer-thread.js')).cardAnswerLetter(record.taskId, data.message as string) : null
     const sentThread = namedThread ?? cardLetter?.threadId
-    if (sentThread && record?.taskId) {
+    if (person && sentThread && record?.taskId) {
       const { answerLetterOnThread } = await import('../../core/org/letter-follow-up.js')
       const confirmOnly = data.confirmLetterAnswer === true
       const answered = await answerLetterOnThread({

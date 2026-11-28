@@ -10,7 +10,7 @@
  * makes a person decision from it (a `human` / `person` / `user` label, or a core rule that reads a
  * missing sid as the person: resolveCaller, resolveCallerPlacement, resolveBoardCaller,
  * answeredByCaller, the start-mode ceiling, ...) must also apply the rule (isPersonCaller,
- * isPersonNotAutomation, changedBy, callerSidOrOutside), or be listed in ALLOWED
+ * isPersonNotAutomation, changedBy, callerSidOrOutside, wordsCallerSid), or be listed in ALLOWED
  * with the reason its decision is not "this is the person". A new member fails here until it does.
  */
 import { describe, it, expect } from 'vitest'
@@ -32,7 +32,7 @@ const PERSON_DECISIONS: Array<[string, RegExp]> = [
 ]
 
 /** The one rule, in any of its forms. */
-const APPLIES_RULE = /\b(isPersonCaller|isPersonNotAutomation|isPersonInOwnWindow|changedBy|callerSidOrOutside)\(|=\s*callerSidOrOutside\b/
+const APPLIES_RULE = /\b(isPersonCaller|isPersonNotAutomation|isPersonInOwnWindow|changedBy|callerSidOrOutside|wordsCallerSid)\(|=\s*(?:callerSidOrOutside|wordsCallerSid)\b/
 
 /**
  * Files that read the sid and make one of those decisions, but whose decision is not "this caller is
@@ -82,7 +82,7 @@ describe('a missing caller session id is never the person by itself', () => {
       .map((f) => ({ f, why: unguardedPersonDecision(code(f)) }))
       .filter((x) => x.why)
       .map((x) => `${x.f}: ${x.why}`)
-    expect(offenders, 'apply isPersonCaller / changedBy / callerSidOrOutside (src/web/routes/changed-by.ts), or list the file in ALLOWED with why').toEqual([])
+    expect(offenders, 'apply isPersonCaller / changedBy / callerSidOrOutside / wordsCallerSid (src/web/routes/changed-by.ts), or list the file in ALLOWED with why').toEqual([])
   })
 
   it('every ALLOWED entry still exists and still reads the sid (a stale entry goes)', () => {

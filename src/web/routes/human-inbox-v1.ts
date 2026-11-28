@@ -45,7 +45,7 @@ import { isCompanion, isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
 import { isImageAttachError } from './images.js'
-import { callerSidHeader, callerSidOrOutside } from './changed-by.js'
+import { callerSidHeader, wordsCallerSid } from './changed-by.js'
 import {
   LETTER_HTML_MAX_BYTES, letterFieldMaxBytes,
   type AgentReplyInput, type NewLetter,
@@ -168,10 +168,10 @@ const callerSid = callerSidHeader
 
 /**
  * Who answers, replies to or settles a letter: the caller's session, none only for the person
- * himself, else an outside caller (changed-by.ts callerSidOrOutside), so a local process with no
- * proof never answers in his name.
+ * himself, else an outside caller (changed-by.ts wordsCallerSid), so a local process with no
+ * proof, or a script marked as one in any proof mode, never answers in his name.
  */
-const answererSid = callerSidOrOutside
+const answererSid = wordsCallerSid
 
 function body(req: Request): Record<string, unknown> {
   const b = req.body
